@@ -66,3 +66,19 @@ func TestRecovererReturnsOpaqueError(t *testing.T) {
 		t.Fatalf("panic value leaked to logs: %s", logs.String())
 	}
 }
+
+func TestSecurityHeadersEnableCSPAndHSTSForHTTPS(t *testing.T) {
+	t.Parallel()
+
+	handler := SecurityHeaders(true)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Header().Get("Content-Security-Policy") == "" {
+		t.Fatal("Content-Security-Policy header is missing")
+	}
+	if response.Header().Get("Strict-Transport-Security") == "" {
+		t.Fatal("Strict-Transport-Security header is missing")
+	}
+}

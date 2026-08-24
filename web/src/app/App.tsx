@@ -3,55 +3,55 @@ import { ErrorBoundary } from "solid-js";
 
 import FoundationPage from "../pages/FoundationPage";
 import PlaceholderPage from "../pages/PlaceholderPage";
+import SettingsPage from "../pages/SettingsPage";
+import UsersPage from "../pages/UsersPage";
 import AppShell from "./AppShell";
+import { AuthProvider } from "./AuthContext";
+import AuthGate from "./AuthGate";
 
 export default function App() {
   return (
     <ErrorBoundary fallback={(error, reset) => <AppError error={error} reset={reset} />}>
-      <Router root={AppShell}>
-        <Route path="/" component={FoundationPage} />
-        <Route
-          path="/zones"
-          component={() => (
-            <PlaceholderPage
-              title="Zones"
-              phase="Future provider phase"
-              description="The zone index route exists, but it will remain empty until real provider account sync is implemented."
+      <AuthProvider>
+        <AuthGate>
+          <Router root={AppShell}>
+            <Route path="/" component={FoundationPage} />
+            <Route
+              path="/zones"
+              component={() => (
+                <PlaceholderPage
+                  title="Zones"
+                  phase="Future provider phase"
+                  description="The zone index route exists, but it will remain empty until real provider account sync is implemented."
+                />
+              )}
             />
-          )}
-        />
-        <Route
-          path="/accounts"
-          component={() => (
-            <PlaceholderPage
-              title="Provider accounts"
-              phase="Future security and provider phase"
-              description="Credential capture and account validation require authenticated encryption, RBAC, and official provider adapters."
+            <Route
+              path="/accounts"
+              component={() => (
+                <PlaceholderPage
+                  title="Provider accounts"
+                  phase="Future provider phase"
+                  description="Credential capture and validation will be added with the official provider adapters."
+                />
+              )}
             />
-          )}
-        />
-        <Route
-          path="/audit"
-          component={() => (
-            <PlaceholderPage
-              title="Audit"
-              phase="Future service phase"
-              description="The append-only table exists; audit query and mutation orchestration are not implemented yet."
+            <Route
+              path="/audit"
+              component={() => (
+                <PlaceholderPage
+                  title="Audit"
+                  phase="Future audit query phase"
+                  description="Authentication events are append-only in PostgreSQL; the query UI is not implemented yet."
+                />
+              )}
             />
-          )}
-        />
-        <Route
-          path="/settings"
-          component={() => (
-            <PlaceholderPage
-              title="Settings"
-              phase="Future authentication phase"
-              description="Security policy and user settings require the first-admin bootstrap and authenticated sessions."
-            />
-          )}
-        />
-        <Route path="*404" component={NotFoundPage} />
-      </Router>
+            <Route path="/settings" component={SettingsPage} />
+            <Route path="/users" component={UsersPage} />
+            <Route path="*404" component={NotFoundPage} />
+          </Router>
+        </AuthGate>
+      </AuthProvider>
     </ErrorBoundary>
   );
 }

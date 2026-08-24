@@ -3,9 +3,9 @@
 [![CI](https://github.com/starhui-dev/aster-dns/actions/workflows/ci.yml/badge.svg)](https://github.com/starhui-dev/aster-dns/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Aster DNS is a self-hosted, multi-provider DNS management platform. This repository currently contains the Phase 1 engineering foundation: a runnable Go server, PostgreSQL schema and migration runner, SolidJS frontend shell, and repeatable build/deployment workflow.
+Aster DNS is a self-hosted, multi-provider DNS management platform. The repository currently includes the production-oriented authentication and authorization foundation: secure first-admin bootstrap, Passkey-first login, optional Argon2id password fallback and TOTP, opaque server-side sessions, CSRF/origin protection, RBAC, audit events, PostgreSQL migrations, and a SolidJS administration UI.
 
-It does **not** yet implement authentication, first-admin enrollment, RBAC, CSRF protection, provider credential encryption, provider adapters, zone synchronization, or DNS record operations. Do not expose this build to an untrusted network.
+Provider credential management, Provider adapters, Zone synchronization, and DNS Record operations are not implemented yet. Do not mistake the remaining provider placeholder pages for operational DNS management.
 
 ## Current stack
 
@@ -35,14 +35,17 @@ Copy the placeholder file, then replace every angle-bracket placeholder. Do not 
 cp .env.example .env
 ```
 
-Generate a URL-safe local PostgreSQL password and a production master key when needed:
+Generate a URL-safe PostgreSQL password, the authenticated-encryption master key, and a one-time bootstrap token:
 
 ```sh
 openssl rand -hex 24
 openssl rand -base64 32
+openssl rand 32 | base64 -w0 | tr '+/' '-_' | tr -d '='
 ```
 
-`APP_MASTER_KEY` may remain empty only in `development` or `test`. `production` rejects startup unless `APP_DATABASE_URL`, an HTTPS `APP_PUBLIC_URL`, and a valid base64-encoded 32-byte `APP_MASTER_KEY` are present. Provider credentials are not accepted through environment variables.
+`APP_MASTER_KEY` is required whenever `APP_DATABASE_URL` is configured and must decode to exactly 32 bytes. `APP_BOOTSTRAP_TOKEN` is required only until the first administrator Passkey is registered; remove it from the runtime environment after bootstrap. No default administrator password exists. Set `APP_PASSWORD_LOGIN_ENABLED=true` only when password fallback should be globally available.
+
+`APP_PUBLIC_URL` must exactly match the browser origin because WebAuthn rpId/origin and mutation Origin checks derive from it. The example uses `http://localhost:5173` for native Vite development. Compose maps `APP_COMPOSE_PUBLIC_URL` to the container's `APP_PUBLIC_URL`; set it to the externally visible same-origin URL in deployment.
 
 Load the native-process variables into the current shell:
 
@@ -74,9 +77,11 @@ Terminal 2:
 make dev-frontend
 ```
 
-Open <http://127.0.0.1:5173>. Vite proxies `/api`, `/healthz`, and `/readyz` to the Go server on `127.0.0.1:8080`.
+Open <http://localhost:5173>. Vite proxies `/api`, `/healthz`, and `/readyz` to the Go server on `127.0.0.1:8080` while preserving the configured browser origin.
 
 The application never migrates the schema during `serve`. Deployments must run `server migrate up` first. `/readyz` remains `503` until PostgreSQL is reachable and the schema is at the embedded latest migration.
+
+On an empty database, the UI requires the one-time `APP_BOOTSTRAP_TOKEN` and creates the first administrator only after a valid Passkey registration ceremony. Subsequent users are created by an admin and enroll through a one-time, hashed enrollment token.
 
 ## Container workflow
 
@@ -110,17 +115,19 @@ GitHub Actions in `.github/workflows/ci.yml` calls these same Make targets and a
 
 ## HTTP surface
 
-- `GET /healthz`: process liveness only
-- `GET /readyz`: PostgreSQL connectivity and exact migration version
-- `GET /api/v1`: API/version metadata
-- unknown `/api/v1/*`: stable `{ "error": { "code", "message", "request_id" } }` response
-- built frontend routes: `/`, `/zones`, `/accounts`, `/audit`, `/settings`
+- `GET /healthz`: process liveness only.
+- `GET /readyz`: PostgreSQL connectivity and exact migration version.
+- `GET /api/v1`: API/version metadata.
+- `/api/v1/auth/*`: bootstrap, Passkey/password/TOTP login, current session, Passkey management, TOTP/password settings, logout, and session revocation.
+- `/api/v1/users/*`: admin-only user creation, role/disabled-state changes, and enrollment-token issuance.
+- unknown `/api/v1/*`: stable `{ "error": { "code", "message", "request_id" } }` response.
+- frontend routes: `/`, `/zones`, `/accounts`, `/audit`, `/settings`, and admin-only `/users`.
 
-The UI routes beyond `/` are honest scope markers only. They do not return mock provider accounts, zones, records, or fabricated success states.
+Authentication mutations use same-origin verification. Cookie-authenticated mutations additionally require the CSRF token returned through the readable `aster_csrf` cookie and sent as `X-CSRF-Token`. The opaque `aster_session` cookie is HttpOnly; PostgreSQL stores only SHA-256 token hashes.
 
 ## Security state
 
-Phase 1 validates production master-key presence and format but does not yet use the key because credential storage is not implemented. The initial tables support future auth, encrypted credentials, zone indexing, and append-only audit behavior, but there are no repositories or mutation APIs yet. Secure bootstrap, authentication, authorization, credential encryption/redaction, and provider integrations remain required before any production exposure.
+Authentication and authorization are implemented server-side: admin/operator/viewer RBAC, Secure/HttpOnly/SameSite cookies in HTTPS deployments, idle and absolute session expiry, rotation/revocation, strict WebAuthn ceremony validation, Argon2id, encrypted TOTP seeds, login rate limiting, CSRF/origin checks, and append-only authentication audit events. Provider credential encryption/redaction and Provider authorization flows remain future work because Provider account APIs are not implemented.
 
 ## License
 

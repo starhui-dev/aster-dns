@@ -22,6 +22,12 @@ func TestLoadDevelopmentDefaults(t *testing.T) {
 	if cfg.PublicURL.String() != "http://localhost:8080" {
 		t.Fatalf("public URL = %q", cfg.PublicURL)
 	}
+	if cfg.Auth.PasswordLoginEnabled {
+		t.Fatal("password fallback is enabled by default")
+	}
+	if cfg.Auth.SessionIdleTTL >= cfg.Auth.SessionAbsoluteTTL {
+		t.Fatal("session absolute TTL must exceed idle TTL")
+	}
 }
 
 func TestLoadProductionRequiresSecurityConfiguration(t *testing.T) {
@@ -66,6 +72,32 @@ func TestLoadRejectsInvalidMasterKeyWithoutEchoingIt(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), invalidKey) {
 		t.Fatalf("error leaked master key: %v", err)
+	}
+}
+func TestLoadHashesBootstrapTokenWithoutRetainingRawValue(t *testing.T) {
+	t.Parallel()
+
+	rawToken := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+	cfg, err := load(mapLookup(map[string]string{"APP_BOOTSTRAP_TOKEN": rawToken}))
+	if err != nil {
+		t.Fatalf("load bootstrap token: %v", err)
+	}
+	if len(cfg.Auth.BootstrapTokenHash) != 32 {
+		t.Fatalf("bootstrap token hash length = %d", len(cfg.Auth.BootstrapTokenHash))
+	}
+	if strings.Contains(string(cfg.Auth.BootstrapTokenHash), rawToken) {
+		t.Fatal("configuration retained the raw bootstrap token")
+	}
+}
+
+func TestLoadDatabaseConfigurationRequiresMasterKey(t *testing.T) {
+	t.Parallel()
+
+	_, err := load(mapLookup(map[string]string{
+		"APP_DATABASE_URL": "postgres://user:password@localhost:5432/aster_dns?sslmode=disable",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "APP_MASTER_KEY") {
+		t.Fatalf("database configuration without master key error = %v", err)
 	}
 }
 

@@ -37,6 +37,16 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   const normalizedPath = path === "" ? "" : path.startsWith("/") ? path : `/${path}`;
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
+  const method = (init.method ?? "GET").toUpperCase();
+  if (init.body !== undefined && typeof init.body === "string" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  if (!isSafeMethod(method)) {
+    const csrfToken = readCookie("__Host-aster_csrf") ?? readCookie("aster_csrf");
+    if (csrfToken !== null) {
+      headers.set("X-CSRF-Token", csrfToken);
+    }
+  }
 
   const response = await fetch(`${API_BASE}${normalizedPath}`, {
     ...init,
@@ -69,4 +79,22 @@ async function readJSON(response: Response): Promise<unknown> {
   } catch {
     return null;
   }
+}
+
+function isSafeMethod(method: string): boolean {
+  return method === "GET" || method === "HEAD" || method === "OPTIONS";
+}
+
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const prefix = `${name}=`;
+  for (const part of document.cookie.split(";")) {
+    const value = part.trim();
+    if (value.startsWith(prefix)) {
+      return decodeURIComponent(value.slice(prefix.length));
+    }
+  }
+  return null;
 }

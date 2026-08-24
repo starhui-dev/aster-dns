@@ -11,7 +11,7 @@ import (
 func TestEmbeddedMigrationMatchesLatestVersion(t *testing.T) {
 	t.Parallel()
 
-	if migrations.LatestVersion != 1 {
+	if migrations.LatestVersion != 2 {
 		t.Fatalf("latest migration version = %d, update this contract test", migrations.LatestVersion)
 	}
 	content, err := migrations.Files.ReadFile("000001_initial_schema.up.sql")
@@ -29,6 +29,15 @@ func TestEmbeddedMigrationMatchesLatestVersion(t *testing.T) {
 	} {
 		if !strings.Contains(string(content), "CREATE TABLE "+table) {
 			t.Errorf("initial migration does not create %s", table)
+		}
+	}
+	authContent, err := migrations.Files.ReadFile("000002_authentication.up.sql")
+	if err != nil {
+		t.Fatalf("read authentication migration: %v", err)
+	}
+	for _, fragment := range []string{"webauthn_user_handle", "credential_data", "CREATE TABLE auth_challenges"} {
+		if !strings.Contains(string(authContent), fragment) {
+			t.Errorf("authentication migration does not contain %q", fragment)
 		}
 	}
 }

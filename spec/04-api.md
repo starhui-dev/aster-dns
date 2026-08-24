@@ -25,25 +25,36 @@ Base: `/api/v1`
 
 ## 2. Auth
 
-建议 endpoints：
+已实现 endpoints：
 
 ```text
+GET    /auth/bootstrap
+POST   /auth/bootstrap/passkey/options
+POST   /auth/bootstrap/passkey/verify
 GET    /auth/session
 POST   /auth/login/password
+POST   /auth/login/totp
 POST   /auth/logout
 POST   /auth/logout-all
+POST   /auth/passkeys/enroll/options
+POST   /auth/passkeys/enroll/verify
 POST   /auth/passkeys/register/options
 POST   /auth/passkeys/register/verify
 POST   /auth/passkeys/login/options
 POST   /auth/passkeys/login/verify
+GET    /auth/passkeys
+DELETE /auth/passkeys/{id}
+PUT    /auth/password
+DELETE /auth/password
 POST   /auth/totp/setup
 POST   /auth/totp/confirm
 DELETE /auth/totp
-GET    /auth/passkeys
-DELETE /auth/passkeys/{id}
+GET    /auth/sessions
+DELETE /auth/sessions/{id}
+POST   /auth/sessions/revoke-others
 ```
 
-根据所选 WebAuthn library 调整 ceremony，但不能省略 challenge binding/origin/rpId 验证。
+Bootstrap token、enrollment token、ceremony token、pending TOTP token 都是一次性 opaque bearer；数据库只保存 hash。WebAuthn ceremony 严格绑定 server-side challenge、rpId、origin、用户/会话与短 TTL。认证失败响应统一，不暴露用户名是否存在。
 
 ## 3. Users
 
@@ -53,6 +64,7 @@ POST   /users
 PATCH  /users/{id}
 POST   /users/{id}/disable
 POST   /users/{id}/enable
+POST   /users/{id}/enrollment-token
 ```
 
 仅 admin。

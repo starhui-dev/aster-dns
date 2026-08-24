@@ -11,6 +11,7 @@
 建议字段：
 
 - `id uuid primary key`
+- `webauthn_user_handle bytea unique`：32–64 bytes stable random user handle
 - `username text unique not null`
 - `display_name text`
 - `role text not null`
@@ -33,6 +34,7 @@
 - `name text`
 - `created_at`
 - `last_used_at`
+- `credential_data bytea`：WebAuthn library 完整 credential record 的无损序列化；API 不返回
 
 WebAuthn library 需要的附加字段按其数据模型增加。
 
@@ -45,6 +47,8 @@ TOTP secret 必须加密：
 - `secret_nonce`
 - `key_version`
 - `confirmed_at`
+- `credential_revision bigint`
+- `last_accepted_timestep bigint/null`：拒绝同一 TOTP 时间步重放
 - `created_at`
 
 ### sessions
@@ -52,15 +56,36 @@ TOTP secret 必须加密：
 - `id uuid`
 - `user_id uuid`
 - `token_hash bytea unique`
-- `csrf_secret_hash` 或等价机制
+- `csrf_token_hash bytea`
 - `ip inet/null`
 - `user_agent text`
+- `auth_method text`
 - `created_at`
 - `last_seen_at`
-- `expires_at`
+- `idle_expires_at`
+- `absolute_expires_at`
 - `revoked_at`
 
 数据库不得保存 raw session token。
+
+### auth_challenges
+
+WebAuthn ceremony、首次 bootstrap、用户 enrollment 与 pending TOTP 使用短期 server-side challenge：
+
+- `id uuid`
+- `token_hash bytea unique`：客户端只持有 raw opaque token，数据库只存 hash
+- `kind text`
+- `user_id uuid/null`
+- `session_id uuid/null`
+- `parent_id uuid/null`：例如 enrollment registration 绑定 enrollment grant
+- `webauthn_session bytea/null`：WebAuthn library session data 的无损序列化
+- `payload jsonb`：仅保存 ceremony 所需的非 secret typed payload
+- `auth_method text/null`
+- `attempts integer`
+- `created_at`
+- `expires_at`
+
+challenge 完成时必须单次消费；过期数据可有界清理。
 
 ### provider_accounts
 

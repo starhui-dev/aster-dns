@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -33,6 +34,7 @@ type Config struct {
 	LogLevel    slog.Level
 	WebDir      string
 	HTTP        HTTPConfig
+	Auth        AuthConfig
 }
 
 type DatabaseConfig struct {
@@ -43,6 +45,15 @@ type DatabaseConfig struct {
 	MaxConnectionIdle time.Duration
 	HealthCheckPeriod time.Duration
 	ConnectTimeout    time.Duration
+}
+type AuthConfig struct {
+	BootstrapTokenHash     []byte
+	PasswordLoginEnabled   bool
+	SessionIdleTTL         time.Duration
+	SessionAbsoluteTTL     time.Duration
+	SessionRefreshInterval time.Duration
+	ChallengeTTL           time.Duration
+	EnrollmentTTL          time.Duration
 }
 
 type HTTPConfig struct {
@@ -94,6 +105,13 @@ func load(lookup lookupEnv) (Config, error) {
 			HealthCheckPeriod: time.Minute,
 			ConnectTimeout:    5 * time.Second,
 		},
+		Auth: AuthConfig{
+			SessionIdleTTL:         30 * time.Minute,
+			SessionAbsoluteTTL:     24 * time.Hour,
+			SessionRefreshInterval: time.Minute,
+			ChallengeTTL:           5 * time.Minute,
+			EnrollmentTTL:          24 * time.Hour,
+		},
 	}
 
 	var validationErrors []error
@@ -140,8 +158,8 @@ func load(lookup lookupEnv) (Config, error) {
 
 	masterKeyRaw := value(lookup, "APP_MASTER_KEY")
 	if masterKeyRaw == "" {
-		if cfg.Environment == EnvironmentProduction {
-			validationErrors = append(validationErrors, errors.New("APP_MASTER_KEY is required in production"))
+		if cfg.Environment == EnvironmentProduction || cfg.Database.URL != "" {
+			validationErrors = append(validationErrors, errors.New("APP_MASTER_KEY is required when the database is configured"))
 		}
 	} else {
 		key, err := base64.StdEncoding.DecodeString(masterKeyRaw)
@@ -151,6 +169,18 @@ func load(lookup lookupEnv) (Config, error) {
 			cfg.MasterKey = key
 		}
 	}
+
+	bootstrapTokenRaw := value(lookup, "APP_BOOTSTRAP_TOKEN")
+	if bootstrapTokenRaw != "" {
+		decoded, err := base64.RawURLEncoding.DecodeString(bootstrapTokenRaw)
+		if err != nil || len(decoded) != 32 {
+			validationErrors = append(validationErrors, errors.New("APP_BOOTSTRAP_TOKEN must be unpadded base64url encoding of exactly 32 bytes"))
+		} else {
+			hash := sha256.Sum256([]byte(bootstrapTokenRaw))
+			cfg.Auth.BootstrapTokenHash = hash[:]
+		}
+	}
+	parseBool(lookup, "APP_PASSWORD_LOGIN_ENABLED", &cfg.Auth.PasswordLoginEnabled, &validationErrors)
 
 	if raw := value(lookup, "APP_LOG_LEVEL"); raw != "" {
 		level, err := parseLogLevel(raw)
@@ -186,6 +216,17 @@ func load(lookup lookupEnv) (Config, error) {
 	parseDuration(lookup, "APP_HTTP_IDLE_TIMEOUT", &cfg.HTTP.IdleTimeout, &validationErrors)
 	parseDuration(lookup, "APP_SHUTDOWN_TIMEOUT", &cfg.HTTP.ShutdownTimeout, &validationErrors)
 	parseDuration(lookup, "APP_READY_TIMEOUT", &cfg.HTTP.ReadyTimeout, &validationErrors)
+	parseDuration(lookup, "APP_AUTH_SESSION_IDLE_TTL", &cfg.Auth.SessionIdleTTL, &validationErrors)
+	parseDuration(lookup, "APP_AUTH_SESSION_ABSOLUTE_TTL", &cfg.Auth.SessionAbsoluteTTL, &validationErrors)
+	parseDuration(lookup, "APP_AUTH_SESSION_REFRESH_INTERVAL", &cfg.Auth.SessionRefreshInterval, &validationErrors)
+	parseDuration(lookup, "APP_AUTH_CHALLENGE_TTL", &cfg.Auth.ChallengeTTL, &validationErrors)
+	parseDuration(lookup, "APP_AUTH_ENROLLMENT_TTL", &cfg.Auth.EnrollmentTTL, &validationErrors)
+	if cfg.Auth.SessionAbsoluteTTL <= cfg.Auth.SessionIdleTTL {
+		validationErrors = append(validationErrors, errors.New("APP_AUTH_SESSION_ABSOLUTE_TTL must exceed APP_AUTH_SESSION_IDLE_TTL"))
+	}
+	if cfg.Auth.SessionRefreshInterval >= cfg.Auth.SessionIdleTTL {
+		validationErrors = append(validationErrors, errors.New("APP_AUTH_SESSION_REFRESH_INTERVAL must be shorter than APP_AUTH_SESSION_IDLE_TTL"))
+	}
 	parseInt(lookup, "APP_HTTP_MAX_HEADER_BYTES", &cfg.HTTP.MaxHeaderBytes, 1_024, 16<<20, &validationErrors)
 
 	if len(validationErrors) > 0 {
@@ -247,6 +288,18 @@ func parseDuration(lookup lookupEnv, key string, target *time.Duration, validati
 	parsed, err := time.ParseDuration(raw)
 	if err != nil || parsed <= 0 {
 		*validationErrors = append(*validationErrors, fmt.Errorf("%s must be a positive duration", key))
+		return
+	}
+	*target = parsed
+}
+func parseBool(lookup lookupEnv, key string, target *bool, validationErrors *[]error) {
+	raw := value(lookup, key)
+	if raw == "" {
+		return
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		*validationErrors = append(*validationErrors, fmt.Errorf("%s must be true or false", key))
 		return
 	}
 	*target = parsed

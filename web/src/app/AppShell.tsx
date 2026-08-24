@@ -1,9 +1,10 @@
 import { A, useLocation } from "@solidjs/router";
-import { For, type ParentProps } from "solid-js";
+import { For, createMemo, type ParentProps } from "solid-js";
 
+import { useAuth } from "./AuthContext";
 import { createThemeController } from "./theme";
 
-const navigation = [
+const baseNavigation = [
   { href: "/", label: "Overview", end: true },
   { href: "/zones", label: "Zones", end: false },
   { href: "/accounts", label: "Accounts", end: false },
@@ -13,9 +14,19 @@ const navigation = [
 
 export default function AppShell(props: ParentProps) {
   const location = useLocation();
+  const auth = useAuth();
   const theme = createThemeController();
+  const session = createMemo(() => {
+    const state = auth.state();
+    return state.kind === "authenticated" ? state.session : undefined;
+  });
+  const navigation = createMemo(() =>
+    session()?.user.role === "admin"
+      ? [...baseNavigation, { href: "/users", label: "Users", end: false }]
+      : [...baseNavigation],
+  );
   const pageTitle = () =>
-    navigation.find((item) =>
+    navigation().find((item) =>
       item.end ? location.pathname === item.href : location.pathname.startsWith(item.href),
     )?.label ?? "Aster DNS";
 
@@ -25,7 +36,7 @@ export default function AppShell(props: ParentProps) {
         <aside class="hidden w-64 shrink-0 border-r border-slate-200 bg-white/90 px-5 py-6 backdrop-blur md:flex md:flex-col dark:border-slate-800 dark:bg-slate-950/90">
           <Brand />
           <nav aria-label="Primary navigation" class="mt-10 space-y-1">
-            <For each={navigation}>
+            <For each={navigation()}>
               {(item) => (
                 <A
                   href={item.href}
@@ -39,8 +50,18 @@ export default function AppShell(props: ParentProps) {
               )}
             </For>
           </nav>
-          <div class="mt-auto rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-200">
-            Phase 1 foundation only. Authentication and DNS provider operations are not available.
+          <div class="mt-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-5 dark:border-slate-800 dark:bg-slate-900">
+            <p class="truncate font-semibold">
+              {session()?.user.display_name || session()?.user.username}
+            </p>
+            <p class="text-slate-500 capitalize dark:text-slate-400">{session()?.user.role}</p>
+            <button
+              class="mt-2 font-semibold text-cyan-700 hover:underline dark:text-cyan-300"
+              type="button"
+              onClick={() => void auth.signOut().catch(() => auth.refresh())}
+            >
+              Sign out
+            </button>
           </div>
         </aside>
 
@@ -58,20 +79,25 @@ export default function AppShell(props: ParentProps) {
                   <h1 class="truncate text-lg font-semibold">{pageTitle()}</h1>
                 </div>
               </div>
-              <button
-                type="button"
-                class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm transition hover:border-cyan-300 hover:text-cyan-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-cyan-700 dark:hover:text-cyan-300"
-                aria-label={`Switch to ${theme.theme() === "light" ? "dark" : "light"} theme`}
-                onClick={theme.toggle}
-              >
-                {theme.theme() === "light" ? "Dark" : "Light"}
-              </button>
+              <div class="flex items-center gap-2">
+                <span class="hidden max-w-48 truncate text-sm text-slate-600 sm:block dark:text-slate-300">
+                  {session()?.user.display_name || session()?.user.username}
+                </span>
+                <button
+                  type="button"
+                  class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium shadow-sm transition hover:border-cyan-300 hover:text-cyan-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-600 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-cyan-700 dark:hover:text-cyan-300"
+                  aria-label={`Switch to ${theme.theme() === "light" ? "dark" : "light"} theme`}
+                  onClick={theme.toggle}
+                >
+                  {theme.theme() === "light" ? "Dark" : "Light"}
+                </button>
+              </div>
             </div>
             <nav
               aria-label="Mobile navigation"
               class="mt-3 flex gap-2 overflow-x-auto pb-1 md:hidden"
             >
-              <For each={navigation}>
+              <For each={navigation()}>
                 {(item) => (
                   <A
                     href={item.href}

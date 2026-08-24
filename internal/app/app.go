@@ -11,7 +11,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/starhui-dev/aster-dns/internal/api"
+	"github.com/starhui-dev/aster-dns/internal/auth"
 	"github.com/starhui-dev/aster-dns/internal/config"
+	secretcrypto "github.com/starhui-dev/aster-dns/internal/crypto"
 	"github.com/starhui-dev/aster-dns/internal/db"
 )
 
@@ -37,6 +39,29 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		pool = openedPool
 		defer pool.Close()
 	}
+	var authService *auth.Service
+	if pool != nil {
+		envelope, err := secretcrypto.NewEnvelope(cfg.MasterKey)
+		if err != nil {
+			return err
+		}
+		authService, err = auth.NewService(db.NewAuthStore(pool), envelope, auth.Config{
+			PublicURL:              cfg.PublicURL,
+			BootstrapTokenHash:     cfg.Auth.BootstrapTokenHash,
+			PasswordLoginEnabled:   cfg.Auth.PasswordLoginEnabled,
+			SessionIdleTTL:         cfg.Auth.SessionIdleTTL,
+			SessionAbsoluteTTL:     cfg.Auth.SessionAbsoluteTTL,
+			SessionRefreshInterval: cfg.Auth.SessionRefreshInterval,
+			ChallengeTTL:           cfg.Auth.ChallengeTTL,
+			EnrollmentTTL:          cfg.Auth.EnrollmentTTL,
+		})
+		if err != nil {
+			return err
+		}
+		if err = authService.EnsureBootstrapReady(ctx); err != nil {
+			return fmt.Errorf("initialize authentication: %w", err)
+		}
+	}
 
 	if err := validateWebDirectory(cfg.WebDir); err != nil {
 		return err
@@ -54,6 +79,8 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		ReadyCheck:   readyCheck,
 		ReadyTimeout: cfg.HTTP.ReadyTimeout,
 		WebDir:       cfg.WebDir,
+		Auth:         authService,
+		HTTPS:        cfg.PublicURL.Scheme == "https",
 	})
 
 	server := &http.Server{

@@ -16,6 +16,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
     "@solidjs/router": "1.0.0",
     "solid-js": "1.9.15"
   },

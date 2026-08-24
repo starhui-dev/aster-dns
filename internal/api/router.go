@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/starhui-dev/aster-dns/internal/auth"
 	"github.com/starhui-dev/aster-dns/internal/httpx"
 )
 
@@ -21,6 +22,8 @@ type Options struct {
 	ReadyCheck   func(context.Context) error
 	ReadyTimeout time.Duration
 	WebDir       string
+	Auth         *auth.Service
+	HTTPS        bool
 }
 
 type apiOverviewResponse struct {
@@ -38,7 +41,7 @@ type healthResponse struct {
 func NewRouter(options Options) http.Handler {
 	router := chi.NewRouter()
 	router.Use(httpx.RequestID)
-	router.Use(httpx.SecurityHeaders)
+	router.Use(httpx.SecurityHeaders(options.HTTPS))
 	router.Use(httpx.AccessLog(options.Logger))
 	router.Use(httpx.Recoverer(options.Logger))
 
@@ -46,6 +49,14 @@ func NewRouter(options Options) http.Handler {
 	router.Get("/readyz", readyHandler(options.ReadyCheck, options.ReadyTimeout))
 	router.Get("/api/v1", apiOverviewHandler(options.Build))
 	router.Get("/api/v1/", apiOverviewHandler(options.Build))
+	if options.Auth != nil {
+		registerAuthRoutes(router, options.Auth)
+		registerUserRoutes(router, options.Auth)
+	} else {
+		router.HandleFunc("/api/v1/auth/*", func(w http.ResponseWriter, r *http.Request) {
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "auth_unavailable", "Authentication is unavailable.", nil)
+		})
+	}
 	router.HandleFunc("/api/v1/*", func(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusNotFound, "not_found", "The requested API resource was not found.", nil)
 	})

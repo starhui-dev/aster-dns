@@ -1,106 +1,128 @@
-# Phase 1 Implementation Status
+# Authentication / Authorization Implementation Status
 
 Updated: 2026-08-24
 
 ## Outcome
 
-Phase 1 engineering foundation is implemented and locally verified. The repository now contains a runnable Go server, explicit PostgreSQL migration flow, same-origin SolidJS frontend delivery, local development commands, CI gates, and a non-root application image.
+The authentication and authorization foundation is implemented end to end across PostgreSQL, Go services and middleware, REST handlers, audit events, and the SolidJS UI. Authentication is Passkey-first. There is no hard-coded or generated default administrator password.
 
-No Provider account, Zone, Record, credential, or mutation endpoint returns fabricated data. Authentication and security initialization remain intentionally unavailable, so this build must not be exposed to untrusted networks.
+Provider accounts, Provider credential handling, Zone synchronization, and DNS Record operations remain future work. Their placeholder pages still return no fabricated Provider data.
 
 ## Implemented
 
-### Project and runtime
+### Secure first-administrator bootstrap
 
-- Canonical Go module path: `github.com/starhui-dev/aster-dns`.
-- Runtime versions pinned in `mise.toml`: Go 1.27.0 and Node.js 24.19.0.
-- npm lockfile created with npm 12.0.2.
-- Active directories: `cmd/server`, `internal/app`, `internal/api`, `internal/config`, `internal/db`, `internal/httpx`, `migrations`, and `web`.
+- A bootstrap secret must be supplied explicitly as `APP_BOOTSTRAP_TOKEN`, encoded as an unpadded base64url value containing exactly 32 random bytes.
+- Configuration stores only the SHA-256 bootstrap-token hash in memory.
+- Bootstrap is available only while the database contains no users and requires a valid WebAuthn registration ceremony.
+- The first administrator, Passkey credential, consumed challenge, initial session, and audit event are committed atomically.
+- Concurrent or replayed bootstrap attempts cannot create another first administrator.
+- The runtime bootstrap token can and should be removed after enrollment.
 
-### Backend
+### Users and centralized RBAC
 
-- `server serve`, `server migrate up`, `server healthcheck`, and `server version` commands.
-- Application wiring for configuration, PostgreSQL pool, HTTP router, lifecycle, and bounded graceful shutdown.
-- Strict configuration parsing and validation:
-  - production requires `APP_DATABASE_URL`;
-  - production requires an HTTPS `APP_PUBLIC_URL`;
-  - production requires `APP_MASTER_KEY` as standard base64 encoding of exactly 32 bytes;
-  - invalid secret values are not echoed in validation errors;
-  - database pool and HTTP timeout settings are bounded and typed.
-- pgx connection pool with explicit limits, connection age/idle settings, health period, connection timeout, and application name.
-- Embedded, explicit migration runner based on `golang-migrate`; `serve` never mutates the schema.
-- Structured JSON logging with request ID, method, path, status, response size, client address, and duration.
-- Request ID acceptance/generation, opaque panic recovery, basic security headers, HTTP server timeouts, and graceful shutdown.
-- `/healthz` for liveness only and `/readyz` for PostgreSQL connectivity plus exact migration version.
-- `/api/v1` metadata endpoint and stable JSON error envelope with request ID.
-- API paths are explicitly excluded from SPA fallback; unknown `/api/v1/*` paths return JSON `404` rather than frontend HTML.
+- Roles: `admin`, `operator`, and `viewer`.
+- Central permission definitions and authorization middleware enforce server-side access.
+- User list/create/update, role changes, disable/enable, and enrollment-token issuance are admin-only.
+- A disabled user cannot continue an existing session.
+- Enrollment tokens are 256-bit opaque bearer values; PostgreSQL stores only their SHA-256 hashes and expiry metadata.
+- User API responses omit password hashes, WebAuthn user handles, Passkey credential material, TOTP ciphertext, and session hashes.
 
-### Database
+### Opaque server-side sessions
 
-Migration `000001_initial_schema.up.sql` creates:
+- Session and CSRF values are generated with a CSPRNG and contain 256 bits of entropy.
+- PostgreSQL stores only 32-byte SHA-256 hashes of session and CSRF tokens.
+- Session cookies are HttpOnly and SameSite=Strict; Secure is enabled for HTTPS public URLs. The readable CSRF cookie is SameSite=Strict and never contains the session token.
+- Idle and absolute expiration are enforced independently. Last-seen/idle refresh is bounded by a configurable refresh interval.
+- Login, bootstrap, enrollment, password changes, TOTP changes, and logout-all rotate or revoke sessions as appropriate.
+- Users can list current sessions, revoke an individual non-current session, revoke other sessions, or log out all sessions.
 
-- `users`;
-- `sessions`;
-- `passkey_credentials`;
-- `totp_credentials`;
-- `provider_accounts`;
-- `zones` as a Provider-derived index/cache, not an authoritative DNS record store;
-- `audit_events` schema for future append-only application behavior.
+### Passkeys / WebAuthn
 
-The migration includes role/state checks, encrypted-secret storage columns, opaque Provider identifiers, credential all-or-none constraints, relevant foreign-key policies, uniqueness rules, and initial operational indexes. No authoritative DNS records table exists.
+- `github.com/go-webauthn/webauthn` performs registration and assertion verification; protocol and signature algorithms are not reimplemented.
+- rpId and allowed origins derive from the validated `APP_PUBLIC_URL`.
+- Registration and login use short-lived server-side challenges bound to ceremony type, user, session, and parent enrollment grant where applicable.
+- Challenges are atomically consumed and cannot be replayed.
+- The complete library credential record is persisted so authenticator flags, transports, public key, attestation type, and sign count survive round trips.
+- Users can register, name, list, use, and delete multiple Passkeys. API responses expose only safe metadata: id, name, created time, last-used time, and transports.
+- The final available authentication method cannot be removed without first configuring an alternative.
+
+### Password fallback
+
+- Password login is globally gated by `APP_PASSWORD_LOGIN_ENABLED` and individually enabled per user.
+- Passwords are hashed and verified through `github.com/alexedwards/argon2id` with random salts and centralized parameters.
+- Login uses uniform invalid-credential responses to avoid username enumeration.
+- Per-IP and per-username bounded in-memory rate limits protect password and TOTP login attempts.
+- Password creation, replacement, and disabling are available from the authenticated settings UI and revoke other sessions.
+
+### TOTP
+
+- `github.com/pquerna/otp` generates and validates TOTP values; HMAC/TOTP details are not implemented locally.
+- Setup returns the provisioning URI only for the active enrollment step and enables TOTP only after a valid confirmation code.
+- Seeds are encrypted at rest with AES-256-GCM using the application master key, a random nonce, key version, and user/revision AAD.
+- Authenticated-decryption failure rejects ciphertext or AAD tampering.
+- The last accepted time step is persisted so the same TOTP value cannot be replayed through another pending login.
+- Seeds and provisioning URIs are excluded from API reads, logs, and audit payloads.
+
+### CSRF, Origin, cookies, and HTTP protection
+
+- Every authentication mutation verifies the request Origin against the configured public origin.
+- Cookie-authenticated mutations additionally require a matching `X-CSRF-Token` value whose hash matches the current server-side session.
+- CORS credential wildcard behavior is not enabled; native and container development use explicit same-origin public URLs.
+- Authentication responses use `Cache-Control: no-store`.
+- Existing request IDs, opaque error envelopes, panic recovery, request-size limits, strict JSON decoding, and security headers apply to the authentication surface.
+
+### Authentication audit events
+
+Append-only authentication audit events cover:
+
+- bootstrap success/failure;
+- login success/failure and TOTP-required transitions;
+- logout and session revocation;
+- Passkey registration/deletion;
+- password update/disable;
+- TOTP setup/enable/disable;
+- user creation, role/disabled-state changes, and enrollment-token issuance.
+
+Events contain safe actor/resource/result/request metadata only. Passwords, hashes, raw session/CSRF tokens, bootstrap/enrollment/challenge tokens, TOTP seeds/URIs, and private Passkey material are never audit fields.
 
 ### Frontend
 
-- SolidJS 1.9, Solid Router, TypeScript 6 strict mode, Vite 8, and Tailwind CSS 4 through the official Vite plugin.
-- Responsive app shell with Overview, Zones, Accounts, Audit, and Settings routes.
-- Central same-origin API client with abort-signal support and stable API error parsing.
-- Application error boundary.
-- Light/dark theme with a non-sensitive local preference.
-- Honest scope-marker pages; no fake accounts, zones, records, provider status, or credentials.
-- Vitest and Solid Testing Library coverage for API connection rendering and error-envelope mapping.
+- Authentication gate handles bootstrap, Passkey-first login, optional password login, TOTP second step, and authenticated application rendering.
+- Settings manages multiple Passkeys, password fallback, TOTP, and active sessions.
+- Users provides admin-only creation, role changes, enable/disable actions, and one-time enrollment-token display.
+- The API client centrally attaches the in-memory CSRF cookie to mutations and preserves stable request-id errors.
+- The Users navigation and page are hidden from non-admin roles, while the API remains authoritative.
 
-### Development and delivery
+### Database and configuration
 
-- Root `Makefile` is the local/CI command contract for formatting, vet/lint, typecheck, tests, builds, migrations, development processes, Compose, and image builds.
-- Vite proxies `/api`, `/healthz`, and `/readyz` to the backend during native development.
-- Production image serves Vite output from `/app/web` in the same container and origin.
-  - This uses a same-image static directory instead of `go:embed`, so ordinary Go builds do not depend on generated frontend output.
-- Multi-stage Dockerfile: Node frontend build, Go static binary build, distroless runtime.
-- Runtime image user: `nonroot:nonroot`; read-only-friendly filesystem and in-binary healthcheck command.
-- Compose services: PostgreSQL 18, one-shot migration, then application.
-- PostgreSQL 18 volume mounted at `/var/lib/postgresql`, matching the current official image layout.
-- `.env.example` contains placeholders/empty secret slots only and no Provider credentials or weak default secret.
-- GitHub Actions workflow uses the same Make targets, a clean PostgreSQL service, frontend gates, migration smoke, image build, and non-root image inspection.
-- README documents native development, Compose startup, migration ordering, configuration generation, HTTP endpoints, and the incomplete security state.
+- Incremental migration `000002_authentication.up.sql` adds stable WebAuthn user handles, complete credential storage, TOTP ciphertext constraints, and server-side authentication challenges.
+- The application never migrates during `serve`; deployments still run `server migrate up` explicitly.
+- `APP_MASTER_KEY` is required whenever a database is configured.
+- Native development uses `APP_PUBLIC_URL=http://localhost:5173`; Compose maps `APP_COMPOSE_PUBLIC_URL` to the container runtime public URL so WebAuthn and Origin checks match the actual browser origin.
 
 ## Verification evidence
 
 | Check | Observed result |
 |---|---|
-| `make ci` | Passed backend format check, `go vet`, Go tests, Go build, frontend Prettier check, ESLint, TypeScript typecheck, Vitest, and production Vite build. |
-| Go tests | All project packages passed. |
-| Frontend tests | 2 test files, 2 tests passed. |
-| Frontend production build | Vite built 33 modules and emitted hashed JS/CSS assets. |
-| Clean PostgreSQL migration | Fresh PostgreSQL 18 instance migrated to version `1`, `dirty=false`. |
-| Initial schema | All seven required tables were observed in `information_schema.tables`. |
-| Native server smoke | `/healthz` returned `200 {"status":"ok"}`; `/readyz` returned `200 {"status":"ready"}`. |
-| API smoke | `/api/v1` returned version metadata; unknown `/api/v1/*` returned stable JSON `404` with matching request ID header/body. |
-| Actual browser smoke | Chromium rendered the app shell, showed the live API-connected state, switched to dark theme, navigated to `/zones`, and returned to Overview. |
-| Container build | `docker build --tag aster-dns:phase1 .` succeeded. Dockerfile was kept compatible with the available legacy builder and does not require BuildKit cache mounts. |
-| Non-root image | Image config reported `nonroot:nonroot`; `docker run --rm aster-dns:phase1 version` executed successfully. |
-| Container runtime | The built image served frontend, API, health, and ready responses against the migrated PostgreSQL instance. |
-| Graceful shutdown | Container logs showed `server shutdown started` followed by `server shutdown complete`. |
-| Compose smoke | PostgreSQL became healthy, one-shot `migrate` exited `0`, app became healthy, and `/healthz`, `/readyz`, and `/` responded successfully. |
+| Focused backend security tests | Passed unauthenticated `401`, role matrix, CSRF/origin rejection, revoked/disabled session denial, Argon2id verify, opaque-token hashing, WebAuthn challenge replay and rpId/origin rejection, TOTP ciphertext tamper rejection, TOTP time-step replay rejection, and secret-canary scans. |
+| Backend authentication packages | `go test ./internal/auth ./internal/api ./internal/audit ./internal/crypto` passed. |
+| Full backend suite | `make backend-test` passed all `cmd`, `internal`, and `migrations` packages. |
+| Frontend tests | `make frontend-test` passed 2 test files and 4 tests, including authenticated admin rendering, Passkey-first login, error-envelope mapping, and CSRF header attachment. |
+| Formatting and lint | Go format check, `go vet`, Prettier check, and ESLint with zero warnings passed. |
+| Typecheck and build | Go build, TypeScript strict `tsc --noEmit`, and Vite production build passed; Vite transformed 56 modules. |
+| PostgreSQL runtime smoke | A clean PostgreSQL 18 database migrated through authentication migration version 2. Runtime sessions stored 32-byte token/CSRF hashes and the admin password row used an Argon2id hash. |
+| Browser WebAuthn smoke | Chromium with virtual authenticators completed first-admin Passkey bootstrap, registered a second named Passkey, and rendered safe Passkey metadata. |
+| Browser password/TOTP smoke | The UI enabled Argon2id password fallback, completed password login, set up and confirmed TOTP, required the separate TOTP step on the next password login, and completed that login with a new time-step code. |
+| Browser user-management smoke | An administrator created a viewer user and received a one-time enrollment token; the user appeared with viewer role controls. |
+| Secret scan | Runtime audit rows contained zero matches for password/TOTP/URI canaries; TOTP ciphertext contained no plaintext seed; service logs contained no password, TOTP seed, or provisioning URI matches. |
 
-## Remaining work
+## Remaining project work
 
-These are later phases, not fake-completed Phase 1 features:
+These items are outside this authentication/authorization delivery:
 
-1. Keep the checked-in GitHub Actions workflow green on the public remote.
-2. Implement secure first-admin enrollment, Passkey/password/TOTP authentication, sessions, RBAC, and CSRF protection.
-3. Implement authenticated encryption/keyring handling, secret redaction, Provider credential replacement, and canary leakage tests.
-4. Implement Provider core contracts and real official adapters for Huawei Cloud, Alibaba Cloud, Tencent DNSPod, and Cloudflare.
-5. Implement Provider-derived Zone sync, real RecordSet reads/mutations, cache invalidation, fingerprints/preconditions, and partial batch results.
-6. Implement append-only audit service/repositories and authorization-aware API/UI flows.
-7. Add the full OpenAPI contract, trusted-proxy handling, CSP/HSTS policy, rate limiting, metrics, background maintenance, backup/restore, and later-phase hardening.
-8. Add incremental migration/upgrade and restore verification once more than one schema version exists.
+1. Implement Provider account APIs and authenticated encryption/redaction for Provider credentials.
+2. Implement official Huawei Cloud, Alibaba Cloud, Tencent DNSPod, and Cloudflare adapters.
+3. Implement Provider-derived Zone synchronization and real RecordSet reads/mutations with cache invalidation and optimistic concurrency.
+4. Implement the audit query UI and the full project OpenAPI document as the non-authentication API surface is added.
+5. Add trusted-proxy configuration, metrics, background maintenance, backup/restore procedures, and deployment-specific CSP/HSTS hardening.
