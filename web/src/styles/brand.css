@@ -1,0 +1,26 @@
+/*
+ * Starhui brand tokens.
+ * Source: https://github.com/starhui-dev/starhui-brand
+ * Commit: d9f8d872d41d84971d0c406902eeb81e68607480
+ * Brand tokens are MIT licensed; logo assets follow the upstream trademark policy.
+ */
+
+:root {
+  --starhui-blue-50: #edf6ff;
+  --starhui-blue-100: #d9ebff;
+  --starhui-blue-200: #b8d9ff;
+  --starhui-blue-300: #86beff;
+  --starhui-blue-400: #4c9aff;
+  --starhui-blue-500: #267df0;
+  --starhui-blue-600: #1769d2;
+  --starhui-blue-700: #1455aa;
+  --starhui-blue-800: #164a89;
+  --starhui-blue-900: #183f70;
+  --starhui-blue-950: #102848;
+
+  --starhui-brand-primary: #1769d2;
+  --starhui-brand-primary-on-dark: #5aa7f5;
+  --starhui-brand-accent: #8dcef5;
+  --starhui-on-brand: #ffffff;
+  --starhui-on-brand-on-dark: #0b0f13;
+}

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="10 15 120 108" role="img" aria-labelledby="title desc">
+  <title id="title">星绘科技星桥 H 图形标</title>
+  <desc id="desc">四芒星、双尾迹与短连接共同形成隐藏的 H</desc>
+  <path d="M20 80c25 1 49-8 70-28-10 19-26 33-47 40-9 3-17 2-23-3v-9Z" fill="#F5FAFF"/>
+  <path d="M27 105c26-1 49-11 69-31-10 20-26 34-47 41-9 3-16 2-22-2v-8Z" fill="#8DCEF5"/>
+  <path d="M56 76c4 1 7 3 10 6-3 8-6 15-9 20-3 0-6-2-8-4 3-7 5-14 7-22Z" fill="#5AA7F5"/>
+  <path d="M96 17c4 14 12 22 27 26-15 5-23 13-27 28-5-15-13-23-28-28 15-4 23-12 28-26Z" fill="#5AA7F5" transform="translate(-8 8)"/>
+</svg>

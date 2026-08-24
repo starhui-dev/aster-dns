@@ -1,6 +1,8 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import { useAuth } from "../app/AuthContext";
+import { Button } from "../components/ui/Button";
+import { Alert, Field, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError } from "../lib/api";
 import {
   confirmTOTP,
@@ -106,72 +108,59 @@ export default function SettingsPage() {
 
   return (
     <div class="space-y-6">
-      <header>
-        <p class="text-sm font-semibold text-cyan-700 dark:text-cyan-300">Security</p>
-        <h2 class="mt-1 text-3xl font-semibold">Authentication settings</h2>
-        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
-          Manage Passkeys, password fallback, TOTP, and active server-side sessions.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Security"
+        title="Authentication settings"
+        description="Manage Passkeys, password fallback, TOTP, and active server-side sessions."
+      />
 
       <Show when={error() !== null}>
-        <p
-          class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200"
-          role="alert"
-        >
-          {error()}
-        </p>
+        <Alert variant="danger">{error()}</Alert>
       </Show>
       <Show when={notice() !== null}>
-        <p
-          class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
-          role="status"
-        >
-          {notice()}
-        </p>
+        <Alert variant="success">{notice()}</Alert>
       </Show>
 
-      <SecurityCard
+      <Panel
         title="Passkeys"
         description="Multiple Passkeys are supported. Private key material never reaches this server."
       >
-        <form class="flex flex-col gap-3 sm:flex-row" onSubmit={submitPasskey}>
-          <label class="min-w-0 flex-1">
-            <span class="field-label">New Passkey name</span>
+        <form class="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submitPasskey}>
+          <Field class="min-w-0 flex-1" label="New Passkey name" for="new-passkey-name">
             <input
+              id="new-passkey-name"
               class="text-input"
               required
               value={passkeyName()}
               onInput={(event) => setPasskeyName(event.currentTarget.value)}
             />
-          </label>
-          <button class="primary-button self-end" type="submit" disabled={busy()}>
+          </Field>
+          <Button type="submit" variant="primary" disabled={busy()}>
             Register Passkey
-          </button>
+          </Button>
         </form>
         <div class="mt-5 space-y-3">
           <Show
             when={!loading()}
-            fallback={<p class="text-sm text-slate-500">Loading Passkeys…</p>}
+            fallback={<p class="text-sm text-muted-foreground">Loading Passkeys…</p>}
           >
             <For
               each={passkeys()}
-              fallback={<p class="text-sm text-slate-500">No Passkeys registered.</p>}
+              fallback={<p class="text-sm text-muted-foreground">No Passkeys registered.</p>}
             >
               {(passkey) => (
-                <article class="flex flex-col gap-3 rounded-xl border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-700">
+                <article class="flex flex-col gap-3 rounded-md border border-border bg-surface-subtle p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p class="font-medium">{passkey.name}</p>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    <p class="font-medium text-foreground">{passkey.name}</p>
+                    <p class="mt-1 text-xs text-muted-foreground">
                       Created {formatDate(passkey.created_at)}
                       {passkey.last_used_at === undefined
                         ? " · Never used"
                         : ` · Last used ${formatDate(passkey.last_used_at)}`}
                     </p>
                   </div>
-                  <button
-                    class="danger-button"
-                    type="button"
+                  <Button
+                    variant="danger"
                     disabled={busy()}
                     onClick={() => {
                       if (!window.confirm(`Delete Passkey “${passkey.name}”?`)) return;
@@ -183,23 +172,23 @@ export default function SettingsPage() {
                     }}
                   >
                     Delete
-                  </button>
+                  </Button>
                 </article>
               )}
             </For>
           </Show>
         </div>
-      </SecurityCard>
+      </Panel>
 
       <Show when={session()?.password_login_enabled}>
-        <SecurityCard
+        <Panel
           title="Password fallback"
           description="Passwords are hashed with Argon2id. Passkey remains the preferred method."
         >
-          <form class="flex flex-col gap-3 sm:flex-row" onSubmit={submitPassword}>
-            <label class="min-w-0 flex-1">
-              <span class="field-label">New password</span>
+          <form class="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submitPassword}>
+            <Field class="min-w-0 flex-1" label="New password" for="new-password">
               <input
+                id="new-password"
                 class="text-input"
                 type="password"
                 minlength={12}
@@ -209,15 +198,15 @@ export default function SettingsPage() {
                 value={newPassword()}
                 onInput={(event) => setNewPassword(event.currentTarget.value)}
               />
-            </label>
-            <button class="secondary-button self-end" type="submit" disabled={busy()}>
+            </Field>
+            <Button type="submit" disabled={busy()}>
               {session()?.user.password_enabled ? "Replace password" : "Enable password"}
-            </button>
+            </Button>
           </form>
           <Show when={session()?.user.password_enabled}>
-            <button
-              class="danger-button mt-4"
-              type="button"
+            <Button
+              class="mt-4"
+              variant="danger"
               disabled={busy()}
               onClick={() =>
                 void run(async () => {
@@ -227,21 +216,20 @@ export default function SettingsPage() {
               }
             >
               Disable password fallback
-            </button>
+            </Button>
           </Show>
-        </SecurityCard>
+        </Panel>
       </Show>
 
-      <SecurityCard
+      <Panel
         title="Authenticator app (TOTP)"
         description="The seed is encrypted at rest. Setup is enabled only after a valid confirmation code."
       >
         <Show
           when={!session()?.user.totp_required}
           fallback={
-            <button
-              class="danger-button"
-              type="button"
+            <Button
+              variant="danger"
               disabled={busy()}
               onClick={() =>
                 void run(async () => {
@@ -252,15 +240,13 @@ export default function SettingsPage() {
               }
             >
               Disable TOTP
-            </button>
+            </Button>
           }
         >
           <Show
             when={provisioningURI() !== null}
             fallback={
-              <button
-                class="secondary-button"
-                type="button"
+              <Button
                 disabled={busy()}
                 onClick={() =>
                   void run(async () => {
@@ -270,18 +256,21 @@ export default function SettingsPage() {
                 }
               >
                 Start TOTP setup
-              </button>
+              </Button>
             }
           >
             <div class="space-y-4">
-              <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-                <p class="font-semibold">Provisioning URI — shown once</p>
-                <code class="mt-2 block break-all text-xs">{provisioningURI()}</code>
-              </div>
-              <form class="flex flex-col gap-3 sm:flex-row" onSubmit={submitTOTP}>
-                <label class="min-w-0 flex-1">
-                  <span class="field-label">Six-digit confirmation code</span>
+              <Alert variant="warning" title="Provisioning URI — shown once">
+                <code class="block break-all text-xs">{provisioningURI()}</code>
+              </Alert>
+              <form class="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submitTOTP}>
+                <Field
+                  class="min-w-0 flex-1"
+                  label="Six-digit confirmation code"
+                  for="totp-confirmation-code"
+                >
                   <input
+                    id="totp-confirmation-code"
                     class="text-input"
                     inputmode="numeric"
                     autocomplete="one-time-code"
@@ -291,24 +280,22 @@ export default function SettingsPage() {
                     value={totpCode()}
                     onInput={(event) => setTOTPCode(event.currentTarget.value)}
                   />
-                </label>
-                <button class="primary-button self-end" type="submit" disabled={busy()}>
+                </Field>
+                <Button type="submit" variant="primary" disabled={busy()}>
                   Confirm TOTP
-                </button>
+                </Button>
               </form>
             </div>
           </Show>
         </Show>
-      </SecurityCard>
+      </Panel>
 
-      <SecurityCard
+      <Panel
         title="Active sessions"
         description="Session tokens are opaque; only hashes are stored in PostgreSQL."
       >
         <div class="mb-4 flex justify-end">
-          <button
-            class="secondary-button"
-            type="button"
+          <Button
             disabled={busy()}
             onClick={() =>
               void run(async () => {
@@ -318,28 +305,27 @@ export default function SettingsPage() {
             }
           >
             Revoke other sessions
-          </button>
+          </Button>
         </div>
         <div class="space-y-3">
           <For
             each={sessions()}
-            fallback={<p class="text-sm text-slate-500">No active sessions.</p>}
+            fallback={<p class="text-sm text-muted-foreground">No active sessions.</p>}
           >
             {(item) => (
-              <article class="flex flex-col gap-3 rounded-xl border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-slate-700">
+              <article class="flex flex-col gap-3 rounded-md border border-border bg-surface-subtle p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div class="min-w-0">
-                  <p class="font-medium">
+                  <p class="font-medium text-foreground">
                     {item.current ? "Current session" : item.user_agent || "Unknown client"}
                   </p>
-                  <p class="mt-1 break-words text-xs text-slate-500 dark:text-slate-400">
+                  <p class="mt-1 break-words text-xs text-muted-foreground">
                     {item.auth_method} · {item.ip || "IP unavailable"} · Last seen{" "}
                     {formatDate(item.last_seen_at)}
                   </p>
                 </div>
                 <Show when={!item.current}>
-                  <button
-                    class="danger-button"
-                    type="button"
+                  <Button
+                    variant="danger"
                     disabled={busy()}
                     onClick={() =>
                       void run(async () => {
@@ -349,24 +335,14 @@ export default function SettingsPage() {
                     }
                   >
                     Revoke
-                  </button>
+                  </Button>
                 </Show>
               </article>
             )}
           </For>
         </div>
-      </SecurityCard>
+      </Panel>
     </div>
-  );
-}
-
-function SecurityCard(props: { title: string; description: string; children: unknown }) {
-  return (
-    <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <h3 class="text-xl font-semibold">{props.title}</h3>
-      <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{props.description}</p>
-      <div class="mt-5">{props.children as never}</div>
-    </section>
   );
 }
 

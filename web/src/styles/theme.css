@@ -1,0 +1,95 @@
+@import "./brand.css";
+
+:root {
+  --background: #f6f8fb;
+  --foreground: #172033;
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --muted: #edf1f5;
+  --muted-foreground: #667085;
+  --border: #dce2ea;
+  --input: #c9d2de;
+  --primary: var(--starhui-brand-primary);
+  --primary-hover: var(--starhui-blue-700);
+  --primary-active: var(--starhui-blue-800);
+  --primary-foreground: var(--starhui-on-brand);
+  --primary-subtle: var(--starhui-blue-50);
+  --primary-subtle-foreground: var(--starhui-blue-800);
+  --success: #067647;
+  --success-surface: #ecfdf3;
+  --success-foreground: #05603a;
+  --warning: #b54708;
+  --warning-surface: #fffaeb;
+  --warning-foreground: #93370d;
+  --danger: #b42318;
+  --danger-surface: #fef3f2;
+  --danger-foreground: #912018;
+  --focus: var(--starhui-blue-500);
+  --sidebar: #fbfcfe;
+  --sidebar-foreground: #344054;
+  --sidebar-border: #e4e7ec;
+  --radius: 0.5rem;
+}
+
+[data-theme="dark"] {
+  --background: #0b0f13;
+  --foreground: #f5faff;
+  --surface: #121820;
+  --surface-subtle: #171e27;
+  --muted: #1d2630;
+  --muted-foreground: #9aa7b7;
+  --border: #2b3542;
+  --input: #3a4655;
+  --primary: var(--starhui-brand-primary-on-dark);
+  --primary-hover: var(--starhui-brand-accent);
+  --primary-active: var(--starhui-blue-200);
+  --primary-foreground: var(--starhui-on-brand-on-dark);
+  --primary-subtle: var(--starhui-blue-950);
+  --primary-subtle-foreground: var(--starhui-blue-100);
+  --success: #5dd39e;
+  --success-surface: #102b22;
+  --success-foreground: #8ce8bd;
+  --warning: #ffc066;
+  --warning-surface: #33240f;
+  --warning-foreground: #ffd690;
+  --danger: #ff8a80;
+  --danger-surface: #361816;
+  --danger-foreground: #ffb4ad;
+  --focus: var(--starhui-brand-primary-on-dark);
+  --sidebar: #0d131a;
+  --sidebar-foreground: #d7e0ea;
+  --sidebar-border: #26313d;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-active: var(--primary-active);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-subtle: var(--primary-subtle);
+  --color-primary-subtle-foreground: var(--primary-subtle-foreground);
+  --color-success: var(--success);
+  --color-success-surface: var(--success-surface);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-surface: var(--warning-surface);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-danger: var(--danger);
+  --color-danger-surface: var(--danger-surface);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-focus: var(--focus);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}

@@ -15,7 +15,7 @@ describe("App", () => {
 
     expect(await screen.findByText("API connected")).toBeInTheDocument();
     expect(screen.getByText("Authentication security active")).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: "Users" })).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "Users" })).toBeInTheDocument();
   });
 
   it("renders Passkey-first login with optional password fallback", async () => {

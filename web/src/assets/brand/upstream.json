@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/starhui-dev/starhui-brand",
+  "commit": "d9f8d872d41d84971d0c406902eeb81e68607480",
+  "imported": "2026-08-24",
+  "files": [
+    "assets/logo/starhui-mark-color.svg",
+    "assets/logo/starhui-mark-dark.svg",
+    "assets/favicon/starhui-favicon.svg",
+    "tokens/brand.css"
+  ],
+  "notice": "Brand tokens are MIT licensed. Logo assets follow the upstream trademark policy."
+}

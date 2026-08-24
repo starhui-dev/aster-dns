@@ -1,6 +1,8 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import { useAuth } from "../app/AuthContext";
+import { Button } from "../components/ui/Button";
+import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError } from "../lib/api";
 import {
   createUser,
@@ -82,61 +84,55 @@ export default function UsersPage() {
 
   return (
     <div class="space-y-6">
-      <header>
-        <p class="text-sm font-semibold text-cyan-700 dark:text-cyan-300">Administration</p>
-        <h2 class="mt-1 text-3xl font-semibold">Users and roles</h2>
-        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
-          Authorization is enforced by the API for admin, operator, and viewer roles.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Administration"
+        title="Users and roles"
+        description="Authorization is enforced by the API for admin, operator, and viewer roles."
+      />
 
       <Show when={error() !== null}>
-        <p
-          class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200"
-          role="alert"
-        >
-          {error()}
-        </p>
+        <Alert variant="danger">{error()}</Alert>
       </Show>
 
       <Show when={enrollment()}>
         {(value) => (
-          <section class="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-            <h3 class="font-semibold">Enrollment token for {value().username} — shown once</h3>
-            <code class="mt-3 block break-all rounded-lg bg-white/70 p-3 text-xs dark:bg-slate-950/60">
+          <Alert variant="warning" title={`Enrollment token for ${value().username} — shown once`}>
+            <code class="block break-all rounded-md border border-warning/20 bg-surface/70 p-3 text-xs">
               {value().token}
             </code>
             <p class="mt-2 text-xs">Expires {formatDate(value().expiresAt)}.</p>
-            <button class="secondary-button mt-4" type="button" onClick={() => setEnrollment(null)}>
+            <Button class="mt-3" size="sm" onClick={() => setEnrollment(null)}>
               Dismiss
-            </button>
-          </section>
+            </Button>
+          </Alert>
         )}
       </Show>
 
-      <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <h3 class="text-xl font-semibold">Create user</h3>
-        <form class="mt-5 grid gap-4 md:grid-cols-2" onSubmit={submitCreateUser}>
-          <label>
-            <span class="field-label">Username</span>
+      <Panel
+        title="Create user"
+        description="New users enroll a Passkey with a one-time token. An initial password is optional when fallback login is enabled."
+      >
+        <form class="grid gap-4 md:grid-cols-2" onSubmit={submitCreateUser}>
+          <Field label="Username" for="create-username">
             <input
+              id="create-username"
               class="text-input"
               required
               value={username()}
               onInput={(event) => setUsername(event.currentTarget.value)}
             />
-          </label>
-          <label>
-            <span class="field-label">Display name</span>
+          </Field>
+          <Field label="Display name" for="create-display-name">
             <input
+              id="create-display-name"
               class="text-input"
               value={displayName()}
               onInput={(event) => setDisplayName(event.currentTarget.value)}
             />
-          </label>
-          <label>
-            <span class="field-label">Role</span>
+          </Field>
+          <Field label="Role" for="create-role">
             <select
+              id="create-role"
               class="text-input"
               value={role()}
               onChange={(event) => setRole(event.currentTarget.value as Role)}
@@ -145,11 +141,11 @@ export default function UsersPage() {
               <option value="operator">Operator</option>
               <option value="admin">Admin</option>
             </select>
-          </label>
+          </Field>
           <Show when={currentSession()?.password_login_enabled}>
-            <label>
-              <span class="field-label">Initial password (optional)</span>
+            <Field label="Initial password (optional)" for="create-password">
               <input
+                id="create-password"
                 class="text-input"
                 type="password"
                 minlength={12}
@@ -158,20 +154,22 @@ export default function UsersPage() {
                 value={initialPassword()}
                 onInput={(event) => setInitialPassword(event.currentTarget.value)}
               />
-            </label>
+            </Field>
           </Show>
           <div class="md:col-span-2">
-            <button class="primary-button" type="submit" disabled={busy()}>
+            <Button type="submit" variant="primary" disabled={busy()}>
               Create user
-            </button>
+            </Button>
           </div>
         </form>
-      </section>
+      </Panel>
 
-      <section class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <h3 class="text-xl font-semibold">Existing users</h3>
-        <div class="mt-5 space-y-3">
-          <For each={users()} fallback={<p class="text-sm text-slate-500">No users found.</p>}>
+      <Panel title="Existing users" description={`${users().length} user accounts`}>
+        <div class="space-y-3">
+          <For
+            each={users()}
+            fallback={<p class="text-sm text-muted-foreground">No users found.</p>}
+          >
             {(user) => (
               <UserRow
                 user={user}
@@ -186,7 +184,7 @@ export default function UsersPage() {
             )}
           </For>
         </div>
-      </section>
+      </Panel>
     </div>
   );
 }
@@ -236,26 +234,24 @@ function UserRow(props: {
   };
 
   return (
-    <article class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
-      <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
+    <article class="rounded-md border border-border bg-surface-subtle p-4">
+      <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div class="min-w-0 pb-1">
           <div class="flex flex-wrap items-center gap-2">
-            <p class="font-medium">{props.user.display_name || props.user.username}</p>
-            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold dark:bg-slate-800">
-              {props.user.role}
-            </span>
+            <p class="font-medium text-foreground">
+              {props.user.display_name || props.user.username}
+            </p>
+            <Badge>{props.user.role}</Badge>
             <Show when={props.user.disabled_at !== undefined}>
-              <span class="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800 dark:bg-rose-950 dark:text-rose-200">
-                Disabled
-              </span>
+              <Badge tone="danger">Disabled</Badge>
             </Show>
           </div>
-          <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{props.user.username}</p>
+          <p class="mt-1 truncate text-sm text-muted-foreground">{props.user.username}</p>
         </div>
         <div class="flex flex-wrap items-end gap-2">
-          <label>
-            <span class="field-label">Role</span>
+          <Field label="Role" for={`role-${props.user.id}`}>
             <select
+              id={`role-${props.user.id}`}
               class="text-input min-w-32"
               value={role()}
               disabled={props.busy || isCurrent()}
@@ -265,31 +261,23 @@ function UserRow(props: {
               <option value="operator">Operator</option>
               <option value="admin">Admin</option>
             </select>
-          </label>
-          <button
-            class="secondary-button"
-            type="button"
+          </Field>
+          <Button
             disabled={props.busy || isCurrent() || role() === props.user.role}
             onClick={saveRole}
           >
             Save role
-          </button>
-          <button
-            class="secondary-button"
-            type="button"
-            disabled={props.busy}
-            onClick={createEnrollment}
-          >
+          </Button>
+          <Button disabled={props.busy} onClick={createEnrollment}>
             New enrollment token
-          </button>
-          <button
-            class={props.user.disabled_at === undefined ? "danger-button" : "secondary-button"}
-            type="button"
+          </Button>
+          <Button
+            variant={props.user.disabled_at === undefined ? "danger" : "secondary"}
             disabled={props.busy || isCurrent()}
             onClick={toggleDisabled}
           >
             {props.user.disabled_at === undefined ? "Disable" : "Enable"}
-          </button>
+          </Button>
         </div>
       </div>
     </article>

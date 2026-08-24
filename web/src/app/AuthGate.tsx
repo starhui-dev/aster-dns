@@ -1,5 +1,8 @@
 import { Match, Switch, type ParentProps } from "solid-js";
 
+import { AuthLayout } from "../components/AuthLayout";
+import { Button } from "../components/ui/Button";
+import { Alert } from "../components/ui/Layout";
 import BootstrapPage from "../pages/BootstrapPage";
 import LoginPage from "../pages/LoginPage";
 import { useAuth } from "./AuthContext";
@@ -18,25 +21,31 @@ export default function AuthGate(props: ParentProps) {
   return (
     <Switch>
       <Match when={auth.state().kind === "loading"}>
-        <AuthScreen>
-          <p class="text-sm font-medium text-slate-600 dark:text-slate-300">
-            Loading authentication…
-          </p>
-        </AuthScreen>
+        <AuthLayout
+          eyebrow="Security"
+          title="Loading authentication"
+          description="Establishing the server-side session and checking bootstrap state."
+        >
+          <Alert>Loading authentication…</Alert>
+        </AuthLayout>
       </Match>
       <Match when={errorState()}>
         {(state) => (
-          <AuthScreen>
-            <p class="text-sm font-semibold text-rose-700 dark:text-rose-300" role="alert">
-              {state().message}
-            </p>
-            {state().requestId !== null && (
-              <p class="mt-2 text-xs text-slate-500">Request ID: {state().requestId}</p>
-            )}
-            <button class="primary-button mt-6" type="button" onClick={() => void auth.refresh()}>
+          <AuthLayout
+            eyebrow="Security"
+            title="Authentication unavailable"
+            description="The console could not establish authentication state with the server."
+          >
+            <Alert variant="danger" title="Connection failed">
+              <p>{state().message}</p>
+              {state().requestId !== null && (
+                <p class="mt-2 font-mono text-xs">Request ID: {state().requestId}</p>
+              )}
+            </Alert>
+            <Button class="mt-5" variant="primary" onClick={() => void auth.refresh()}>
               Retry
-            </button>
-          </AuthScreen>
+            </Button>
+          </AuthLayout>
         )}
       </Match>
       <Match when={unauthenticatedState()}>
@@ -50,15 +59,5 @@ export default function AuthGate(props: ParentProps) {
       </Match>
       <Match when={auth.state().kind === "authenticated"}>{props.children}</Match>
     </Switch>
-  );
-}
-
-function AuthScreen(props: ParentProps) {
-  return (
-    <main class="grid min-h-screen place-items-center bg-slate-100 p-6 text-slate-950 dark:bg-slate-950 dark:text-slate-100">
-      <section class="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-950/5 dark:border-slate-800 dark:bg-slate-900">
-        {props.children}
-      </section>
-    </main>
   );
 }
