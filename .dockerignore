@@ -1,0 +1,11 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+bin
+coverage
+web/node_modules
+web/dist
+web/coverage
+*.coverprofile

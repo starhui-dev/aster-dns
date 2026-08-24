@@ -1,0 +1,19 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Go outputs
+bin/
+coverage/
+*.coverprofile
+
+# Frontend outputs
+web/node_modules/
+web/dist/
+web/coverage/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store

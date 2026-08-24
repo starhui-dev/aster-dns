@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: aster_dns
+          POSTGRES_USER: aster_dns
+          POSTGRES_PASSWORD: ci-database-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aster_dns -d aster_dns"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      APP_DATABASE_URL: postgres://aster_dns:ci-database-only@127.0.0.1:5432/aster_dns?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Backend quality gates
+        run: make backend-format-check backend-lint backend-test backend-build
+      - name: Clean database migration
+        run: make migrate
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend dependencies
+        run: make frontend-install
+      - name: Frontend quality gates
+        run: make frontend-format-check frontend-lint frontend-typecheck frontend-test frontend-build
+
+  container:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build application image
+        run: make container-build IMAGE=aster-dns:ci
+      - name: Verify non-root image user
+        run: test "$(docker image inspect --format '{{.Config.User}}' aster-dns:ci)" = "nonroot:nonroot"
