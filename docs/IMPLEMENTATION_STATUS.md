@@ -6,7 +6,7 @@ Updated: 2026-08-24
 
 The authentication and authorization foundation remains implemented end to end across PostgreSQL, Go services and middleware, REST handlers, audit events, and the SolidJS UI. Authentication is Passkey-first. There is no hard-coded or generated default administrator password.
 
-The Provider core layer is implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance infrastructure. Huawei Cloud DNS is now registered as the first production Provider adapter. Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare remain unimplemented; the frontend does not fabricate data for them.
+The Provider core layer is implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance infrastructure. Huawei Cloud DNS and Alibaba Cloud DNS are registered production Provider adapters. Tencent Cloud DNSPod and Cloudflare remain unimplemented; the frontend does not fabricate data for them.
 
 ## Provider core implemented
 
@@ -52,7 +52,7 @@ The Provider core layer is implemented across domain contracts, validation, cred
 
 - `internal/provider/fake` implements the full Provider contract with multi-entry RRsets, preserved entry IDs, cursor pagination, context cancellation, mutation preconditions, and injectable errors.
 - `internal/provider/contracttest` supplies a reusable conformance harness for metadata/descriptors, factory build, pagination, RRSet granularity, create/update/delete preconditions, and cancellation.
-- The generic fake remains unit-test infrastructure only. Huawei exercises the same conformance harness through its official-SDK HTTP transport fixture; real-account integration is separately gated and is not inferred from fixture success.
+- The generic fake remains unit-test infrastructure only. Huawei and Alibaba Cloud DNS exercise the same conformance harness through official-SDK transport fixtures; real-account integration is separately gated and is not inferred from fixture success.
 
 ### Huawei Cloud DNS production adapter
 
@@ -65,6 +65,17 @@ The Provider core layer is implemented across domain contracts, validation, cred
 - Official-SDK transport fixtures and shared conformance cover pagination, multi-value RRsets, opaque IDs, line/weight/status, TXT/MX/SRV/CAA, preconditions, read retry, mutation no-retry, errors, request IDs, redaction, cancellation, and timeout.
 - Gated integration tests are present. This environment had no Huawei credential variables, so read-only verification skipped; mutation also skipped because `DNS_INTEGRATION_MUTATE=1` and a dedicated test Zone were absent. No real-account success is claimed.
 
+### Alibaba Cloud DNS production adapter
+
+- `internal/provider/aliyun` uses the current Alibaba Cloud V2.0 generated Go SDK module `github.com/alibabacloud-go/alidns-20150109/v5` v5.6.0, with its official Darabonba OpenAPI v2.2.4 and Tea v1.5.2 runtime dependencies. The retired V1.0 Go SDK is not used, and no Alibaba Cloud signing algorithm is reimplemented.
+- Factory metadata exposes AccessKey ID, AccessKey secret, optional STS security token, the fixed `public` region and `alidns.aliyuncs.com` HTTPS endpoint, entry-native granularity, the provider-wide TTL envelope 1–86400, supported common record types, and typed status/line/weight descriptors. Endpoint override and credential-bearing account options are not exposed.
+- Credential validation performs one read-only `DescribeDomains` request with page size 1. Zone list traverses every native page, preserves opaque `DomainId`, nameservers, group ID, and expiration state, and resolves `GetZone` through `DescribeDomainInfo` without substituting a domain name for the opaque ID.
+- Record reads traverse every `DescribeDomainRecords` page before reconstructing logical RRsets. Grouping keeps owner, type, TTL, routing line, record status, and weighted-routing mode distinct; every native `RecordId` remains on its `RecordEntry`, and the synthetic opaque set ID contains the sorted provider IDs needed for protected mutation targeting.
+- Create/update/delete expand logical RRSet changes into official single-record operations. `SetDomainRecordStatus`, `SetDNSSLBStatus`, and `UpdateDNSSLBWeight` preserve status and weighted-routing semantics; weight mutation is conservatively limited to the A/AAAA types supported by the current weight-toggle API. Partial multi-call failures are not described as atomic.
+- TXT quoted segments, MX priority, SRV priority/weight/port/target, and CAA flags/tag/value normalize to the shared structured model. Provider-specific record types outside the common contract are not fabricated as common record types.
+- Update/delete re-fetch all current provider records and compare the required fingerprint/provider version before mutation. Read retry is bounded and context-aware; SDK and adapter mutation retry are disabled. Structured SDK errors map to the shared taxonomy with request ID and retry-after preservation plus AccessKey/token/Authorization/signature redaction.
+- Official-SDK transport fixtures and shared conformance cover native pagination, local logical pagination, same-name/type line/status boundaries, non-default routing-line mutation, multi-entry sets, opaque IDs, line/status/weight extensions, CRUD request mapping, preconditions, read retry, mutation no-retry, error classification, request IDs, secret canaries, cancellation, and TXT/MX/SRV/CAA normalization. Official source notes are in `docs/providers/aliyun.md`.
+- Unit tested: yes. Read integration tested: no; this environment had no Alibaba Cloud credential variables. Mutation integration tested: no; credentials, `DNS_INTEGRATION_MUTATE=1`, and a dedicated test Zone were absent. No real-account success is claimed.
 
 ## Authentication / authorization implemented
 
@@ -166,15 +177,17 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 |---|---|
 | Focused backend security tests | Passed unauthenticated `401`, role matrix, CSRF/origin rejection, revoked/disabled session denial, Argon2id verify, opaque-token hashing, WebAuthn challenge replay and rpId/origin rejection, TOTP ciphertext tamper rejection, TOTP time-step replay rejection, and secret-canary scans. |
 | Backend authentication packages | `go test ./internal/auth ./internal/api ./internal/audit ./internal/crypto` passed. |
-| Full backend suite | `make ci` passed `go vet`, all `cmd`, `internal`, and `migrations` tests, and Go build. |
+| Full backend suite | Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full backend tests, and Go build passed after Alibaba Cloud registration. |
 | Huawei adapter fixtures | `go test ./internal/provider/huawei -count=1` passed official-SDK transport signing, Zone/RecordSet pagination, RRSet normalization, TXT/MX/SRV/CAA, line/weight/status, CRUD preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, timeout, and shared conformance. |
 | Huawei real integration gate | `go test ./internal/provider/huawei -run 'TestHuaweiIntegration' -count=1 -v` passed with read-only skipped because AK/SK were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Huawei success is claimed. |
-| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed, including Huawei SDK transport fixtures. |
+| Alibaba adapter fixtures | `go test ./internal/provider/aliyun -count=1` passed official-SDK signing/serialization, complete native pagination, logical RRSet grouping, opaque entry IDs, line/status/weight boundaries, TXT/MX/SRV/CAA normalization, CRUD mappings, optimistic preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, and shared conformance. |
+| Alibaba real integration gate | `go test ./internal/provider/aliyun -run 'TestAliyunIntegration' -count=1 -v` passed with read-only skipped because AccessKey variables were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Alibaba Cloud success is claimed. |
+| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed, including Huawei and Alibaba official-SDK transport fixtures. |
 | Backend Provider delivery gates | Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full `go test`, selected race tests, and `go build ./cmd/... ./internal/... ./migrations` passed. |
-| Frontend tests | `make ci` passed 3 test files and 5 tests, including live Huawei capability catalog rendering without credential values. |
+| Frontend tests | `make frontend-format-check frontend-lint frontend-typecheck frontend-test frontend-build` passed: 3 test files, 5 tests, strict TypeScript checking, zero-warning ESLint, and the production build. |
 | Formatting and lint | Go format check, `go vet`, Prettier check, and ESLint with zero warnings passed. |
 | Typecheck and build | Go build, TypeScript strict `tsc --noEmit`, and Vite production build passed; the current Vite build transformed 63 modules. |
-| Browser Provider capability smoke | Chromium rendered the authenticated Provider accounts route with Huawei RRSet granularity, record types, TTL range, routing line, weight, status, credential schema, required region, and official documentation link; no secret value was present. |
+| Browser Provider capability smoke | Chromium rendered the authenticated Provider accounts route with intercepted auth/catalog responses and displayed both Huawei and Alibaba Cloud cards. The Alibaba card showed entry-native granularity, A/AAAA/CNAME/TXT/MX/NS/SRV/CAA, TTL 1–86400, routing/weight/status support, three secret credential fields, and the official documentation link; no credential value was present. |
 | PostgreSQL runtime smoke | A clean PostgreSQL 18 database migrated through authentication migration version 2. Runtime sessions stored 32-byte token/CSRF hashes and the admin password row used an Argon2id hash. |
 | Browser WebAuthn smoke | Chromium with virtual authenticators completed first-admin Passkey bootstrap, registered a second named Passkey, and rendered safe Passkey metadata. |
 | Browser password/TOTP smoke | The UI enabled Argon2id password fallback, completed password login, set up and confirmed TOTP, required the separate TOTP step on the next password login, and completed that login with a new time-step code. |
@@ -185,8 +198,8 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 
 These items remain outside the Provider core delivery:
 
-1. Implement and register the official Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare adapters after documenting each current official API/Go SDK, object granularity, pagination, capabilities, and error mapping.
-2. Run Huawei read-only integration with dedicated credentials and the explicitly gated mutation test against a dedicated test Zone; add equivalent fixtures and gated integration verification for the remaining Providers.
+1. Implement and register the official Tencent Cloud DNSPod and Cloudflare adapters after documenting each current official API/Go SDK, object granularity, pagination, capabilities, and error mapping.
+2. Run Huawei and Alibaba Cloud read-only integration with dedicated credentials and the explicitly gated mutation tests against dedicated test Zones; add equivalent fixtures and gated integration verification for Tencent Cloud DNSPod and Cloudflare.
 3. Implement production RecordSet read/create/update/delete/batch services and APIs, short-lived record caches, mutation invalidation, final-state re-fetch, per-item batch results, and DNS mutation audit orchestration.
 4. Add Zone index query APIs/UI, manual refresh UI, and scheduled background sync operation around the implemented sync service.
 5. Implement the audit query UI, full project OpenAPI document, trusted-proxy configuration, metrics, background maintenance, backup/restore procedures, and deployment-specific CSP/HSTS hardening.

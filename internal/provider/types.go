@@ -139,8 +139,9 @@ type HuaweiRecordEntryExtensions struct {
 }
 
 type AliyunRecordEntryExtensions struct {
-	Line   string `json:"line,omitempty"`
-	Status string `json:"status,omitempty"`
+	Line   string  `json:"line,omitempty"`
+	Status string  `json:"status,omitempty"`
+	Weight *uint16 `json:"weight,omitempty"`
 }
 
 type TencentRecordEntryExtensions struct {
