@@ -108,8 +108,11 @@ type RecordSetExtensions struct {
 }
 
 type CloudflareRecordSetExtensions struct {
-	Proxied *bool  `json:"proxied,omitempty"`
-	Comment string `json:"comment,omitempty"`
+	Proxied      *bool    `json:"proxied,omitempty"`
+	Proxiable    *bool    `json:"proxiable,omitempty"`
+	AutomaticTTL *bool    `json:"automatic_ttl,omitempty"`
+	Comment      string   `json:"comment,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
 }
 
 type HuaweiRecordSetExtensions struct {

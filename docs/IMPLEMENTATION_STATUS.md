@@ -6,7 +6,7 @@ Updated: 2026-08-25
 
 The authentication and authorization foundation remains implemented end to end across PostgreSQL, Go services and middleware, REST handlers, audit events, and the SolidJS UI. Authentication is Passkey-first. There is no hard-coded or generated default administrator password.
 
-The Provider core layer is implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance infrastructure. Huawei Cloud DNS, Alibaba Cloud DNS, and Tencent Cloud DNSPod are registered production Provider adapters. Cloudflare remains unimplemented; the frontend does not fabricate data for it.
+The Provider core layer is implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance infrastructure. Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS are registered production Provider adapters. The frontend consumes the registered capability catalog and does not fabricate Provider data.
 
 ## Provider core implemented
 
@@ -52,7 +52,7 @@ The Provider core layer is implemented across domain contracts, validation, cred
 
 - `internal/provider/fake` implements the full Provider contract with multi-entry RRsets, preserved entry IDs, cursor pagination, context cancellation, mutation preconditions, and injectable errors.
 - `internal/provider/contracttest` supplies a reusable conformance harness for metadata/descriptors, factory build, pagination, RRSet granularity, create/update/delete preconditions, and cancellation.
-- The generic fake remains unit-test infrastructure only. Huawei, Alibaba Cloud DNS, and Tencent Cloud DNSPod exercise the same conformance harness through official-SDK transport fixtures; real-account integration is separately gated and is not inferred from fixture success.
+- The generic fake remains unit-test infrastructure only. Huawei, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS exercise the same conformance harness through official-SDK transport fixtures; real-account integration is separately gated and is not inferred from fixture success.
 
 ### Huawei Cloud DNS production adapter
 
@@ -91,6 +91,19 @@ The Provider core layer is implemented across domain contracts, validation, cred
 - SDK automatic retries and region failover are disabled. Read retry is bounded and context-aware; every mutation receives exactly one SDK attempt, and generated `WithContext` methods propagate cancellation and deadlines to the HTTP request.
 - Official-SDK transport fixtures and shared conformance cover native/local pagination, same-name/type routing boundaries, opaque IDs, line/line-ID/weight/status metadata, TXT/MX/SRV/CAA, CRUD mapping, preconditions, read retry, mutation no-retry, error/request-ID mapping, secret redaction, cancellation, and timeout. Official source notes are in `docs/providers/tencent.md`.
 - Unit tested: yes. Read integration tested: no; this environment had no Tencent Cloud SecretId/SecretKey variables. Mutation integration tested: no; credentials, `DNS_INTEGRATION_MUTATE=1`, and a dedicated DNSPod test domain ID were absent. No real-account success is claimed.
+
+### Cloudflare DNS production adapter
+
+- `internal/provider/cloudflare` uses Cloudflare's current official generated Go SDK module `github.com/cloudflare/cloudflare-go/v7` v7.9.0. The Factory exposes only a scoped API Token credential; Global API Key/email authentication is not offered, and generated services are constructed without merging legacy credential environment variables.
+- Factory capabilities declare entry-native granularity, eight common record types, TTL 30–86400, proxy and comment support, and typed `proxied`, read-only `proxiable`, `automatic_ttl`, `comment`, and string-list `tags` descriptors. Official-source notes and plan-dependent attribute limits are in `docs/providers/cloudflare.md`.
+- Credential validation performs read-only Zone list and, when a Zone exists, DNS-record list canaries. Zone and record reads explicitly traverse every native `page`/`per_page` result using `result_info`, retain the caller context across pages, preserve Zone and record opaque IDs, and expose stable local cursors over complete logical results.
+- Native records are grouped into logical RRsets without collapsing different TTL, proxy, automatic-TTL, comment, tag, or proxiable state. Every Cloudflare record ID remains on its `RecordEntry`; the synthetic logical ID encodes sorted opaque IDs for protected mutation targeting.
+- Create/update/delete use official `DNS.Records.New`, `Update`, and `Delete` calls with automatic SDK retry disabled. Multi-entry changes remain non-atomic entry operations, final Provider state is re-fetched, and no partial failure is represented as transactional success.
+- Proxy mutation is limited to A, AAAA, and CNAME, while Provider-returned `proxiable` remains the runtime authority. Cloudflare wire `ttl=1` is contained inside the Adapter: the common model exposes effective TTL 300 plus `automatic_ttl=true`, and proxied records require that semantic.
+- Update/delete directly re-fetch an opaque record and the complete current logical set, then compare fingerprint and aggregated `modified_on` provider version. Stale membership, fingerprint, or version returns `conflict` before mutation.
+- HTTP/SDK failures map to the shared taxonomy. `CF-Ray`, fallback request ID, and 429 `retry-after` are preserved safely; API Token, Bearer Authorization, and credential canaries are redacted. Calls propagate context cancellation/deadlines, and mutation receives exactly one SDK attempt.
+- Official-SDK HTTP fixtures and shared conformance cover token-only auth, native/local pagination, proxy true/false, runtime proxiable, automatic TTL, comment/tags, multi-entry sets, opaque IDs, CRUD, preconditions, error taxonomy, request ID/retry-after, no-retry mutation, token canaries, and cancellation.
+- Unit tested: yes. Read integration tested: no; this environment had no `CLOUDFLARE_DNS_API_TOKEN`. Mutation integration tested: no; `DNS_INTEGRATION_MUTATE=1` and `CLOUDFLARE_DNS_TEST_ZONE_ID` were absent. No real Cloudflare success is claimed.
 
 ## Authentication / authorization implemented
 
@@ -192,14 +205,16 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 |---|---|
 | Focused backend security tests | Passed unauthenticated `401`, role matrix, CSRF/origin rejection, revoked/disabled session denial, Argon2id verify, opaque-token hashing, WebAuthn challenge replay and rpId/origin rejection, TOTP ciphertext tamper rejection, TOTP time-step replay rejection, and secret-canary scans. |
 | Backend authentication packages | `go test ./internal/auth ./internal/api ./internal/audit ./internal/crypto` passed. |
-| Full backend suite | Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full backend tests, and Go build passed after Tencent Cloud DNSPod registration. |
+| Full backend suite | Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full backend tests, and Go build passed after Cloudflare DNS registration. |
 | Huawei adapter fixtures | `go test ./internal/provider/huawei -count=1` passed official-SDK transport signing, Zone/RecordSet pagination, RRSet normalization, TXT/MX/SRV/CAA, line/weight/status, CRUD preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, timeout, and shared conformance. |
 | Huawei real integration gate | `go test ./internal/provider/huawei -run 'TestHuaweiIntegration' -count=1 -v` passed with read-only skipped because AK/SK were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Huawei success is claimed. |
 | Alibaba adapter fixtures | `go test ./internal/provider/aliyun -count=1` passed official-SDK signing/serialization, complete native pagination, logical RRSet grouping, opaque entry IDs, line/status/weight boundaries, TXT/MX/SRV/CAA normalization, CRUD mappings, optimistic preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, and shared conformance. |
 | Alibaba real integration gate | `go test ./internal/provider/aliyun -run 'TestAliyunIntegration' -count=1 -v` passed with read-only skipped because AccessKey variables were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Alibaba Cloud success is claimed. |
 | Tencent adapter fixtures | `go test ./internal/provider/tencent` passed official-SDK signing/serialization, complete native pagination, logical RRSet grouping, opaque record IDs, line/line-ID/status/weight boundaries, TXT/MX/SRV/CAA normalization, CRUD mappings, optimistic preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, timeout, and shared conformance. |
 | Tencent real integration gate | `go test ./internal/provider/tencent -run 'TestTencentIntegration' -count=1 -v` passed with read-only skipped because SecretId/SecretKey variables were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Tencent Cloud success is claimed. |
-| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed, including Huawei, Alibaba, and Tencent official-SDK transport fixtures. |
+| Cloudflare adapter fixtures | `go test ./internal/provider/cloudflare` passed official-SDK HTTP serialization, API Token-only auth, complete native pagination, logical RRSet grouping, opaque record IDs, proxy/proxiable and automatic-TTL semantics, comment/tags, CRUD mappings, optimistic preconditions, error/request-ID/retry-after mapping, mutation no-retry, token redaction, cancellation, and shared conformance. |
+| Cloudflare real integration gate | `go test ./internal/provider/cloudflare -run 'TestCloudflareIntegration' -count=1 -v` passed with read-only skipped because `CLOUDFLARE_DNS_API_TOKEN` was absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Cloudflare success is claimed. |
+| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed, including Huawei, Alibaba, Tencent, and Cloudflare official-SDK transport fixtures. |
 | Backend Provider delivery gates | `make ci` passed Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full backend tests, Go build, frontend format/lint/typecheck/tests, and the Vite production build; selected Provider/service/API race tests also passed. |
 | Frontend tests | `make frontend-format-check frontend-lint frontend-typecheck frontend-test frontend-build` passed: 3 test files, 5 tests, strict TypeScript checking, zero-warning ESLint, and the production build. |
 | Formatting and lint | Go format check, `go vet`, Prettier check, and ESLint with zero warnings passed. |
@@ -215,8 +230,7 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 
 These items remain outside the Provider core delivery:
 
-1. Implement and register the official Cloudflare adapter after documenting its current official API/Go SDK, object granularity, pagination, capabilities, and error mapping.
-2. Run Huawei, Alibaba Cloud, and Tencent Cloud read-only integration with dedicated credentials and the explicitly gated mutation tests against dedicated test Zones; add equivalent fixtures and gated integration verification for Cloudflare.
-3. Implement production RecordSet read/create/update/delete/batch services and APIs, short-lived record caches, mutation invalidation, final-state re-fetch, per-item batch results, and DNS mutation audit orchestration.
-4. Add Zone index query APIs/UI, manual refresh UI, and scheduled background sync operation around the implemented sync service.
-5. Implement the audit query UI, full project OpenAPI document, trusted-proxy configuration, metrics, background maintenance, backup/restore procedures, and deployment-specific CSP/HSTS hardening.
+1. Run Huawei, Alibaba Cloud, Tencent Cloud, and Cloudflare read-only integration with dedicated credentials and the explicitly gated mutation tests against dedicated test Zones.
+2. Implement production RecordSet read/create/update/delete/batch services and APIs, short-lived record caches, mutation invalidation, final-state re-fetch, per-item batch results, and DNS mutation audit orchestration.
+3. Add Zone index query APIs/UI, manual refresh UI, and scheduled background sync operation around the implemented sync service.
+4. Implement the audit query UI, full project OpenAPI document, trusted-proxy configuration, metrics, background maintenance, backup/restore procedures, and deployment-specific CSP/HSTS hardening.

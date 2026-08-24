@@ -22,10 +22,11 @@ const (
 type DescriptorFieldType string
 
 const (
-	DescriptorFieldString  DescriptorFieldType = "string"
-	DescriptorFieldBoolean DescriptorFieldType = "boolean"
-	DescriptorFieldInteger DescriptorFieldType = "integer"
-	DescriptorFieldEnum    DescriptorFieldType = "enum"
+	DescriptorFieldString     DescriptorFieldType = "string"
+	DescriptorFieldStringList DescriptorFieldType = "string_list"
+	DescriptorFieldBoolean    DescriptorFieldType = "boolean"
+	DescriptorFieldInteger    DescriptorFieldType = "integer"
+	DescriptorFieldEnum       DescriptorFieldType = "enum"
 )
 
 type ExtensionScope string
@@ -197,7 +198,7 @@ func (c Capabilities) Validate() error {
 
 func validateDescriptorValue(fieldType DescriptorFieldType, options []DescriptorOption, minimum, maximum *int64) error {
 	switch fieldType {
-	case DescriptorFieldString, DescriptorFieldBoolean:
+	case DescriptorFieldString, DescriptorFieldStringList, DescriptorFieldBoolean:
 		if len(options) != 0 || minimum != nil || maximum != nil {
 			return errors.New("field constraints do not match field type")
 		}
@@ -284,6 +285,17 @@ func validatePayloadValue(field FieldDescriptor, value any) error {
 		text, ok := value.(string)
 		if !ok || (field.Required && strings.TrimSpace(text) == "") {
 			return errors.New("must be a non-empty string")
+		}
+	case DescriptorFieldStringList:
+		items, ok := value.([]any)
+		if !ok {
+			return errors.New("must be a string list")
+		}
+		for _, item := range items {
+			text, isString := item.(string)
+			if !isString || strings.TrimSpace(text) == "" {
+				return errors.New("must contain only non-empty strings")
+			}
 		}
 	case DescriptorFieldBoolean:
 		if _, ok := value.(bool); !ok {
