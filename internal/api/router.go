@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/starhui-dev/aster-dns/internal/auth"
 	"github.com/starhui-dev/aster-dns/internal/httpx"
+	providerservice "github.com/starhui-dev/aster-dns/internal/service"
 )
 
 type BuildInfo struct {
@@ -17,13 +18,15 @@ type BuildInfo struct {
 }
 
 type Options struct {
-	Logger       *slog.Logger
-	Build        BuildInfo
-	ReadyCheck   func(context.Context) error
-	ReadyTimeout time.Duration
-	WebDir       string
-	Auth         *auth.Service
-	HTTPS        bool
+	Logger           *slog.Logger
+	Build            BuildInfo
+	ReadyCheck       func(context.Context) error
+	ReadyTimeout     time.Duration
+	WebDir           string
+	Auth             *auth.Service
+	ProviderAccounts *providerservice.ProviderAccountService
+	ZoneSync         *providerservice.ZoneSyncService
+	HTTPS            bool
 }
 
 type apiOverviewResponse struct {
@@ -52,6 +55,9 @@ func NewRouter(options Options) http.Handler {
 	if options.Auth != nil {
 		registerAuthRoutes(router, options.Auth)
 		registerUserRoutes(router, options.Auth)
+		if options.ProviderAccounts != nil {
+			registerProviderRoutes(router, options.Auth, options.ProviderAccounts, options.ZoneSync)
+		}
 	} else {
 		router.HandleFunc("/api/v1/auth/*", func(w http.ResponseWriter, r *http.Request) {
 			httpx.WriteError(w, r, http.StatusServiceUnavailable, "auth_unavailable", "Authentication is unavailable.", nil)

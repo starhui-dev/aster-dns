@@ -15,6 +15,8 @@ import (
 	"github.com/starhui-dev/aster-dns/internal/config"
 	secretcrypto "github.com/starhui-dev/aster-dns/internal/crypto"
 	"github.com/starhui-dev/aster-dns/internal/db"
+	"github.com/starhui-dev/aster-dns/internal/provider"
+	providerservice "github.com/starhui-dev/aster-dns/internal/service"
 )
 
 type BuildInfo struct {
@@ -40,6 +42,8 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		defer pool.Close()
 	}
 	var authService *auth.Service
+	var providerAccountService *providerservice.ProviderAccountService
+	var zoneSyncService *providerservice.ZoneSyncService
 	if pool != nil {
 		envelope, err := secretcrypto.NewEnvelope(cfg.MasterKey)
 		if err != nil {
@@ -61,6 +65,27 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		if err = authService.EnsureBootstrapReady(ctx); err != nil {
 			return fmt.Errorf("initialize authentication: %w", err)
 		}
+		registry, err := provider.NewRegistry()
+		if err != nil {
+			return err
+		}
+		vault, err := secretcrypto.NewCredentialVault(envelope)
+		if err != nil {
+			return err
+		}
+		providerStore := db.NewProviderStore(pool)
+		clients, err := providerservice.NewProviderClientManager(providerStore, registry, vault)
+		if err != nil {
+			return err
+		}
+		providerAccountService, err = providerservice.NewProviderAccountService(providerStore, registry, vault, clients)
+		if err != nil {
+			return err
+		}
+		zoneSyncService, err = providerservice.NewZoneSyncService(providerStore, clients)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err := validateWebDirectory(cfg.WebDir); err != nil {
@@ -76,11 +101,13 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 			Version: build.Version,
 			Commit:  build.Commit,
 		},
-		ReadyCheck:   readyCheck,
-		ReadyTimeout: cfg.HTTP.ReadyTimeout,
-		WebDir:       cfg.WebDir,
-		Auth:         authService,
-		HTTPS:        cfg.PublicURL.Scheme == "https",
+		ReadyCheck:       readyCheck,
+		ReadyTimeout:     cfg.HTTP.ReadyTimeout,
+		WebDir:           cfg.WebDir,
+		Auth:             authService,
+		ProviderAccounts: providerAccountService,
+		ZoneSync:         zoneSyncService,
+		HTTPS:            cfg.PublicURL.Scheme == "https",
 	})
 
 	server := &http.Server{

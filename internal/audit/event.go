@@ -22,6 +22,8 @@ type Event struct {
 	Action                string
 	ResourceType          string
 	ResourceID            string
+	ProviderAccountID     *uuid.UUID
+	ZoneID                *uuid.UUID
 	RequestID             string
 	IP                    string
 	UserAgent             string
