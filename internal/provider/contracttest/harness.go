@@ -9,10 +9,11 @@ import (
 )
 
 type Harness struct {
-	Factory     core.Factory
-	Credentials json.RawMessage
-	NewProvider func(*testing.T) core.Provider
-	ZoneID      string
+	Factory        core.Factory
+	Credentials    json.RawMessage
+	AccountOptions json.RawMessage
+	NewProvider    func(*testing.T) core.Provider
+	ZoneID         string
 }
 
 func Run(t *testing.T, harness Harness) {
@@ -39,7 +40,11 @@ func Run(t *testing.T, harness Harness) {
 		if err != nil {
 			t.Fatalf("credential payload: %v", err)
 		}
-		client, err := harness.Factory.Build(context.Background(), core.AccountConfig{ID: "00000000-0000-7000-8000-000000000001", Type: harness.Factory.Type(), Name: "contract", Options: json.RawMessage(`{}`), CredentialRevision: 1}, core.NewCredential(credential))
+		options := harness.AccountOptions
+		if len(options) == 0 {
+			options = json.RawMessage(`{}`)
+		}
+		client, err := harness.Factory.Build(context.Background(), core.AccountConfig{ID: "00000000-0000-7000-8000-000000000001", Type: harness.Factory.Type(), Name: "contract", Options: options, CredentialRevision: 1}, core.NewCredential(credential))
 		clear(credential)
 		if err != nil || client == nil {
 			t.Fatalf("factory build = %T, %v", client, err)
@@ -62,12 +67,14 @@ func Run(t *testing.T, harness Harness) {
 		if err != nil {
 			t.Fatalf("list record sets: %v", err)
 		}
-		if len(recordSets.Items) == 0 || len(recordSets.Items[0].Entries) < 2 {
-			t.Fatalf("fake did not preserve a multi-entry RRSet: %#v", recordSets.Items)
+		if len(recordSets.Items) == 0 || recordSets.Items[0].ID == "" || len(recordSets.Items[0].Entries) < 2 {
+			t.Fatalf("provider did not preserve a multi-entry RRSet: %#v", recordSets.Items)
 		}
-		for _, entry := range recordSets.Items[0].Entries {
-			if entry.ID == "" {
-				t.Fatal("provider entry ID was not preserved")
+		if client.Capabilities(context.Background()).NativeRecordGranularity == core.NativeRecordGranularityEntry {
+			for _, entry := range recordSets.Items[0].Entries {
+				if entry.ID == "" {
+					t.Fatal("entry-granularity provider entry ID was not preserved")
+				}
 			}
 		}
 	})

@@ -6,7 +6,7 @@ Updated: 2026-08-24
 
 The authentication and authorization foundation remains implemented end to end across PostgreSQL, Go services and middleware, REST handlers, audit events, and the SolidJS UI. Authentication is Passkey-first. There is no hard-coded or generated default administrator password.
 
-The Provider core layer is now implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance test infrastructure. The four production Provider adapters are intentionally not implemented by this delivery; the frontend Provider pages still expose no fabricated cloud data.
+The Provider core layer is implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance infrastructure. Huawei Cloud DNS is now registered as the first production Provider adapter. Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare remain unimplemented; the frontend does not fabricate data for them.
 
 ## Provider core implemented
 
@@ -52,7 +52,18 @@ The Provider core layer is now implemented across domain contracts, validation, 
 
 - `internal/provider/fake` implements the full Provider contract with multi-entry RRsets, preserved entry IDs, cursor pagination, context cancellation, mutation preconditions, and injectable errors.
 - `internal/provider/contracttest` supplies a reusable conformance harness for metadata/descriptors, factory build, pagination, RRSet granularity, create/update/delete preconditions, and cancellation.
-- The fake and conformance harness are unit-test infrastructure only. No Huawei Cloud, Alibaba Cloud, Tencent DNSPod, or Cloudflare read/mutation integration has been claimed.
+- The generic fake remains unit-test infrastructure only. Huawei exercises the same conformance harness through its official-SDK HTTP transport fixture; real-account integration is separately gated and is not inferred from fixture success.
+
+### Huawei Cloud DNS production adapter
+
+- `internal/provider/huawei` uses `github.com/huaweicloud/huaweicloud-sdk-go-v3/services/dns/v2` v0.1.212 for credentials, signing, endpoint selection, request serialization, and response decoding; no Huawei signature algorithm is reimplemented.
+- Factory metadata exposes AK, SK, optional temporary security token, required DNS region, RRSet-native granularity, TTL 1–2147483647, public record types, and typed Huawei status/line/weight descriptors.
+- Credential validation performs one read-only `ListPublicZones` request with limit 1. Public Zone list/get and v2.1 RecordSet list/get preserve Huawei opaque IDs, cursor pagination, multiple values, nameservers, routing line, weight, status, and provider timestamps.
+- RecordSet create/update/delete operate directly on Huawei Cloud. TXT/MX/SRV/CAA wire forms are normalized without losing RRSet values. Create supports initial status; update supports weight and the official status endpoint, while line changes return `unsupported` instead of pretending an in-place update succeeded.
+- Update/delete re-fetch the current RRSet and compare the required fingerprint/provider version before mutation. Read retry is bounded; mutation retry remains disabled at both adapter and SDK layers.
+- Huawei/API Gateway failures map into the shared error taxonomy, retain sanitized request IDs and retry-after, redact AK/SK/security tokens, and honor contract cancellation/deadlines through the official SDK HTTP transport.
+- Official-SDK transport fixtures and shared conformance cover pagination, multi-value RRsets, opaque IDs, line/weight/status, TXT/MX/SRV/CAA, preconditions, read retry, mutation no-retry, errors, request IDs, redaction, cancellation, and timeout.
+- Gated integration tests are present. This environment had no Huawei credential variables, so read-only verification skipped; mutation also skipped because `DNS_INTEGRATION_MUTATE=1` and a dedicated test Zone were absent. No real-account success is claimed.
 
 
 ## Authentication / authorization implemented
@@ -139,6 +150,7 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 - Settings manages multiple Passkeys, password fallback, TOTP, and active sessions.
 - Users provides admin-only creation, role changes, enable/disable actions, and one-time enrollment-token display.
 - The API client centrally attaches the in-memory CSRF cookie to mutations and preserves stable request-id errors.
+- Provider accounts now load the authenticated `/api/v1/provider-types` catalog and render registered factories, supported record types, RRSet granularity, TTL bounds, routing/status capabilities, credential field metadata, account options, and official documentation links without exposing credential values.
 - The Users navigation and page are hidden from non-admin roles, while the API remains authoritative.
 
 ### Database and configuration
@@ -154,13 +166,15 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 |---|---|
 | Focused backend security tests | Passed unauthenticated `401`, role matrix, CSRF/origin rejection, revoked/disabled session denial, Argon2id verify, opaque-token hashing, WebAuthn challenge replay and rpId/origin rejection, TOTP ciphertext tamper rejection, TOTP time-step replay rejection, and secret-canary scans. |
 | Backend authentication packages | `go test ./internal/auth ./internal/api ./internal/audit ./internal/crypto` passed. |
-| Full backend suite | `make backend-test` passed all `cmd`, `internal`, and `migrations` packages. |
-| Provider core packages | `go test ./internal/provider/... ./internal/crypto ./internal/service ./internal/api` passed canonicalization, validation, fingerprint golden, descriptors, pagination, error/redaction, AEAD, account lifecycle, client invalidation, validation, Zone sync, API secrecy/RBAC, and fake conformance coverage. |
-| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/crypto ./internal/service ./internal/api` passed. |
-| Backend Provider delivery gates | Go format write/check, `go vet ./cmd/... ./internal/... ./migrations`, full `go test`, selected race tests, and `go build ./cmd/... ./internal/... ./migrations` passed. |
-| Frontend tests | `make frontend-test` passed 2 test files and 4 tests, including authenticated admin rendering, Passkey-first login, error-envelope mapping, and CSRF header attachment. |
+| Full backend suite | `make ci` passed `go vet`, all `cmd`, `internal`, and `migrations` tests, and Go build. |
+| Huawei adapter fixtures | `go test ./internal/provider/huawei -count=1` passed official-SDK transport signing, Zone/RecordSet pagination, RRSet normalization, TXT/MX/SRV/CAA, line/weight/status, CRUD preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, timeout, and shared conformance. |
+| Huawei real integration gate | `go test ./internal/provider/huawei -run 'TestHuaweiIntegration' -count=1 -v` passed with read-only skipped because AK/SK were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Huawei success is claimed. |
+| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed, including Huawei SDK transport fixtures. |
+| Backend Provider delivery gates | Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full `go test`, selected race tests, and `go build ./cmd/... ./internal/... ./migrations` passed. |
+| Frontend tests | `make ci` passed 3 test files and 5 tests, including live Huawei capability catalog rendering without credential values. |
 | Formatting and lint | Go format check, `go vet`, Prettier check, and ESLint with zero warnings passed. |
-| Typecheck and build | Go build, TypeScript strict `tsc --noEmit`, and Vite production build passed; the current Vite build transformed 62 modules. |
+| Typecheck and build | Go build, TypeScript strict `tsc --noEmit`, and Vite production build passed; the current Vite build transformed 63 modules. |
+| Browser Provider capability smoke | Chromium rendered the authenticated Provider accounts route with Huawei RRSet granularity, record types, TTL range, routing line, weight, status, credential schema, required region, and official documentation link; no secret value was present. |
 | PostgreSQL runtime smoke | A clean PostgreSQL 18 database migrated through authentication migration version 2. Runtime sessions stored 32-byte token/CSRF hashes and the admin password row used an Argon2id hash. |
 | Browser WebAuthn smoke | Chromium with virtual authenticators completed first-admin Passkey bootstrap, registered a second named Passkey, and rendered safe Passkey metadata. |
 | Browser password/TOTP smoke | The UI enabled Argon2id password fallback, completed password login, set up and confirmed TOTP, required the separate TOTP step on the next password login, and completed that login with a new time-step code. |
@@ -171,8 +185,8 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 
 These items remain outside the Provider core delivery:
 
-1. Implement and register the official Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare adapters after documenting each current official API/Go SDK, object granularity, pagination, capabilities, and error mapping.
-2. Add Provider-specific fixtures/golden tests and explicitly gated real read/mutation integration verification for dedicated test zones.
+1. Implement and register the official Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare adapters after documenting each current official API/Go SDK, object granularity, pagination, capabilities, and error mapping.
+2. Run Huawei read-only integration with dedicated credentials and the explicitly gated mutation test against a dedicated test Zone; add equivalent fixtures and gated integration verification for the remaining Providers.
 3. Implement production RecordSet read/create/update/delete/batch services and APIs, short-lived record caches, mutation invalidation, final-state re-fetch, per-item batch results, and DNS mutation audit orchestration.
 4. Add Zone index query APIs/UI, manual refresh UI, and scheduled background sync operation around the implemented sync service.
 5. Implement the audit query UI, full project OpenAPI document, trusted-proxy configuration, metrics, background maintenance, backup/restore procedures, and deployment-specific CSP/HSTS hardening.

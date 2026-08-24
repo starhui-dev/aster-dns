@@ -16,6 +16,7 @@ import (
 	secretcrypto "github.com/starhui-dev/aster-dns/internal/crypto"
 	"github.com/starhui-dev/aster-dns/internal/db"
 	"github.com/starhui-dev/aster-dns/internal/provider"
+	"github.com/starhui-dev/aster-dns/internal/provider/huawei"
 	providerservice "github.com/starhui-dev/aster-dns/internal/service"
 )
 
@@ -65,7 +66,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		if err = authService.EnsureBootstrapReady(ctx); err != nil {
 			return fmt.Errorf("initialize authentication: %w", err)
 		}
-		registry, err := provider.NewRegistry()
+		registry, err := provider.NewRegistry(huawei.NewFactory())
 		if err != nil {
 			return err
 		}

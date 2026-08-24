@@ -19,6 +19,7 @@ const (
 	RecordTypeNS    RecordType = "NS"
 	RecordTypeSRV   RecordType = "SRV"
 	RecordTypeCAA   RecordType = "CAA"
+	RecordTypeSOA   RecordType = "SOA"
 )
 
 func CoreRecordTypes() []RecordType {
@@ -31,13 +32,14 @@ func CoreRecordTypes() []RecordType {
 		RecordTypeNS,
 		RecordTypeSRV,
 		RecordTypeCAA,
+		RecordTypeSOA,
 	}
 }
 
 func (t RecordType) Valid() bool {
 	switch t {
 	case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeTXT,
-		RecordTypeMX, RecordTypeNS, RecordTypeSRV, RecordTypeCAA:
+		RecordTypeMX, RecordTypeNS, RecordTypeSRV, RecordTypeCAA, RecordTypeSOA:
 		return true
 	default:
 		return false

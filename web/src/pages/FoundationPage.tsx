@@ -60,7 +60,7 @@ export default function FoundationPage() {
       <PageHeader
         eyebrow="System"
         title="Control plane status"
-        description="Live platform state only. Provider account, zone, and record metrics will appear after the official adapters are connected."
+        description="Live platform state. Provider capabilities come from the server registry; account, zone, and record metrics appear only after real account synchronization."
       />
 
       <div class="grid gap-4 lg:grid-cols-3">
@@ -98,9 +98,10 @@ export default function FoundationPage() {
         </Panel>
 
         <Panel title="Provider integration" compact>
-          <Badge tone="warning">Not implemented</Badge>
+          <Badge tone="success">Capability driven</Badge>
           <p class="mt-3 text-sm leading-6 text-muted-foreground">
-            No mock zones, records, credentials, or false provider success responses are exposed.
+            Production adapters publish credential schemas, RRSet granularity, record types, and
+            vendor extensions through the authenticated provider catalog.
           </p>
         </Panel>
       </div>

@@ -222,6 +222,13 @@ func normalizeRecordEntry(recordType RecordType, entry RecordEntry) (RecordEntry
 		flags := *entry.Flags
 		entry = resetSemanticFields(entry)
 		entry.Flags, entry.Tag, entry.Value = &flags, &tag, value
+	case RecordTypeSOA:
+		if err := requireOnlyValue(entry); err != nil {
+			return RecordEntry{}, err
+		}
+		if !utf8.ValidString(entry.Value) || strings.TrimSpace(entry.Value) == "" || strings.ContainsAny(entry.Value, "\x00\r\n") {
+			return RecordEntry{}, errors.New("SOA value is invalid")
+		}
 	default:
 		return RecordEntry{}, errors.New("record type is invalid")
 	}

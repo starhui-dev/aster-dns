@@ -6,6 +6,7 @@ import { Button } from "../components/ui/Button";
 import { Alert, PageHeader, Panel } from "../components/ui/Layout";
 import FoundationPage from "../pages/FoundationPage";
 import PlaceholderPage from "../pages/PlaceholderPage";
+import ProviderAccountsPage from "../pages/ProviderAccountsPage";
 import SettingsPage from "../pages/SettingsPage";
 import UsersPage from "../pages/UsersPage";
 import AppShell from "./AppShell";
@@ -29,16 +30,7 @@ export default function App() {
                 />
               )}
             />
-            <Route
-              path="/accounts"
-              component={() => (
-                <PlaceholderPage
-                  title="Provider accounts"
-                  phase="Future provider phase"
-                  description="Credential capture and validation will be added with the official provider adapters."
-                />
-              )}
-            />
+            <Route path="/accounts" component={ProviderAccountsPage} />
             <Route
               path="/audit"
               component={() => (
