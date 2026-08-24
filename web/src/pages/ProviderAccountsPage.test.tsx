@@ -8,7 +8,7 @@ describe("ProviderAccountsPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("renders live Huawei capabilities without credential values", async () => {
+  it("renders live provider capabilities without credential values", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -36,6 +36,26 @@ describe("ProviderAccountsPage", () => {
                 supports_record_status: true,
               },
             },
+            {
+              type: "tencent",
+              display_name: "Tencent Cloud DNSPod",
+              documentation_url: "https://cloud.tencent.com/document/product/1427",
+              credential_fields: [
+                { key: "secret_id", label: "SecretId", secret: true, required: true },
+                { key: "secret_key", label: "SecretKey", secret: true, required: true },
+                { key: "token", label: "Security token", secret: true, required: false },
+              ],
+              account_options: [],
+              capabilities: {
+                supported_record_types: ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "SRV", "CAA"],
+                min_ttl: 1,
+                max_ttl: 604800,
+                native_record_granularity: "record_entry",
+                supports_routing_line: true,
+                supports_weight: true,
+                supports_record_status: true,
+              },
+            },
           ],
         }),
       ),
@@ -44,16 +64,17 @@ describe("ProviderAccountsPage", () => {
     render(() => <ProviderAccountsPage />);
 
     expect(await screen.findByRole("heading", { name: "Huawei Cloud DNS" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Tencent Cloud DNSPod" })).toBeInTheDocument();
     expect(screen.getByText("RRSet")).toBeInTheDocument();
-    expect(screen.getAllByText("Supported")).toHaveLength(3);
+    expect(screen.getByText("Record entry")).toBeInTheDocument();
+    expect(screen.getByText("1–604800 seconds")).toBeInTheDocument();
+    expect(screen.getAllByText("Supported")).toHaveLength(6);
     expect(screen.getByText("Access key (AK)")).toBeInTheDocument();
-    expect(screen.getByText("Security token")).toBeInTheDocument();
+    expect(screen.getByText("SecretId")).toBeInTheDocument();
+    expect(screen.getAllByText("Security token")).toHaveLength(2);
     expect(screen.getByText("DNS region")).toBeInTheDocument();
     expect(screen.queryByText("fixture-secret-key")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Official documentation" })).toHaveAttribute(
-      "href",
-      "https://support.huaweicloud.com/intl/en-us/dns/index.html",
-    );
+    expect(screen.getAllByRole("link", { name: "Official documentation" })).toHaveLength(2);
   });
 });
 

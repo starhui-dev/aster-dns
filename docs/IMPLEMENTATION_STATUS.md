@@ -1,12 +1,12 @@
 # Implementation Status
 
-Updated: 2026-08-24
+Updated: 2026-08-25
 
 ## Outcome
 
 The authentication and authorization foundation remains implemented end to end across PostgreSQL, Go services and middleware, REST handlers, audit events, and the SolidJS UI. Authentication is Passkey-first. There is no hard-coded or generated default administrator password.
 
-The Provider core layer is implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance infrastructure. Huawei Cloud DNS and Alibaba Cloud DNS are registered production Provider adapters. Tencent Cloud DNSPod and Cloudflare remain unimplemented; the frontend does not fabricate data for them.
+The Provider core layer is implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance infrastructure. Huawei Cloud DNS, Alibaba Cloud DNS, and Tencent Cloud DNSPod are registered production Provider adapters. Cloudflare remains unimplemented; the frontend does not fabricate data for it.
 
 ## Provider core implemented
 
@@ -52,7 +52,7 @@ The Provider core layer is implemented across domain contracts, validation, cred
 
 - `internal/provider/fake` implements the full Provider contract with multi-entry RRsets, preserved entry IDs, cursor pagination, context cancellation, mutation preconditions, and injectable errors.
 - `internal/provider/contracttest` supplies a reusable conformance harness for metadata/descriptors, factory build, pagination, RRSet granularity, create/update/delete preconditions, and cancellation.
-- The generic fake remains unit-test infrastructure only. Huawei and Alibaba Cloud DNS exercise the same conformance harness through official-SDK transport fixtures; real-account integration is separately gated and is not inferred from fixture success.
+- The generic fake remains unit-test infrastructure only. Huawei, Alibaba Cloud DNS, and Tencent Cloud DNSPod exercise the same conformance harness through official-SDK transport fixtures; real-account integration is separately gated and is not inferred from fixture success.
 
 ### Huawei Cloud DNS production adapter
 
@@ -76,6 +76,21 @@ The Provider core layer is implemented across domain contracts, validation, cred
 - Update/delete re-fetch all current provider records and compare the required fingerprint/provider version before mutation. Read retry is bounded and context-aware; SDK and adapter mutation retry are disabled. Structured SDK errors map to the shared taxonomy with request ID and retry-after preservation plus AccessKey/token/Authorization/signature redaction.
 - Official-SDK transport fixtures and shared conformance cover native pagination, local logical pagination, same-name/type line/status boundaries, non-default routing-line mutation, multi-entry sets, opaque IDs, line/status/weight extensions, CRUD request mapping, preconditions, read retry, mutation no-retry, error classification, request IDs, secret canaries, cancellation, and TXT/MX/SRV/CAA normalization. Official source notes are in `docs/providers/aliyun.md`.
 - Unit tested: yes. Read integration tested: no; this environment had no Alibaba Cloud credential variables. Mutation integration tested: no; credentials, `DNS_INTEGRATION_MUTATE=1`, and a dedicated test Zone were absent. No real-account success is claimed.
+
+### Tencent Cloud DNSPod production adapter
+
+- `internal/provider/tencent` uses Tencent Cloud's official API 3.0 Go SDK modules `github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/dnspod` and `github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common` v1.3.131, targeting DNSPod API version `2021-03-23`; TC3 signing is not reimplemented.
+- Factory metadata exposes required SecretId/SecretKey, optional temporary security token, the fixed HTTPS endpoint `dnspod.tencentcloudapi.com`, no Region/account options, entry-native granularity, TTL 1–604800, eight common record types, and typed status/line/line-ID/weight descriptors.
+- Credential validation performs one read-only `DescribeDomainList` request with limit 1. Zone reads traverse native offset pages, preserve numeric `DomainId`, nameservers, status, and grade, and expose stable local cursors over the complete result.
+- Record reads traverse every `DescribeRecordList` page before reconstructing logical RRsets. Grouping keeps owner, type, TTL, routing line name, routing line ID, and status distinct; weight remains entry-specific, and every numeric `RecordId` remains on its `RecordEntry`.
+- Synthetic record-set IDs encode sorted native record IDs. Same-name/type records with different routing metadata are never merged, so line, line ID, weight, and enabled status are not discarded behind a false uniform RRSet.
+- Create/update/delete expand logical changes into official single-record `CreateRecord`, `ModifyRecord`, and `DeleteRecord` calls. Final state is re-fetched by opaque record ID through `DescribeRecord`, including bounded handling of the documented post-create indexing delay; partial multi-call failure is not represented as atomic.
+- TXT, MX priority, SRV priority/weight/port/target, and CAA flags/tag/value convert to the shared structured model. TTL, type, status, line consistency, and 0–100 routing-weight constraints fail locally before mutation when the common contract can decide them.
+- Update/delete re-fetch current provider records and compare the required canonical fingerprint and optional provider version. Changed membership, stale fingerprints, and stale provider versions return `conflict` before any mutation.
+- Structured Tencent SDK errors map authentication, permission, not-found, conflict, frequency/rate limit, unsupported, validation, timeout, and upstream failures into the shared taxonomy. Safe provider request IDs are retained; SecretId, SecretKey, token, Authorization, credential, and signature values are redacted.
+- SDK automatic retries and region failover are disabled. Read retry is bounded and context-aware; every mutation receives exactly one SDK attempt, and generated `WithContext` methods propagate cancellation and deadlines to the HTTP request.
+- Official-SDK transport fixtures and shared conformance cover native/local pagination, same-name/type routing boundaries, opaque IDs, line/line-ID/weight/status metadata, TXT/MX/SRV/CAA, CRUD mapping, preconditions, read retry, mutation no-retry, error/request-ID mapping, secret redaction, cancellation, and timeout. Official source notes are in `docs/providers/tencent.md`.
+- Unit tested: yes. Read integration tested: no; this environment had no Tencent Cloud SecretId/SecretKey variables. Mutation integration tested: no; credentials, `DNS_INTEGRATION_MUTATE=1`, and a dedicated DNSPod test domain ID were absent. No real-account success is claimed.
 
 ## Authentication / authorization implemented
 
@@ -177,17 +192,19 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 |---|---|
 | Focused backend security tests | Passed unauthenticated `401`, role matrix, CSRF/origin rejection, revoked/disabled session denial, Argon2id verify, opaque-token hashing, WebAuthn challenge replay and rpId/origin rejection, TOTP ciphertext tamper rejection, TOTP time-step replay rejection, and secret-canary scans. |
 | Backend authentication packages | `go test ./internal/auth ./internal/api ./internal/audit ./internal/crypto` passed. |
-| Full backend suite | Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full backend tests, and Go build passed after Alibaba Cloud registration. |
+| Full backend suite | Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full backend tests, and Go build passed after Tencent Cloud DNSPod registration. |
 | Huawei adapter fixtures | `go test ./internal/provider/huawei -count=1` passed official-SDK transport signing, Zone/RecordSet pagination, RRSet normalization, TXT/MX/SRV/CAA, line/weight/status, CRUD preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, timeout, and shared conformance. |
 | Huawei real integration gate | `go test ./internal/provider/huawei -run 'TestHuaweiIntegration' -count=1 -v` passed with read-only skipped because AK/SK were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Huawei success is claimed. |
 | Alibaba adapter fixtures | `go test ./internal/provider/aliyun -count=1` passed official-SDK signing/serialization, complete native pagination, logical RRSet grouping, opaque entry IDs, line/status/weight boundaries, TXT/MX/SRV/CAA normalization, CRUD mappings, optimistic preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, and shared conformance. |
 | Alibaba real integration gate | `go test ./internal/provider/aliyun -run 'TestAliyunIntegration' -count=1 -v` passed with read-only skipped because AccessKey variables were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Alibaba Cloud success is claimed. |
-| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed, including Huawei and Alibaba official-SDK transport fixtures. |
-| Backend Provider delivery gates | Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full `go test`, selected race tests, and `go build ./cmd/... ./internal/... ./migrations` passed. |
+| Tencent adapter fixtures | `go test ./internal/provider/tencent` passed official-SDK signing/serialization, complete native pagination, logical RRSet grouping, opaque record IDs, line/line-ID/status/weight boundaries, TXT/MX/SRV/CAA normalization, CRUD mappings, optimistic preconditions, retry boundaries, error/request-ID mapping, secret redaction, cancellation, timeout, and shared conformance. |
+| Tencent real integration gate | `go test ./internal/provider/tencent -run 'TestTencentIntegration' -count=1 -v` passed with read-only skipped because SecretId/SecretKey variables were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Tencent Cloud success is claimed. |
+| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed, including Huawei, Alibaba, and Tencent official-SDK transport fixtures. |
+| Backend Provider delivery gates | `make ci` passed Go format check, `go vet ./cmd/... ./internal/... ./migrations`, full backend tests, Go build, frontend format/lint/typecheck/tests, and the Vite production build; selected Provider/service/API race tests also passed. |
 | Frontend tests | `make frontend-format-check frontend-lint frontend-typecheck frontend-test frontend-build` passed: 3 test files, 5 tests, strict TypeScript checking, zero-warning ESLint, and the production build. |
 | Formatting and lint | Go format check, `go vet`, Prettier check, and ESLint with zero warnings passed. |
 | Typecheck and build | Go build, TypeScript strict `tsc --noEmit`, and Vite production build passed; the current Vite build transformed 63 modules. |
-| Browser Provider capability smoke | Chromium rendered the authenticated Provider accounts route with intercepted auth/catalog responses and displayed both Huawei and Alibaba Cloud cards. The Alibaba card showed entry-native granularity, A/AAAA/CNAME/TXT/MX/NS/SRV/CAA, TTL 1–86400, routing/weight/status support, three secret credential fields, and the official documentation link; no credential value was present. |
+| Browser Provider capability smoke | Chromium rendered the authenticated Provider accounts route with intercepted auth/catalog responses and displayed the Tencent Cloud DNSPod card with entry-native granularity, A/AAAA/CNAME/TXT/MX/NS/SRV/CAA, TTL 1–604800, routing/weight/status support, three secret credential fields, and the official documentation link; no credential value was present. |
 | PostgreSQL runtime smoke | A clean PostgreSQL 18 database migrated through authentication migration version 2. Runtime sessions stored 32-byte token/CSRF hashes and the admin password row used an Argon2id hash. |
 | Browser WebAuthn smoke | Chromium with virtual authenticators completed first-admin Passkey bootstrap, registered a second named Passkey, and rendered safe Passkey metadata. |
 | Browser password/TOTP smoke | The UI enabled Argon2id password fallback, completed password login, set up and confirmed TOTP, required the separate TOTP step on the next password login, and completed that login with a new time-step code. |
@@ -198,8 +215,8 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 
 These items remain outside the Provider core delivery:
 
-1. Implement and register the official Tencent Cloud DNSPod and Cloudflare adapters after documenting each current official API/Go SDK, object granularity, pagination, capabilities, and error mapping.
-2. Run Huawei and Alibaba Cloud read-only integration with dedicated credentials and the explicitly gated mutation tests against dedicated test Zones; add equivalent fixtures and gated integration verification for Tencent Cloud DNSPod and Cloudflare.
+1. Implement and register the official Cloudflare adapter after documenting its current official API/Go SDK, object granularity, pagination, capabilities, and error mapping.
+2. Run Huawei, Alibaba Cloud, and Tencent Cloud read-only integration with dedicated credentials and the explicitly gated mutation tests against dedicated test Zones; add equivalent fixtures and gated integration verification for Cloudflare.
 3. Implement production RecordSet read/create/update/delete/batch services and APIs, short-lived record caches, mutation invalidation, final-state re-fetch, per-item batch results, and DNS mutation audit orchestration.
 4. Add Zone index query APIs/UI, manual refresh UI, and scheduled background sync operation around the implemented sync service.
 5. Implement the audit query UI, full project OpenAPI document, trusted-proxy configuration, metrics, background maintenance, backup/restore procedures, and deployment-specific CSP/HSTS hardening.

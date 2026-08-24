@@ -16,6 +16,8 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20220416144525-469b46aa5efa
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pquerna/otp v1.5.0
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.131
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/dnspod v1.3.131
 	golang.org/x/net v0.58.0
 	golang.org/x/time v0.15.0
 )

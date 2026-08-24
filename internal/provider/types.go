@@ -146,6 +146,7 @@ type AliyunRecordEntryExtensions struct {
 
 type TencentRecordEntryExtensions struct {
 	Line   string  `json:"line,omitempty"`
+	LineID string  `json:"line_id,omitempty"`
 	Weight *uint16 `json:"weight,omitempty"`
 	Status string  `json:"status,omitempty"`
 }
