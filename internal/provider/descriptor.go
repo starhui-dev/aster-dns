@@ -69,17 +69,18 @@ type AccountOptionsDescriptor struct {
 }
 
 type ExtensionFieldDescriptor struct {
-	Namespace    ProviderType          `json:"namespace"`
-	Scope        ExtensionScope        `json:"scope"`
-	Key          string                `json:"key"`
-	Label        string                `json:"label"`
-	Type         DescriptorFieldType   `json:"type"`
-	ReadOnly     bool                  `json:"read_only"`
-	Required     bool                  `json:"required"`
-	RequiredWhen []DescriptorCondition `json:"required_when,omitempty"`
-	Options      []DescriptorOption    `json:"options,omitempty"`
-	Minimum      *int64                `json:"minimum,omitempty"`
-	Maximum      *int64                `json:"maximum,omitempty"`
+	Namespace      ProviderType          `json:"namespace"`
+	Scope          ExtensionScope        `json:"scope"`
+	Key            string                `json:"key"`
+	Label          string                `json:"label"`
+	Type           DescriptorFieldType   `json:"type"`
+	ReadOnly       bool                  `json:"read_only"`
+	Required       bool                  `json:"required"`
+	ApplicableWhen []DescriptorCondition `json:"applicable_when,omitempty"`
+	RequiredWhen   []DescriptorCondition `json:"required_when,omitempty"`
+	Options        []DescriptorOption    `json:"options,omitempty"`
+	Minimum        *int64                `json:"minimum,omitempty"`
+	Maximum        *int64                `json:"maximum,omitempty"`
 }
 
 type Capabilities struct {
@@ -187,10 +188,54 @@ func (c Capabilities) Validate() error {
 		if err := validateDescriptorValue(field.Type, field.Options, field.Minimum, field.Maximum); err != nil {
 			return fmt.Errorf("extension field %q: %w", field.Key, err)
 		}
-		for _, condition := range field.RequiredWhen {
-			if strings.TrimSpace(condition.Field) == "" || len(condition.Values) == 0 {
-				return fmt.Errorf("extension field %q has invalid required condition", field.Key)
-			}
+		if err := validateDescriptorConditions(field.ApplicableWhen); err != nil {
+			return fmt.Errorf("extension field %q applicable condition: %w", field.Key, err)
+		}
+		if err := validateDescriptorConditions(field.RequiredWhen); err != nil {
+			return fmt.Errorf("extension field %q required condition: %w", field.Key, err)
+		}
+	}
+	for _, requirement := range []struct {
+		enabled bool
+		scope   ExtensionScope
+		key     string
+		typeID  DescriptorFieldType
+		name    string
+	}{
+		{c.SupportsProxy, ExtensionScopeRecordSet, "proxied", DescriptorFieldBoolean, "proxy"},
+		{c.SupportsRoutingLine, ExtensionScopeRecordEntry, "line", DescriptorFieldString, "routing line"},
+		{c.SupportsWeight, ExtensionScopeRecordEntry, "weight", DescriptorFieldInteger, "routing weight"},
+	} {
+		if requirement.enabled && !c.hasWritableExtension(requirement.scope, requirement.key, requirement.typeID) {
+			return fmt.Errorf("%s capability requires a writable %s extension", requirement.name, requirement.key)
+		}
+	}
+	if c.SupportsRecordStatus &&
+		!c.hasWritableExtension(ExtensionScopeRecordSet, "status", DescriptorFieldEnum) &&
+		!c.hasWritableExtension(ExtensionScopeRecordEntry, "status", DescriptorFieldEnum) {
+		return errors.New("record status capability requires a writable status extension")
+	}
+	if c.SupportsComments &&
+		!c.hasWritableExtension(ExtensionScopeRecordSet, "comment", DescriptorFieldString) &&
+		!c.hasWritableExtension(ExtensionScopeRecordEntry, "comment", DescriptorFieldString) &&
+		!c.hasWritableExtension(ExtensionScopeRecordEntry, "remark", DescriptorFieldString) {
+		return errors.New("comments capability requires a writable comment or remark extension")
+	}
+	return nil
+}
+func (c Capabilities) hasWritableExtension(scope ExtensionScope, key string, fieldType DescriptorFieldType) bool {
+	for _, field := range c.ExtensionFields {
+		if field.Scope == scope && field.Key == key && field.Type == fieldType && !field.ReadOnly {
+			return true
+		}
+	}
+	return false
+}
+
+func validateDescriptorConditions(conditions []DescriptorCondition) error {
+	for _, condition := range conditions {
+		if strings.TrimSpace(condition.Field) == "" || len(condition.Values) == 0 {
+			return errors.New("field and values are required")
 		}
 	}
 	return nil

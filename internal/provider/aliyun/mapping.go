@@ -15,7 +15,11 @@ import (
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 )
 
-const recordSetIDPrefix = "aliyun-recordset-v1:"
+const (
+	recordSetIDPrefix       = "aliyun-recordset-v1:"
+	aliyunMinimumMXPriority = 1
+	aliyunMaximumMXPriority = 50
+)
 
 type routing struct {
 	line     string
@@ -28,7 +32,6 @@ type recordGroupKey struct {
 	recordType core.RecordType
 	ttl        uint32
 	line       string
-	status     string
 	weighted   bool
 }
 
@@ -101,6 +104,11 @@ func stringPointers(source []*string) []string {
 }
 
 func groupDomainRecords(zoneName string, source []*alidns.DescribeDomainRecordsResponseBodyDomainRecordsRecord) ([]core.RecordSet, error) {
+	canonicalZoneName, err := core.CanonicalizeZoneName(zoneName)
+	if err != nil {
+		return nil, fmt.Errorf("Alibaba Cloud domain name is invalid: %w", err)
+	}
+	zoneName = canonicalZoneName
 	groups := make(map[recordGroupKey]*recordGroup)
 	for _, record := range source {
 		if record == nil {
@@ -142,7 +150,7 @@ func groupDomainRecords(zoneName string, source []*alidns.DescribeDomainRecordsR
 			ID: id, Name: group.key.name, Type: group.key.recordType, TTL: group.key.ttl,
 			Entries: group.entries,
 			Extensions: core.RecordSetExtensions{Aliyun: &core.AliyunRecordSetExtensions{
-				Status: group.key.status,
+				Status: aggregateAliyunStatus(group.entries),
 			}},
 			ProviderVersion: providerVersion,
 		})
@@ -168,9 +176,15 @@ func groupDomainRecords(zoneName string, source []*alidns.DescribeDomainRecordsR
 }
 
 func mapDomainRecord(zoneName string, source *alidns.DescribeDomainRecordsResponseBodyDomainRecordsRecord, recordType core.RecordType) (core.RecordEntry, recordGroupKey, int64, error) {
-	recordID := strings.TrimSpace(dara.StringValue(source.RecordId))
-	if recordID == "" {
-		return core.RecordEntry{}, recordGroupKey{}, 0, errors.New("Alibaba Cloud record ID is missing")
+	recordID := dara.StringValue(source.RecordId)
+	if strings.TrimSpace(recordID) == "" || recordID != strings.TrimSpace(recordID) {
+		return core.RecordEntry{}, recordGroupKey{}, 0, errors.New("Alibaba Cloud record ID is missing or malformed")
+	}
+	if sourceDomainName := strings.TrimSpace(dara.StringValue(source.DomainName)); sourceDomainName != "" {
+		canonicalSourceDomain, err := core.CanonicalizeZoneName(sourceDomainName)
+		if err != nil || canonicalSourceDomain != zoneName {
+			return core.RecordEntry{}, recordGroupKey{}, 0, errors.New("Alibaba Cloud returned a record for a different domain")
+		}
 	}
 	ttl := dara.Int64Value(source.TTL)
 	if ttl <= 0 || ttl > math.MaxUint32 {
@@ -203,11 +217,11 @@ func mapDomainRecord(zoneName string, source *alidns.DescribeDomainRecordsRespon
 	}
 	entry.ID = recordID
 	entry.Extensions.Aliyun = &core.AliyunRecordEntryExtensions{
-		Line: line, Status: status, Weight: routingWeight,
+		Line: line, Status: status, Weight: routingWeight, Remark: dara.StringValue(source.Remark),
 	}
 	version := max(dara.Int64Value(source.UpdateTimestamp), dara.Int64Value(source.CreateTimestamp))
 	return entry, recordGroupKey{
-		name: name, recordType: recordType, ttl: uint32(ttl), line: line, status: status, weighted: weighted,
+		name: name, recordType: recordType, ttl: uint32(ttl), line: line, weighted: weighted,
 	}, version, nil
 }
 
@@ -219,8 +233,8 @@ func parseDomainRecordValue(recordType core.RecordType, value string, priority i
 	case core.RecordTypeCNAME, core.RecordTypeNS:
 		return core.RecordEntry{Target: stringPointer(value)}, nil
 	case core.RecordTypeMX:
-		if priority < 0 || priority > math.MaxUint16 {
-			return core.RecordEntry{}, errors.New("Alibaba Cloud MX priority is invalid")
+		if priority < aliyunMinimumMXPriority || priority > aliyunMaximumMXPriority {
+			return core.RecordEntry{}, errors.New("Alibaba Cloud MX priority must be between 1 and 50")
 		}
 		converted := uint16(priority)
 		return core.RecordEntry{Priority: &converted, Target: stringPointer(value)}, nil
@@ -332,11 +346,7 @@ func validateAliyunInput(input core.CreateRecordSetInput, fallback routing) (rou
 	if result.line == "" {
 		result.line = defaultLine
 	}
-	if result.status == "" {
-		result.status = statusEnable
-	}
-	setStatusExplicit := input.Extensions.Aliyun != nil && strings.TrimSpace(input.Extensions.Aliyun.Status) != ""
-	if setStatusExplicit {
+	if input.Extensions.Aliyun != nil && strings.TrimSpace(input.Extensions.Aliyun.Status) != "" {
 		var err error
 		result.status, err = normalizeStatus(input.Extensions.Aliyun.Status, result.status)
 		if err != nil {
@@ -345,12 +355,13 @@ func validateAliyunInput(input core.CreateRecordSetInput, fallback routing) (rou
 	}
 
 	explicitLine := ""
-	explicitStatus := ""
 	missingLine := false
-	missingStatus := false
 	seenWeighted := false
 	seenUnweighted := false
 	for _, entry := range input.Entries {
+		if input.Type == core.RecordTypeMX && (entry.Priority == nil || *entry.Priority < aliyunMinimumMXPriority || *entry.Priority > aliyunMaximumMXPriority) {
+			return routing{}, errors.New("Alibaba Cloud MX priority must be between 1 and 50")
+		}
 		if entry.Extensions.Cloudflare != nil || entry.Extensions.Huawei != nil || entry.Extensions.Tencent != nil {
 			return routing{}, errors.New("record entry contains extensions for another provider")
 		}
@@ -364,24 +375,9 @@ func validateAliyunInput(input core.CreateRecordSetInput, fallback routing) (rou
 			} else if explicitLine != line {
 				return routing{}, errors.New("Alibaba Cloud line must be consistent across one logical record set")
 			}
-			status := strings.TrimSpace(extension.Status)
-			if status == "" {
-				missingStatus = true
-			} else {
-				normalizedStatus, err := normalizeStatus(status, result.status)
-				if err != nil {
-					return routing{}, err
-				}
-				if explicitStatus == "" {
-					explicitStatus = normalizedStatus
-				} else if explicitStatus != normalizedStatus {
-					return routing{}, errors.New("Alibaba Cloud status must be consistent across one logical record set")
-				}
-			}
 			weight = extension.Weight
 		} else {
 			missingLine = true
-			missingStatus = true
 		}
 		if weight == nil {
 			seenUnweighted = true
@@ -398,17 +394,6 @@ func validateAliyunInput(input core.CreateRecordSetInput, fallback routing) (rou
 		}
 		result.line = explicitLine
 	}
-	if explicitStatus != "" {
-		if setStatusExplicit && explicitStatus != result.status {
-			return routing{}, errors.New("Alibaba Cloud entry status differs from the record set status")
-		}
-		if !setStatusExplicit {
-			if missingStatus && explicitStatus != result.status {
-				return routing{}, errors.New("Alibaba Cloud status must be present and consistent across one logical record set")
-			}
-			result.status = explicitStatus
-		}
-	}
 	if seenWeighted && seenUnweighted {
 		return routing{}, errors.New("Alibaba Cloud routing weight must be present for every entry in a weighted record set")
 	}
@@ -420,9 +405,9 @@ func validateAliyunInput(input core.CreateRecordSetInput, fallback routing) (rou
 }
 
 func routingFromRecordSet(recordSet core.RecordSet) routing {
-	result := routing{line: defaultLine, status: statusEnable}
-	if recordSet.Extensions.Aliyun != nil {
-		result.status, _ = normalizeStatus(recordSet.Extensions.Aliyun.Status, statusEnable)
+	result := routing{line: defaultLine}
+	if recordSet.Extensions.Aliyun != nil && strings.TrimSpace(recordSet.Extensions.Aliyun.Status) != "" {
+		result.status, _ = normalizeStatus(recordSet.Extensions.Aliyun.Status, "")
 	}
 	if len(recordSet.Entries) > 0 && recordSet.Entries[0].Extensions.Aliyun != nil {
 		extension := recordSet.Entries[0].Extensions.Aliyun
@@ -437,7 +422,7 @@ func routingFromRecordSet(recordSet core.RecordSet) routing {
 func groupKeyFromInput(input core.CreateRecordSetInput, route routing) recordGroupKey {
 	return recordGroupKey{
 		name: input.Name, recordType: input.Type, ttl: input.TTL,
-		line: route.line, status: route.status, weighted: route.weighted,
+		line: route.line, weighted: route.weighted,
 	}
 }
 
@@ -445,8 +430,28 @@ func groupKeyFromRecordSet(recordSet core.RecordSet) recordGroupKey {
 	route := routingFromRecordSet(recordSet)
 	return recordGroupKey{
 		name: recordSet.Name, recordType: recordSet.Type, ttl: recordSet.TTL,
-		line: route.line, status: route.status, weighted: route.weighted,
+		line: route.line, weighted: route.weighted,
 	}
+}
+func aggregateAliyunStatus(entries []core.RecordEntry) string {
+	status := ""
+	for _, entry := range entries {
+		if entry.Extensions.Aliyun == nil {
+			return ""
+		}
+		entryStatus, err := normalizeStatus(entry.Extensions.Aliyun.Status, "")
+		if err != nil {
+			return ""
+		}
+		if status == "" {
+			status = entryStatus
+			continue
+		}
+		if status != entryStatus {
+			return ""
+		}
+	}
+	return status
 }
 
 func normalizeStatus(value, fallback string) (string, error) {
@@ -479,13 +484,16 @@ func encodeRecordSetID(ids []string) (string, error) {
 		return "", errors.New("Alibaba Cloud logical record set contains no provider record IDs")
 	}
 	ids = append([]string(nil), ids...)
-	sort.Strings(ids)
-	for index, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" || (index > 0 && id == ids[index-1]) {
+	for _, id := range ids {
+		if id == "" || id != strings.TrimSpace(id) {
 			return "", errors.New("Alibaba Cloud logical record set contains invalid provider record IDs")
 		}
-		ids[index] = id
+	}
+	sort.Strings(ids)
+	for index := 1; index < len(ids); index++ {
+		if ids[index] == ids[index-1] {
+			return "", errors.New("Alibaba Cloud logical record set contains invalid provider record IDs")
+		}
 	}
 	encoded, err := json.Marshal(ids)
 	if err != nil {
@@ -495,8 +503,7 @@ func encodeRecordSetID(ids []string) (string, error) {
 }
 
 func decodeRecordSetID(id string) ([]string, error) {
-	id = strings.TrimSpace(id)
-	if !strings.HasPrefix(id, recordSetIDPrefix) {
+	if id != strings.TrimSpace(id) || !strings.HasPrefix(id, recordSetIDPrefix) {
 		return nil, errors.New("Alibaba Cloud record set ID is invalid")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(id, recordSetIDPrefix))

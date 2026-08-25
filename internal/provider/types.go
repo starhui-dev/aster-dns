@@ -116,7 +116,9 @@ type CloudflareRecordSetExtensions struct {
 }
 
 type HuaweiRecordSetExtensions struct {
-	Status string `json:"status,omitempty"`
+	Status         string `json:"status,omitempty"`
+	ProviderStatus string `json:"provider_status,omitempty"`
+	Default        *bool  `json:"default,omitempty"`
 }
 
 type AliyunRecordSetExtensions struct {
@@ -145,6 +147,7 @@ type AliyunRecordEntryExtensions struct {
 	Line   string  `json:"line,omitempty"`
 	Status string  `json:"status,omitempty"`
 	Weight *uint16 `json:"weight,omitempty"`
+	Remark string  `json:"remark,omitempty"`
 }
 
 type TencentRecordEntryExtensions struct {
@@ -152,6 +155,7 @@ type TencentRecordEntryExtensions struct {
 	LineID string  `json:"line_id,omitempty"`
 	Weight *uint16 `json:"weight,omitempty"`
 	Status string  `json:"status,omitempty"`
+	Remark string  `json:"remark,omitempty"`
 }
 
 type PageRequest struct {

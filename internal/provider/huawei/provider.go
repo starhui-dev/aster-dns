@@ -2,7 +2,10 @@ package huawei
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +31,8 @@ const (
 
 	huaweiMaximumPageLimit = 500
 	readAttempts           = 3
+	maximumReadRetryDelay  = time.Second
+	markerCursorPrefix     = "huawei-marker-v1:"
 )
 
 type Provider struct {
@@ -43,6 +48,11 @@ type responseMetadata struct {
 	statusCode int
 	requestID  string
 	retryAfter time.Duration
+}
+
+type markerCursorPayload struct {
+	Scope  string `json:"scope"`
+	Marker string `json:"marker"`
 }
 
 type contextRoundTripper struct {
@@ -71,7 +81,7 @@ func (p *Provider) Capabilities(context.Context) core.Capabilities {
 func (p *Provider) ValidateCredentials(ctx context.Context) error {
 	limit := int32(1)
 	zoneType := "public"
-	_, err := readCall(p, ctx, operationValidateCredentials, func(client *dns.DnsClient) (*model.ListPublicZonesResponse, error) {
+	_, _, err := readCall(p, ctx, operationValidateCredentials, func(client *dns.DnsClient) (*model.ListPublicZonesResponse, error) {
 		return client.ListPublicZones(&model.ListPublicZonesRequest{Type: &zoneType, Limit: &limit})
 	})
 	return err
@@ -82,13 +92,18 @@ func (p *Provider) ListZones(ctx context.Context, pageRequest core.PageRequest) 
 	if err != nil {
 		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
 	}
+	cursorScope := operationListZones
+	marker, err := decodeMarkerCursor(normalized.Cursor, cursorScope)
+	if err != nil {
+		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
+	}
 	limit := int32(min(normalized.Limit, huaweiMaximumPageLimit))
 	zoneType := "public"
 	request := &model.ListPublicZonesRequest{Type: &zoneType, Limit: &limit}
-	if normalized.Cursor != "" {
-		request.Marker = &normalized.Cursor
+	if marker != "" {
+		request.Marker = &marker
 	}
-	response, err := readCall(p, ctx, operationListZones, func(client *dns.DnsClient) (*model.ListPublicZonesResponse, error) {
+	response, metadata, err := readCall(p, ctx, operationListZones, func(client *dns.DnsClient) (*model.ListPublicZonesResponse, error) {
 		return client.ListPublicZones(request)
 	})
 	if err != nil {
@@ -103,28 +118,31 @@ func (p *Provider) ListZones(ctx context.Context, pageRequest core.PageRequest) 
 	for index := range source {
 		items[index], err = mapPublicZone(source[index], nil)
 		if err != nil {
-			return core.Page[core.Zone]{}, p.providerPayloadError(operationListZones, err)
+			return core.Page[core.Zone]{}, p.providerPayloadError(operationListZones, metadata, err)
 		}
 	}
-	page := core.Page[core.Zone]{Items: items, NextCursor: nextMarker(response.Links, zoneIDs(source))}
+	nextCursor, err := nextMarkerCursor(response.Links, zoneIDs(source), cursorScope)
+	if err != nil {
+		return core.Page[core.Zone]{}, p.providerPayloadError(operationListZones, metadata, err)
+	}
+	page := core.Page[core.Zone]{Items: items, NextCursor: nextCursor}
 	if err = core.ValidatePage(normalized, page); err != nil {
-		return core.Page[core.Zone]{}, p.providerPayloadError(operationListZones, err)
+		return core.Page[core.Zone]{}, p.providerPayloadError(operationListZones, metadata, err)
 	}
 	return page, nil
 }
 
 func (p *Provider) GetZone(ctx context.Context, zoneID string) (core.Zone, error) {
-	zoneID = strings.TrimSpace(zoneID)
-	if zoneID == "" {
+	if strings.TrimSpace(zoneID) == "" {
 		return core.Zone{}, core.NewError(core.ErrValidation, operationGetZone, "", 0, errors.New("zone ID is required"))
 	}
-	response, err := readCall(p, ctx, operationGetZone, func(client *dns.DnsClient) (*model.ShowPublicZoneResponse, error) {
+	response, zoneMetadata, err := readCall(p, ctx, operationGetZone, func(client *dns.DnsClient) (*model.ShowPublicZoneResponse, error) {
 		return client.ShowPublicZone(&model.ShowPublicZoneRequest{ZoneId: zoneID})
 	})
 	if err != nil {
 		return core.Zone{}, err
 	}
-	nameserverResponse, err := readCall(p, ctx, operationGetZone, func(client *dns.DnsClient) (*model.ShowPublicZoneNameServerResponse, error) {
+	nameserverResponse, _, err := readCall(p, ctx, operationGetZone, func(client *dns.DnsClient) (*model.ShowPublicZoneNameServerResponse, error) {
 		return client.ShowPublicZoneNameServer(&model.ShowPublicZoneNameServerRequest{ZoneId: zoneID})
 	})
 	if err != nil {
@@ -132,27 +150,30 @@ func (p *Provider) GetZone(ctx context.Context, zoneID string) (core.Zone, error
 	}
 	zone, err := mapShowPublicZone(response, nameserverResponse.Nameservers)
 	if err != nil {
-		return core.Zone{}, p.providerPayloadError(operationGetZone, err)
+		return core.Zone{}, p.providerPayloadError(operationGetZone, zoneMetadata, err)
 	}
 	return zone, nil
 }
-
 func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, pageRequest core.PageRequest) (core.Page[core.RecordSet], error) {
-	zoneID = strings.TrimSpace(zoneID)
-	if zoneID == "" {
+	if strings.TrimSpace(zoneID) == "" {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, errors.New("zone ID is required"))
 	}
 	normalized, err := core.NormalizePageRequest(pageRequest)
 	if err != nil {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
 	}
+	cursorScope := operationListRecordSets + ":" + zoneID
+	marker, err := decodeMarkerCursor(normalized.Cursor, cursorScope)
+	if err != nil {
+		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
+	}
 	limit := int32(min(normalized.Limit, huaweiMaximumPageLimit))
 	zoneType := "public"
 	request := &model.ListRecordSetsWithLineRequest{ZoneType: &zoneType, ZoneId: &zoneID, Limit: &limit}
-	if normalized.Cursor != "" {
-		request.Marker = &normalized.Cursor
+	if marker != "" {
+		request.Marker = &marker
 	}
-	response, err := readCall(p, ctx, operationListRecordSets, func(client *dns.DnsClient) (*model.ListRecordSetsWithLineResponse, error) {
+	response, metadata, err := readCall(p, ctx, operationListRecordSets, func(client *dns.DnsClient) (*model.ListRecordSetsWithLineResponse, error) {
 		return client.ListRecordSetsWithLine(request)
 	})
 	if err != nil {
@@ -167,28 +188,29 @@ func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, pageReques
 	for index := range source {
 		items[index], err = mapQueryRecordSet(source[index])
 		if err != nil {
-			return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, err)
+			return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, metadata, err)
 		}
 	}
-	page := core.Page[core.RecordSet]{Items: items, NextCursor: nextMarker(response.Links, recordSetIDs(source))}
+	nextCursor, err := nextMarkerCursor(response.Links, recordSetIDs(source), cursorScope)
+	if err != nil {
+		return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, metadata, err)
+	}
+	page := core.Page[core.RecordSet]{Items: items, NextCursor: nextCursor}
 	if err = core.ValidatePage(normalized, page); err != nil {
-		return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, err)
+		return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, metadata, err)
 	}
 	return page, nil
 }
 
 func (p *Provider) GetRecordSet(ctx context.Context, zoneID, recordSetID string) (core.RecordSet, error) {
-	recordSet, _, err := p.getRecordSet(ctx, zoneID, recordSetID)
+	recordSet, _, err := p.getRecordSet(ctx, zoneID, recordSetID, operationGetRecordSet)
 	return recordSet, err
 }
-
-func (p *Provider) getRecordSet(ctx context.Context, zoneID, recordSetID string) (core.RecordSet, string, error) {
-	zoneID = strings.TrimSpace(zoneID)
-	recordSetID = strings.TrimSpace(recordSetID)
-	if zoneID == "" || recordSetID == "" {
-		return core.RecordSet{}, "", core.NewError(core.ErrValidation, operationGetRecordSet, "", 0, errors.New("zone ID and record set ID are required"))
+func (p *Provider) getRecordSet(ctx context.Context, zoneID, recordSetID, operation string) (core.RecordSet, string, error) {
+	if strings.TrimSpace(zoneID) == "" || strings.TrimSpace(recordSetID) == "" {
+		return core.RecordSet{}, "", core.NewError(core.ErrValidation, operation, "", 0, errors.New("zone ID and record set ID are required"))
 	}
-	response, err := readCall(p, ctx, operationGetRecordSet, func(client *dns.DnsClient) (*model.ShowRecordSetWithLineResponse, error) {
+	response, metadata, err := readCall(p, ctx, operation, func(client *dns.DnsClient) (*model.ShowRecordSetWithLineResponse, error) {
 		return client.ShowRecordSetWithLine(&model.ShowRecordSetWithLineRequest{ZoneId: zoneID, RecordsetId: recordSetID})
 	})
 	if err != nil {
@@ -196,7 +218,7 @@ func (p *Provider) getRecordSet(ctx context.Context, zoneID, recordSetID string)
 	}
 	recordSet, zoneName, err := mapShowRecordSet(response)
 	if err != nil {
-		return core.RecordSet{}, "", p.providerPayloadError(operationGetRecordSet, err)
+		return core.RecordSet{}, "", p.providerPayloadError(operation, metadata, err)
 	}
 	return recordSet, zoneName, nil
 }
@@ -227,53 +249,55 @@ func (p *Provider) newSDKClient(ctx context.Context) (*dns.DnsClient, *responseM
 	return dns.NewDnsClient(httpClient), metadata, nil
 }
 
-func readCall[T any](p *Provider, ctx context.Context, operation string, call func(*dns.DnsClient) (*T, error)) (*T, error) {
+func readCall[T any](p *Provider, ctx context.Context, operation string, call func(*dns.DnsClient) (*T, error)) (*T, *responseMetadata, error) {
 	var lastError error
-	for attempt := 0; attempt < readAttempts; attempt++ {
+	var lastMetadata *responseMetadata
+	for attempt := range readAttempts {
 		if err := ctx.Err(); err != nil {
-			return nil, core.NewError(core.ErrTimeout, operation, "", 0, err)
+			return nil, lastMetadata, core.NewError(core.ErrTimeout, operation, "", 0, err)
 		}
 		client, metadata, err := p.newSDKClient(ctx)
+		lastMetadata = metadata
 		if err == nil {
 			var response *T
 			response, err = call(client)
 			if err == nil {
-				return response, nil
+				return response, metadata, nil
 			}
 		}
-		mapped := p.mapError(err, operation, metadata)
+		mapped := p.mapError(ctx, err, operation, metadata)
 		lastError = mapped
-		if attempt == readAttempts-1 || !retryableReadError(mapped) {
-			return nil, mapped
+		if attempt == readAttempts-1 || !retryableReadError(mapped) || mapped.RetryAfter > time.Second {
+			return nil, metadata, mapped
 		}
 		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
 		if mapped.RetryAfter > delay {
-			delay = min(mapped.RetryAfter, time.Second)
+			delay = mapped.RetryAfter
 		}
 		if err = waitContext(ctx, delay); err != nil {
-			return nil, core.NewError(core.ErrTimeout, operation, "", 0, err)
+			return nil, metadata, core.NewError(core.ErrTimeout, operation, mapped.ProviderRequestID, mapped.RetryAfter, err)
 		}
 	}
-	return nil, lastError
+	return nil, lastMetadata, lastError
 }
 
-func mutationCall[T any](p *Provider, ctx context.Context, operation string, call func(*dns.DnsClient) (*T, error)) (*T, error) {
+func mutationCall[T any](p *Provider, ctx context.Context, operation string, call func(*dns.DnsClient) (*T, error)) (*T, *responseMetadata, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, core.NewError(core.ErrTimeout, operation, "", 0, err)
+		return nil, nil, core.NewError(core.ErrTimeout, operation, "", 0, err)
 	}
 	client, metadata, err := p.newSDKClient(ctx)
 	if err != nil {
-		return nil, p.mapError(err, operation, metadata)
+		return nil, metadata, p.mapError(ctx, err, operation, metadata)
 	}
 	response, err := call(client)
 	if err != nil {
-		return nil, p.mapError(err, operation, metadata)
+		return nil, metadata, p.mapError(ctx, err, operation, metadata)
 	}
-	return response, nil
+	return response, metadata, nil
 }
 
 func retryableReadError(err *core.ProviderError) bool {
-	return err != nil && (err.Code == core.ErrRateLimited || err.Code == core.ErrUpstream)
+	return err != nil && (err.Code == core.ErrRateLimited || err.Code == core.ErrTimeout || err.Code == core.ErrUpstream)
 }
 
 func waitContext(ctx context.Context, delay time.Duration) error {
@@ -305,11 +329,44 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	return when.Sub(now)
 }
 
-func nextMarker(links *model.PageLink, ids []string) string {
+func nextMarkerCursor(links *model.PageLink, ids []string, scope string) (string, error) {
 	if links == nil || links.Next == nil || strings.TrimSpace(*links.Next) == "" || len(ids) == 0 {
-		return ""
+		return "", nil
 	}
-	return ids[len(ids)-1]
+	return encodeMarkerCursor(scope, ids[len(ids)-1])
+}
+
+func encodeMarkerCursor(scope, marker string) (string, error) {
+	if scope == "" || marker == "" {
+		return "", errors.New("Huawei Cloud pagination cursor payload is incomplete")
+	}
+	payload, err := json.Marshal(markerCursorPayload{Scope: scope, Marker: marker})
+	if err != nil {
+		return "", fmt.Errorf("encode Huawei Cloud pagination cursor: %w", err)
+	}
+	return markerCursorPrefix + base64.RawURLEncoding.EncodeToString(payload), nil
+}
+
+func decodeMarkerCursor(cursor, scope string) (string, error) {
+	if cursor == "" {
+		return "", nil
+	}
+	if cursor != strings.TrimSpace(cursor) || !strings.HasPrefix(cursor, markerCursorPrefix) {
+		return "", errors.New("Huawei Cloud pagination cursor is invalid")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(cursor, markerCursorPrefix))
+	if err != nil {
+		return "", errors.New("Huawei Cloud pagination cursor is invalid")
+	}
+	var payload markerCursorPayload
+	if err = json.Unmarshal(payloadBytes, &payload); err != nil || payload.Scope != scope || payload.Marker == "" {
+		return "", errors.New("Huawei Cloud pagination cursor is invalid for this collection")
+	}
+	canonical, err := encodeMarkerCursor(payload.Scope, payload.Marker)
+	if err != nil || canonical != cursor {
+		return "", errors.New("Huawei Cloud pagination cursor is non-canonical")
+	}
+	return payload.Marker, nil
 }
 
 func zoneIDs(zones []model.PublicZoneResp) []string {

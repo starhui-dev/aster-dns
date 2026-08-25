@@ -1,9 +1,11 @@
 package huawei
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -97,9 +99,22 @@ func (*Factory) Capabilities() core.Capabilities {
 		SupportsRecordStatus:    true,
 		ExtensionFields: []core.ExtensionFieldDescriptor{
 			{
+				Namespace: Type, Scope: core.ExtensionScopeZone, Key: "zone_type", Label: "Zone type",
+				Type: core.DescriptorFieldEnum, ReadOnly: true,
+				Options: []core.DescriptorOption{{Value: "public", Label: "Public"}},
+			},
+			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordSet, Key: "status", Label: "Status",
 				Type:    core.DescriptorFieldEnum,
 				Options: []core.DescriptorOption{{Value: "ENABLE", Label: "Enabled"}, {Value: "DISABLE", Label: "Paused"}},
+			},
+			{
+				Namespace: Type, Scope: core.ExtensionScopeRecordSet, Key: "provider_status", Label: "Provider lifecycle status",
+				Type: core.DescriptorFieldString, ReadOnly: true,
+			},
+			{
+				Namespace: Type, Scope: core.ExtensionScopeRecordSet, Key: "default", Label: "System default record set",
+				Type: core.DescriptorFieldBoolean, ReadOnly: true,
 			},
 			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordEntry, Key: "line", Label: "Routing line ID",
@@ -148,7 +163,8 @@ func (f *Factory) Build(ctx context.Context, config core.AccountConfig, credenti
 	}
 	sdkCredential, err := credentialBuilder.SafeBuild()
 	if err != nil {
-		return nil, core.NewError(core.ErrAuthentication, "build_client", "", 0, err)
+		redacted := core.Redact(err.Error(), values.AccessKey, values.SecretKey, values.SecurityToken)
+		return nil, core.NewError(core.ErrAuthentication, "build_client", "", 0, errors.New(redacted))
 	}
 
 	timeout := f.timeout
@@ -169,10 +185,14 @@ func decodeOptions(raw json.RawMessage, destination any) error {
 	if len(raw) == 0 {
 		return errors.New("Huawei Cloud account options are required")
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
 		return errors.New("decode Huawei Cloud account options")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("Huawei Cloud account options must contain one JSON value")
 	}
 	return nil
 }

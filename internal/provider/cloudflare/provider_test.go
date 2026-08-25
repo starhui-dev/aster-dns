@@ -61,19 +61,22 @@ type capturedRequest struct {
 }
 
 type cloudflareFixture struct {
-	t            *testing.T
-	server       *httptest.Server
-	mu           sync.Mutex
-	zones        []fixtureZone
-	records      map[string][]fixtureRecord
-	failures     map[string][]fixtureFailure
-	requests     []capturedRequest
-	nextID       int
-	nextVersion  int64
-	pageSize     int
-	delay        time.Duration
-	requestStart chan struct{}
-	startOnce    sync.Once
+	t                 *testing.T
+	server            *httptest.Server
+	mu                sync.Mutex
+	zones             []fixtureZone
+	records           map[string][]fixtureRecord
+	failures          map[string][]fixtureFailure
+	requests          []capturedRequest
+	nextID            int
+	nextVersion       int64
+	pageSize          int
+	delay             time.Duration
+	repeatZonePages   bool
+	recordAfterCreate *fixtureRecord
+	recordAfterDelete *fixtureRecord
+	requestStart      chan struct{}
+	startOnce         sync.Once
 }
 
 func newCloudflareFixture(t *testing.T) *cloudflareFixture {
@@ -105,8 +108,12 @@ func newCloudflareFixture(t *testing.T) *cloudflareFixture {
 }
 
 func (f *cloudflareFixture) provider(t *testing.T) *Provider {
+	return f.providerWithTimeout(t, 2*time.Second)
+}
+
+func (f *cloudflareFixture) providerWithTimeout(t *testing.T, timeout time.Duration) *Provider {
 	t.Helper()
-	factory := &Factory{baseURL: f.server.URL, httpClient: f.server.Client(), timeout: 2 * time.Second}
+	factory := &Factory{baseURL: f.server.URL, httpClient: f.server.Client(), timeout: timeout}
 	built, err := factory.Build(context.Background(), core.AccountConfig{
 		ID: "00000000-0000-7000-8000-000000000005", Type: Type, Name: "fixture", Options: json.RawMessage(`{}`), CredentialRevision: 1,
 	}, core.NewCredential([]byte(`{"api_token":"`+fixtureToken+`"}`)))
@@ -183,6 +190,9 @@ func (f *cloudflareFixture) handleListZones(response http.ResponseWriter, query 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	page, start, end, totalPages := fixturePage(query, f.pageSize, len(f.zones))
+	if f.repeatZonePages && page > 1 && len(f.zones) > 0 {
+		start, end = 0, 1
+	}
 	result := make([]map[string]any, 0, end-start)
 	for _, zone := range f.zones[start:end] {
 		result = append(result, zonePayload(zone))
@@ -250,6 +260,10 @@ func (f *cloudflareFixture) handleCreateRecord(response http.ResponseWriter, req
 		record.TTL = 1
 	}
 	f.records[zoneID] = append(f.records[zoneID], record)
+	if f.recordAfterCreate != nil {
+		f.records[zoneID] = append(f.records[zoneID], *f.recordAfterCreate)
+		f.recordAfterCreate = nil
+	}
 	writeFixtureEnvelope(response, recordPayload(record), 0, 0, 0, 0)
 }
 
@@ -292,6 +306,10 @@ func (f *cloudflareFixture) handleDeleteRecord(response http.ResponseWriter, zon
 	for index := range f.records[zoneID] {
 		if f.records[zoneID][index].ID == recordID {
 			f.records[zoneID] = slices.Delete(f.records[zoneID], index, index+1)
+			if f.recordAfterDelete != nil {
+				f.records[zoneID] = append(f.records[zoneID], *f.recordAfterDelete)
+				f.recordAfterDelete = nil
+			}
 			writeFixtureEnvelope(response, map[string]any{"id": recordID}, 0, 0, 0, 0)
 			return
 		}
@@ -432,6 +450,31 @@ func TestListZonesAndRecordsUseAllProviderPages(t *testing.T) {
 		t.Fatalf("record pagination = %#v, requests=%d", sets, fixture.requestCount(http.MethodGet, "/zones/zone-1/dns_records"))
 	}
 }
+func TestPaginationCursorsAreScopedToCollectionAndZone(t *testing.T) {
+	fixture := newCloudflareFixture(t)
+	provider := fixture.provider(t)
+	zones, err := provider.ListZones(context.Background(), core.PageRequest{Limit: 1})
+	if err != nil || zones.NextCursor == "" {
+		t.Fatalf("zone cursor = %q, err = %v", zones.NextCursor, err)
+	}
+	records, err := provider.ListRecordSets(context.Background(), "zone-1", core.PageRequest{Limit: 1})
+	if err != nil || records.NextCursor == "" {
+		t.Fatalf("record cursor = %q, err = %v", records.NextCursor, err)
+	}
+	if _, err = provider.ListRecordSets(context.Background(), "zone-1", core.PageRequest{Cursor: zones.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("zone cursor accepted for records: %v", err)
+	}
+	if _, err = provider.ListZones(context.Background(), core.PageRequest{Cursor: records.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("record cursor accepted for zones: %v", err)
+	}
+	if _, err = provider.ListRecordSets(context.Background(), "zone-2", core.PageRequest{Cursor: records.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("zone-1 cursor accepted for zone-2: %v", err)
+	}
+	secondZones, err := provider.ListZones(context.Background(), core.PageRequest{Cursor: zones.NextCursor, Limit: 1})
+	if err != nil || len(secondZones.Items) != 1 || secondZones.Items[0].ID != "zone-2" || secondZones.NextCursor != "" {
+		t.Fatalf("second zone page = %#v, %v", secondZones, err)
+	}
+}
 
 func TestRecordMappingPreservesProxyAutoTTLAndOpaqueIDs(t *testing.T) {
 	fixture := newCloudflareFixture(t)
@@ -560,7 +603,10 @@ func TestHTTPErrorTaxonomy(t *testing.T) {
 	for _, test := range tests {
 		t.Run(strconv.Itoa(test.status), func(t *testing.T) {
 			fixture := newCloudflareFixture(t)
-			fixture.failNext(http.MethodGet, "/zones/zone-1", fixtureFailure{Status: test.status, Code: test.providerCode, Message: "fixture failure"})
+			failure := fixtureFailure{Status: test.status, Code: test.providerCode, Message: "fixture failure"}
+			fixture.failNext(http.MethodGet, "/zones/zone-1", failure)
+			fixture.failNext(http.MethodGet, "/zones/zone-1", failure)
+			fixture.failNext(http.MethodGet, "/zones/zone-1", failure)
 			_, err := fixture.provider(t).GetZone(context.Background(), "zone-1")
 			if !core.IsErrorCode(err, test.code) {
 				t.Fatalf("status %d error = %v", test.status, err)
@@ -579,8 +625,9 @@ func TestTokenCanaryIsRedacted(t *testing.T) {
 	if !errors.As(err, &providerError) {
 		t.Fatalf("error type = %T", err)
 	}
-	if providerError.Cause == nil || strings.Contains(providerError.Cause.Error(), fixtureToken) || !strings.Contains(providerError.Cause.Error(), "[REDACTED]") {
-		t.Fatalf("redacted cause = %v", providerError.Cause)
+	cause := errors.Unwrap(providerError)
+	if cause == nil || strings.Contains(cause.Error(), fixtureToken) || !strings.Contains(cause.Error(), "[REDACTED]") {
+		t.Fatalf("redacted cause = %v", cause)
 	}
 }
 

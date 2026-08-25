@@ -28,7 +28,7 @@ type ProviderError struct {
 	ProviderRequestID string
 	RetryAfter        time.Duration
 	Operation         string
-	Cause             error
+	cause             error
 }
 
 func (e *ProviderError) Error() string {
@@ -40,12 +40,15 @@ func (e *ProviderError) Error() string {
 	}
 	return defaultSafeMessage(e.Code)
 }
+func (e *ProviderError) GoString() string {
+	return e.Error()
+}
 
 func (e *ProviderError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
-	return e.Cause
+	return e.cause
 }
 
 func NewError(code ErrorCode, operation, providerRequestID string, retryAfter time.Duration, cause error) *ProviderError {
@@ -61,7 +64,7 @@ func NewError(code ErrorCode, operation, providerRequestID string, retryAfter ti
 		ProviderRequestID: safeProviderRequestID(providerRequestID),
 		RetryAfter:        retryAfter,
 		Operation:         operation,
-		Cause:             cause,
+		cause:             cause,
 	}
 }
 

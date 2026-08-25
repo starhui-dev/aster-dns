@@ -55,6 +55,8 @@ func errorCodeForResponse(status int, providerCode int64) core.ErrorCode {
 		switch providerCode {
 		case 6003, 6103, 6111, 9103, 10000:
 			return core.ErrAuthentication
+		case 81053, 81054, 81056, 81057, 81058:
+			return core.ErrConflict
 		}
 	}
 	switch status {
@@ -64,7 +66,7 @@ func errorCodeForResponse(status int, providerCode int64) core.ErrorCode {
 		return core.ErrForbidden
 	case http.StatusNotFound:
 		return core.ErrNotFound
-	case http.StatusConflict:
+	case http.StatusConflict, http.StatusPreconditionFailed:
 		return core.ErrConflict
 	case http.StatusTooManyRequests:
 		return core.ErrRateLimited
@@ -72,7 +74,7 @@ func errorCodeForResponse(status int, providerCode int64) core.ErrorCode {
 		return core.ErrValidation
 	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
 		return core.ErrTimeout
-	case http.StatusNotImplemented:
+	case http.StatusMethodNotAllowed, http.StatusNotImplemented:
 		return core.ErrUnsupported
 	default:
 		return core.ErrUpstream

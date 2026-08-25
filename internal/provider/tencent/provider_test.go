@@ -43,6 +43,7 @@ type fixtureRecord struct {
 	LineID    string
 	Status    string
 	Weight    *uint64
+	Remark    string
 	UpdatedOn string
 }
 
@@ -50,6 +51,8 @@ type fixtureFailure struct {
 	code      string
 	message   string
 	requestID string
+	status    int
+	headers   http.Header
 	err       error
 }
 
@@ -88,7 +91,7 @@ func newTencentFixture(t *testing.T) *tencentFixture {
 				{ID: 102, DomainID: 1, Name: "a", Type: "A", Value: "192.0.2.2", TTL: 300, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, Weight: &weight80, UpdatedOn: "2026-08-25 01:00:02"},
 				{ID: 103, DomainID: 1, Name: "a", Type: "A", Value: "192.0.2.3", TTL: 300, Line: "电信", LineID: "10=0", Status: statusEnable, UpdatedOn: "2026-08-25 01:00:03"},
 				{ID: 104, DomainID: 1, Name: "disabled", Type: "A", Value: "192.0.2.4", TTL: 300, Line: defaultLine, LineID: defaultLineID, Status: statusDisable, UpdatedOn: "2026-08-25 01:00:04"},
-				{ID: 105, DomainID: 1, Name: "txt", Type: "TXT", Value: "v=spf1 a mx -all", TTL: 600, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, UpdatedOn: "2026-08-25 01:00:05"},
+				{ID: 105, DomainID: 1, Name: "txt", Type: "TXT", Value: "v=spf1 a mx -all", TTL: 600, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, Remark: "managed SPF", UpdatedOn: "2026-08-25 01:00:05"},
 				{ID: 106, DomainID: 1, Name: "@", Type: "MX", Value: "mail.example.com", TTL: 600, MX: 10, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, UpdatedOn: "2026-08-25 01:00:06"},
 				{ID: 107, DomainID: 1, Name: "z-sip._tcp", Type: "SRV", Value: "1 5 5060 sip.example.com", TTL: 600, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, UpdatedOn: "2026-08-25 01:00:07"},
 				{ID: 108, DomainID: 1, Name: "@", Type: "CAA", Value: `0 issue "letsencrypt.org"`, TTL: 600, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, UpdatedOn: "2026-08-25 01:00:08"},
@@ -161,9 +164,17 @@ func (f *tencentFixture) RoundTrip(request *http.Request) (*http.Response, error
 		if failure.err != nil {
 			return nil, failure.err
 		}
-		return fixtureHTTPResponse(request, map[string]any{"Response": map[string]any{
+		response := fixtureHTTPResponse(request, map[string]any{"Response": map[string]any{
 			"Error": map[string]any{"Code": failure.code, "Message": failure.message}, "RequestId": failure.requestID,
-		}}), nil
+		}})
+		if failure.status != 0 {
+			response.StatusCode = failure.status
+			response.Status = fmt.Sprintf("%d %s", failure.status, http.StatusText(failure.status))
+		}
+		for key, values := range failure.headers {
+			response.Header[key] = append([]string(nil), values...)
+		}
+		return response, nil
 	}
 
 	f.mu.Lock()
@@ -212,19 +223,13 @@ func (f *tencentFixture) handleLocked(action string, payload map[string]any) map
 		return map[string]any{
 			"RecordList": items, "RecordCountInfo": map[string]any{"ListCount": end - start, "TotalCount": len(records)}, "RequestId": "request-record-list",
 		}
-	case "DescribeRecord":
-		record, ok := f.findRecordLocked(uintField(payload, "DomainId"), uintField(payload, "RecordId"))
-		if !ok {
-			return errorPayload("ResourceNotFound.NoDataOfRecord", "record not found", "request-record-missing")
-		}
-		return map[string]any{"RecordInfo": recordInfoPayload(record), "RequestId": "request-record-info"}
 	case "CreateRecord":
 		f.nextUpdate++
 		record := fixtureRecord{
 			ID: f.nextRecordID, DomainID: uintField(payload, "DomainId"), Name: stringField(payload, "SubDomain"),
 			Type: stringField(payload, "RecordType"), Value: stringField(payload, "Value"), TTL: uintField(payload, "TTL"), MX: uintField(payload, "MX"),
 			Line: stringField(payload, "RecordLine"), LineID: stringField(payload, "RecordLineId"), Status: stringField(payload, "Status"),
-			Weight: optionalUintField(payload, "Weight"), UpdatedOn: fmt.Sprintf("2026-08-25 02:%02d:00", f.nextUpdate),
+			Remark: stringField(payload, "Remark"), Weight: optionalUintField(payload, "Weight"), UpdatedOn: fmt.Sprintf("2026-08-25 02:%02d:00", f.nextUpdate),
 		}
 		if record.Line == "" {
 			record.Line = defaultLine
@@ -255,6 +260,9 @@ func (f *tencentFixture) handleLocked(action string, payload map[string]any) map
 			record.LineID = stringField(payload, "RecordLineId")
 			record.Status = stringField(payload, "Status")
 			record.Weight = optionalUintField(payload, "Weight")
+			if _, exists := payload["Remark"]; exists {
+				record.Remark = stringField(payload, "Remark")
+			}
 			record.UpdatedOn = fmt.Sprintf("2026-08-25 03:%02d:00", f.nextUpdate)
 			return map[string]any{"RecordId": record.ID, "RequestId": "request-record-modify"}
 		}
@@ -304,38 +312,13 @@ func domainInfoPayload(domain fixtureDomain) map[string]any {
 
 func recordListPayload(record fixtureRecord) map[string]any {
 	payload := map[string]any{
-		"RecordId": record.ID, "Value": record.Value, "Status": record.Status, "UpdatedOn": record.UpdatedOn,
+		"RecordId": record.ID, "Value": record.Value, "Status": record.Status, "Remark": record.Remark, "UpdatedOn": record.UpdatedOn,
 		"Name": record.Name, "Line": record.Line, "LineId": record.LineID, "Type": record.Type, "TTL": record.TTL, "MX": record.MX,
 	}
 	if record.Weight != nil {
 		payload["Weight"] = *record.Weight
 	}
 	return payload
-}
-
-func recordInfoPayload(record fixtureRecord) map[string]any {
-	enabled := uint64(0)
-	if record.Status == statusEnable {
-		enabled = 1
-	}
-	payload := map[string]any{
-		"Id": record.ID, "SubDomain": record.Name, "RecordType": record.Type, "RecordLine": record.Line,
-		"RecordLineId": record.LineID, "Value": record.Value, "MX": record.MX, "TTL": record.TTL,
-		"Enabled": enabled, "UpdatedOn": record.UpdatedOn,
-	}
-	if record.Weight != nil {
-		payload["Weight"] = *record.Weight
-	}
-	return payload
-}
-
-func (f *tencentFixture) findRecordLocked(domainID, recordID uint64) (fixtureRecord, bool) {
-	for _, record := range f.records[domainID] {
-		if record.ID == recordID {
-			return record, true
-		}
-	}
-	return fixtureRecord{}, false
 }
 
 func (f *tencentFixture) fail(action string, failures ...fixtureFailure) {
@@ -428,10 +411,26 @@ func TestFactoryMetadataAndCapabilities(t *testing.T) {
 	if err := capabilities.Validate(); err != nil {
 		t.Fatalf("capabilities: %v", err)
 	}
-	if !capabilities.SupportsRoutingLine || !capabilities.SupportsWeight || !capabilities.SupportsRecordStatus || capabilities.NativeRecordGranularity != core.NativeRecordGranularityEntry {
+	if !capabilities.SupportsRoutingLine || !capabilities.SupportsWeight || !capabilities.SupportsRecordStatus || !capabilities.SupportsComments || capabilities.NativeRecordGranularity != core.NativeRecordGranularityEntry {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
-	if len(capabilities.ExtensionFields) != 5 {
+	gradeDescriptor := false
+	weightApplicability := false
+	remarkDescriptor := false
+	for _, field := range capabilities.ExtensionFields {
+		if field.Namespace == Type && field.Scope == core.ExtensionScopeZone && field.Key == "grade" && field.ReadOnly {
+			gradeDescriptor = true
+		}
+		if field.Namespace == Type && field.Scope == core.ExtensionScopeRecordEntry && field.Key == "weight" && len(field.ApplicableWhen) == 1 {
+			values := field.ApplicableWhen[0].Values
+			weightApplicability = field.ApplicableWhen[0].Field == "type" && len(values) == 3 &&
+				values[0] == string(core.RecordTypeA) && values[1] == string(core.RecordTypeAAAA) && values[2] == string(core.RecordTypeCNAME)
+		}
+		if field.Namespace == Type && field.Scope == core.ExtensionScopeRecordEntry && field.Key == "remark" && field.Type == core.DescriptorFieldString && !field.ReadOnly {
+			remarkDescriptor = true
+		}
+	}
+	if len(capabilities.ExtensionFields) != 7 || !gradeDescriptor || !weightApplicability || !remarkDescriptor {
 		t.Fatalf("extension descriptors = %#v", capabilities.ExtensionFields)
 	}
 }
@@ -518,6 +517,15 @@ func TestZoneAndRecordPaginationTraverseNativePages(t *testing.T) {
 	if request := fixture.lastRequest("DescribeRecordList"); uintField(request.payload, "Offset") != tencentRecordPageSize || uintField(request.payload, "Limit") != tencentRecordPageSize {
 		t.Fatalf("last native record request = %#v", request.payload)
 	}
+	if _, err = provider.ListRecordSets(context.Background(), "1", core.PageRequest{Cursor: firstZones.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("zone cursor accepted for records: %v", err)
+	}
+	if _, err = provider.ListZones(context.Background(), core.PageRequest{Cursor: firstRecords.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("record cursor accepted for zones: %v", err)
+	}
+	if _, err = provider.ListRecordSets(context.Background(), "2", core.PageRequest{Cursor: firstRecords.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("zone-1 cursor accepted for zone-2: %v", err)
+	}
 }
 
 func TestRecordFixturesPreserveLineWeightStatusAndRoutingGroups(t *testing.T) {
@@ -574,9 +582,64 @@ func TestRecordFixturesPreserveLineWeightStatusAndRoutingGroups(t *testing.T) {
 	if caa.Flags == nil || *caa.Flags != 0 || caa.Tag == nil || *caa.Tag != "issue" || caa.Value != "letsencrypt.org" {
 		t.Fatalf("CAA = %#v", caa)
 	}
+	txt := byType[core.RecordTypeTXT].Entries[0]
+	if txt.Extensions.Tencent == nil || txt.Extensions.Tencent.Remark != "managed SPF" {
+		t.Fatalf("TXT remark = %#v", txt.Extensions.Tencent)
+	}
 	disabled := findRecordSetByName(page.Items, "disabled.example.com")
 	if disabled.Extensions.Tencent == nil || disabled.Extensions.Tencent.Status != statusDisable || disabled.Entries[0].Extensions.Tencent.Status != statusDisable {
 		t.Fatalf("disabled metadata = %#v", disabled)
+	}
+	fixture.mu.Lock()
+	fixture.records[1][0].LineID = ""
+	fixture.mu.Unlock()
+	if _, err = fixture.provider(t).ListRecordSets(context.Background(), "1", core.PageRequest{Limit: 100}); !core.IsErrorCode(err, core.ErrUpstream) {
+		t.Fatalf("missing opaque routing line ID error = %v", err)
+	}
+}
+
+func TestMixedEntryStatusesRemainOneRecordSet(t *testing.T) {
+	fixture := newTencentFixture(t)
+	fixture.records[1] = append(fixture.records[1],
+		fixtureRecord{ID: 110, DomainID: 1, Name: "mixed", Type: "A", Value: "198.51.100.10", TTL: 300, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, UpdatedOn: "2026-08-25 01:00:10"},
+		fixtureRecord{ID: 111, DomainID: 1, Name: "mixed", Type: "A", Value: "198.51.100.11", TTL: 300, Line: defaultLine, LineID: defaultLineID, Status: statusDisable, UpdatedOn: "2026-08-25 01:00:11"},
+	)
+	provider := fixture.provider(t)
+	page, err := provider.ListRecordSets(context.Background(), "1", core.PageRequest{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := findRecordSetByName(page.Items, "mixed.example.com")
+	if len(current.Entries) != 2 || current.Extensions.Tencent == nil || current.Extensions.Tencent.Status != "" {
+		t.Fatalf("mixed-status record set = %#v", current)
+	}
+	statuses := map[string]string{}
+	for _, entry := range current.Entries {
+		statuses[entry.ID] = entry.Extensions.Tencent.Status
+	}
+	if statuses["110"] != statusEnable || statuses["111"] != statusDisable {
+		t.Fatalf("entry statuses = %#v", statuses)
+	}
+
+	updated, err := provider.UpdateRecordSet(context.Background(), "1", current.ID, core.UpdateRecordSetInput{
+		Desired: core.CreateRecordSetInput{
+			Name: current.Name, Type: current.Type, TTL: 600, Entries: current.Entries, Extensions: current.Extensions,
+		},
+		Precondition: core.Precondition{ExpectedFingerprint: current.Fingerprint, ProviderVersion: current.ProviderVersion},
+	})
+	if err != nil || len(updated.Entries) != 2 || updated.Extensions.Tencent == nil || updated.Extensions.Tencent.Status != "" {
+		t.Fatalf("mixed-status update = %#v, %v", updated, err)
+	}
+	requestStatuses := map[uint64]string{}
+	for _, request := range fixture.requestsFor("ModifyRecord") {
+		requestStatuses[uintField(request.payload, "RecordId")] = stringField(request.payload, "Status")
+	}
+	if requestStatuses[110] != statusEnable || requestStatuses[111] != statusDisable {
+		t.Fatalf("modify statuses = %#v", requestStatuses)
+	}
+	complete, err := provider.findFinalRecordSet(context.Background(), "example.com", 1, []string{updated.Entries[0].ID}, nil, groupKeyFromRecordSet(updated), operationUpdateRecordSet)
+	if err != nil || len(complete.Entries) != 2 {
+		t.Fatalf("complete final record set = %#v, %v", complete, err)
 	}
 }
 
@@ -598,14 +661,14 @@ func TestCreateUpdateDeleteRequestMappingAndPreconditions(t *testing.T) {
 	fixture := newTencentFixture(t)
 	provider := fixture.provider(t)
 	weight20, weight80 := uint16(20), uint16(80)
-	lineExtension := func(weight *uint16) core.RecordEntryExtensions {
-		return core.RecordEntryExtensions{Tencent: &core.TencentRecordEntryExtensions{Line: "电信", LineID: "10=0", Weight: weight, Status: statusDisable}}
+	lineExtension := func(weight *uint16, remark string) core.RecordEntryExtensions {
+		return core.RecordEntryExtensions{Tencent: &core.TencentRecordEntryExtensions{Line: "电信", LineID: "10=0", Weight: weight, Status: statusDisable, Remark: remark}}
 	}
 	created, err := provider.CreateRecordSet(context.Background(), "1", core.CreateRecordSetInput{
 		Name: "weighted", Type: core.RecordTypeA, TTL: 60,
 		Entries: []core.RecordEntry{
-			{Value: "198.51.100.10", Extensions: lineExtension(&weight20)},
-			{Value: "198.51.100.11", Extensions: lineExtension(&weight80)},
+			{Value: "198.51.100.10", Extensions: lineExtension(&weight20, "primary")},
+			{Value: "198.51.100.11", Extensions: lineExtension(&weight80, "secondary")},
 		},
 		Extensions: core.RecordSetExtensions{Tencent: &core.TencentRecordSetExtensions{Status: statusDisable}},
 	})
@@ -619,8 +682,9 @@ func TestCreateUpdateDeleteRequestMappingAndPreconditions(t *testing.T) {
 	if len(createRequests) != 2 {
 		t.Fatalf("create requests = %#v", createRequests)
 	}
+	createRemarks := []string{"primary", "secondary"}
 	for index, request := range createRequests {
-		if stringField(request.payload, "SubDomain") != "weighted" || stringField(request.payload, "RecordType") != "A" || uintField(request.payload, "TTL") != 60 || stringField(request.payload, "RecordLine") != "电信" || stringField(request.payload, "RecordLineId") != "10=0" || stringField(request.payload, "Status") != statusDisable {
+		if stringField(request.payload, "SubDomain") != "weighted" || stringField(request.payload, "RecordType") != "A" || uintField(request.payload, "TTL") != 60 || stringField(request.payload, "RecordLine") != "电信" || stringField(request.payload, "RecordLineId") != "10=0" || stringField(request.payload, "Status") != statusDisable || stringField(request.payload, "Remark") != createRemarks[index] {
 			t.Fatalf("create payload %d = %#v", index, request.payload)
 		}
 	}
@@ -639,13 +703,14 @@ func TestCreateUpdateDeleteRequestMappingAndPreconditions(t *testing.T) {
 
 	first := created.Entries[0]
 	first.Value = "198.51.100.20"
+	first.Extensions.Tencent.Remark = "primary-updated"
 	thirdWeight := uint16(30)
 	updated, err := provider.UpdateRecordSet(context.Background(), "1", created.ID, core.UpdateRecordSetInput{
 		Desired: core.CreateRecordSetInput{
 			Name: created.Name, Type: created.Type, TTL: 120,
 			Entries: []core.RecordEntry{
 				first,
-				{Value: "198.51.100.30", Extensions: lineExtension(&thirdWeight)},
+				{Value: "198.51.100.30", Extensions: lineExtension(&thirdWeight, "tertiary")},
 			},
 			Extensions: created.Extensions,
 		},
@@ -654,8 +719,15 @@ func TestCreateUpdateDeleteRequestMappingAndPreconditions(t *testing.T) {
 	if err != nil || updated.TTL != 120 || len(updated.Entries) != 2 {
 		t.Fatalf("update = %#v, %v", updated, err)
 	}
+	updatedRemarks := make(map[string]string, len(updated.Entries))
+	for _, entry := range updated.Entries {
+		updatedRemarks[entry.Value] = entry.Extensions.Tencent.Remark
+	}
+	if updatedRemarks["198.51.100.20"] != "primary-updated" || updatedRemarks["198.51.100.30"] != "tertiary" {
+		t.Fatalf("updated remarks = %#v", updatedRemarks)
+	}
 	modifyRequest := fixture.lastRequest("ModifyRecord")
-	if uintField(modifyRequest.payload, "RecordId") == 0 || stringField(modifyRequest.payload, "Value") != "198.51.100.20" || uintField(modifyRequest.payload, "TTL") != 120 {
+	if uintField(modifyRequest.payload, "RecordId") == 0 || stringField(modifyRequest.payload, "Value") != "198.51.100.20" || uintField(modifyRequest.payload, "TTL") != 120 || stringField(modifyRequest.payload, "Remark") != "primary-updated" {
 		t.Fatalf("modify payload = %#v", modifyRequest.payload)
 	}
 	if fixture.count("DeleteRecord") != 1 || fixture.count("CreateRecord") != 3 {
@@ -678,6 +750,7 @@ func TestCreateUpdateDeleteRequestMappingAndPreconditions(t *testing.T) {
 }
 
 func TestTencentProviderSpecificValidation(t *testing.T) {
+	validWeight := uint16(1)
 	tests := []struct {
 		name  string
 		input core.CreateRecordSetInput
@@ -691,6 +764,9 @@ func TestTencentProviderSpecificValidation(t *testing.T) {
 		{name: "mixed_lines", input: core.CreateRecordSetInput{Name: "bad", Type: core.RecordTypeA, TTL: 600, Entries: []core.RecordEntry{
 			{Value: "192.0.2.1", Extensions: core.RecordEntryExtensions{Tencent: &core.TencentRecordEntryExtensions{Line: defaultLine, LineID: defaultLineID}}},
 			{Value: "192.0.2.2", Extensions: core.RecordEntryExtensions{Tencent: &core.TencentRecordEntryExtensions{Line: "电信", LineID: "10=0"}}},
+		}}},
+		{name: "weight_unsupported_type", input: core.CreateRecordSetInput{Name: "bad", Type: core.RecordTypeTXT, TTL: 600, Entries: []core.RecordEntry{
+			{Value: "text", Extensions: core.RecordEntryExtensions{Tencent: &core.TencentRecordEntryExtensions{Weight: &validWeight}}},
 		}}},
 	}
 	for _, test := range tests {
@@ -707,10 +783,10 @@ func TestTencentProviderSpecificValidation(t *testing.T) {
 	}
 
 	fixture := newTencentFixture(t)
-	weight := uint16(101)
+	invalidWeight := uint16(101)
 	_, err := fixture.provider(t).CreateRecordSet(context.Background(), "1", core.CreateRecordSetInput{
 		Name: "bad", Type: core.RecordTypeA, TTL: 600,
-		Entries: []core.RecordEntry{{Value: "192.0.2.1", Extensions: core.RecordEntryExtensions{Tencent: &core.TencentRecordEntryExtensions{Weight: &weight}}}},
+		Entries: []core.RecordEntry{{Value: "192.0.2.1", Extensions: core.RecordEntryExtensions{Tencent: &core.TencentRecordEntryExtensions{Weight: &invalidWeight}}}},
 	})
 	if !core.IsErrorCode(err, core.ErrValidation) || fixture.count("CreateRecord") != 0 {
 		t.Fatalf("weight validation = %v", err)
@@ -756,6 +832,22 @@ func TestTencentReadRetriesButMutationDoesNot(t *testing.T) {
 			t.Fatalf("read attempts = %d", fixture.count("DescribeDomainList"))
 		}
 	})
+	t.Run("long_retry_after", func(t *testing.T) {
+		fixture := newTencentFixture(t)
+		headers := make(http.Header)
+		headers.Set("Retry-After", "3")
+		fixture.fail("DescribeDomainList", fixtureFailure{
+			code: "RequestLimitExceeded", message: "slow down", requestID: "retry-after-request", headers: headers,
+		})
+		err := fixture.provider(t).ValidateCredentials(context.Background())
+		var providerError *core.ProviderError
+		if !errors.As(err, &providerError) || providerError.Code != core.ErrRateLimited || providerError.RetryAfter != 3*time.Second {
+			t.Fatalf("long retry-after error = %#v", err)
+		}
+		if fixture.count("DescribeDomainList") != 1 {
+			t.Fatalf("long retry-after attempts = %d", fixture.count("DescribeDomainList"))
+		}
+	})
 	t.Run("mutation", func(t *testing.T) {
 		fixture := newTencentFixture(t)
 		fixture.fail("CreateRecord",
@@ -781,13 +873,18 @@ func TestTencentErrorMappingAndRequestID(t *testing.T) {
 		want core.ErrorCode
 	}{
 		{name: "authentication", code: "AuthFailure.SecretIdNotFound", want: core.ErrAuthentication},
+		{name: "temporary_token_authentication", code: "InvalidParameter.LoginTokenIdError", want: core.ErrAuthentication},
+		{name: "login_authentication", code: "FailedOperation.LoginFailed", want: core.ErrAuthentication},
 		{name: "forbidden", code: "UnauthorizedOperation", want: core.ErrForbidden},
+		{name: "login_area_forbidden", code: "FailedOperation.LoginAreaNotAllowed", want: core.ErrForbidden},
 		{name: "not_found", code: "ResourceNotFound.DomainNotExists", want: core.ErrNotFound},
 		{name: "conflict", code: "InvalidParameter.DomainRecordExist", want: core.ErrConflict},
+		{name: "locked_domain_conflict", code: "FailedOperation.DomainIsLocked", want: core.ErrConflict},
 		{name: "rate_limit", code: "RequestLimitExceeded", want: core.ErrRateLimited},
 		{name: "validation", code: "InvalidParameterValue.DomainGradeInvalid", want: core.ErrValidation},
 		{name: "unsupported", code: "UnsupportedOperation", want: core.ErrUnsupported},
 		{name: "upstream", code: "FailedOperation.InternalError", want: core.ErrUpstream},
+		{name: "operate_failed_upstream", code: "InvalidParameter.OperateFailed", want: core.ErrUpstream},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -809,17 +906,51 @@ func TestTencentErrorMappingAndRequestID(t *testing.T) {
 	}
 }
 
+func TestTencentHTTPErrorMetadata(t *testing.T) {
+	fixture := newTencentFixture(t)
+	headers := make(http.Header)
+	headers.Set("Retry-After", "3")
+	headers.Set("X-TC-RequestId", "header-rate-request")
+	fixture.fail("CreateRecord", fixtureFailure{
+		status: http.StatusTooManyRequests, message: "rate limited", headers: headers,
+	})
+	_, err := fixture.provider(t).CreateRecordSet(context.Background(), "1", core.CreateRecordSetInput{
+		Name: "rate-limited", Type: core.RecordTypeTXT, TTL: 60, Entries: []core.RecordEntry{{Value: "value"}},
+	})
+	var providerError *core.ProviderError
+	if !errors.As(err, &providerError) || providerError.Code != core.ErrRateLimited {
+		t.Fatalf("HTTP rate-limit error = %#v", err)
+	}
+	if providerError.ProviderRequestID != "header-rate-request" || providerError.RetryAfter != 3*time.Second {
+		t.Fatalf("HTTP error metadata = %#v", providerError)
+	}
+	if fixture.count("CreateRecord") != 1 {
+		t.Fatalf("rate-limited mutation attempts = %d", fixture.count("CreateRecord"))
+	}
+}
+
 func TestTencentSecretRedaction(t *testing.T) {
 	fixture := newTencentFixture(t)
-	message := "SecretId=" + fixtureSecretID + " SecretKey=" + fixtureSecretKey
+	message := "SecretId=" + fixtureSecretID + " SecretKey=" + fixtureSecretKey +
+		" X-TC-Token=temporary-token Authorization=Bearer bearer-secret " +
+		"https://dnspod.tencentcloudapi.com/?X-TC-Token=url-token&Signature=signed-value"
 	fixture.fail("DescribeDomainList", fixtureFailure{code: "AuthFailure.SecretIdNotFound", message: message, requestID: "secret-request"})
 	err := fixture.provider(t).ValidateCredentials(context.Background())
 	var providerError *core.ProviderError
-	if !errors.As(err, &providerError) || providerError.Cause == nil {
+	if !errors.As(err, &providerError) {
 		t.Fatalf("provider error = %#v", err)
 	}
-	cause := providerError.Cause.Error()
-	if strings.Contains(cause, fixtureSecretID) || strings.Contains(cause, fixtureSecretKey) || !strings.Contains(cause, "[REDACTED]") {
+	causeError := errors.Unwrap(providerError)
+	if causeError == nil {
+		t.Fatalf("provider error cause = %#v", providerError)
+	}
+	cause := causeError.Error()
+	for _, sensitive := range []string{fixtureSecretID, fixtureSecretKey, "temporary-token", "bearer-secret", "url-token", "signed-value"} {
+		if strings.Contains(cause, sensitive) {
+			t.Fatalf("cause leaked %q: %s", sensitive, cause)
+		}
+	}
+	if !strings.Contains(cause, "[REDACTED]") {
 		t.Fatalf("cause was not redacted: %s", cause)
 	}
 	redacted := core.Redact("SecretId=unknown-id SecretKey=unknown-secret", fixtureSecretID, fixtureSecretKey)

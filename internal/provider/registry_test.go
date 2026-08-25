@@ -7,6 +7,7 @@ import (
 
 type registryTestFactory struct {
 	providerType ProviderType
+	capabilities *Capabilities
 }
 
 func (f registryTestFactory) Type() ProviderType { return f.providerType }
@@ -19,7 +20,10 @@ func (registryTestFactory) CredentialDescriptor() CredentialDescriptor {
 func (registryTestFactory) AccountOptionsDescriptor() AccountOptionsDescriptor {
 	return AccountOptionsDescriptor{}
 }
-func (registryTestFactory) Capabilities() Capabilities {
+func (f registryTestFactory) Capabilities() Capabilities {
+	if f.capabilities != nil {
+		return *f.capabilities
+	}
 	return Capabilities{SupportedRecordTypes: CoreRecordTypes(), NativeRecordGranularity: NativeRecordGranularityRRSet}
 }
 func (registryTestFactory) Build(context.Context, AccountConfig, Credential) (Provider, error) {
@@ -38,5 +42,18 @@ func TestRegistryValidatesAndSortsFactories(t *testing.T) {
 	}
 	if err = registry.Register(registryTestFactory{providerType: "alpha"}); err == nil {
 		t.Fatal("duplicate factory passed")
+	}
+}
+func TestRegistryRejectsForeignExtensionNamespaces(t *testing.T) {
+	t.Parallel()
+	capabilities := Capabilities{
+		SupportedRecordTypes:    []RecordType{RecordTypeA},
+		NativeRecordGranularity: NativeRecordGranularityRRSet,
+		ExtensionFields: []ExtensionFieldDescriptor{{
+			Namespace: "other", Scope: ExtensionScopeZone, Key: "status", Label: "Status", Type: DescriptorFieldString,
+		}},
+	}
+	if _, err := NewRegistry(registryTestFactory{providerType: "test", capabilities: &capabilities}); err == nil {
+		t.Fatal("foreign extension namespace passed")
 	}
 }

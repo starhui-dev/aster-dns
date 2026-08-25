@@ -3,8 +3,10 @@ package tencent
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,6 +46,33 @@ type Provider struct {
 	secretValues []string
 }
 
+type responseMetadata struct {
+	statusCode int
+	requestID  string
+	retryAfter time.Duration
+}
+type offsetCursorPayload struct {
+	Scope  string `json:"scope"`
+	Offset int    `json:"offset"`
+}
+
+type responseMetadataContextKey struct{}
+
+type responseMetadataRoundTripper struct {
+	base http.RoundTripper
+}
+
+func (t *responseMetadataRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := t.base.RoundTrip(request)
+	metadata, _ := request.Context().Value(responseMetadataContextKey{}).(*responseMetadata)
+	if metadata != nil && response != nil {
+		metadata.statusCode = response.StatusCode
+		metadata.requestID = responseHeaderRequestID(response.Header)
+		metadata.retryAfter = parseRetryAfter(response.Header.Get("Retry-After"), time.Now())
+	}
+	return response, err
+}
+
 func (p *Provider) Capabilities(context.Context) core.Capabilities {
 	return (&Factory{}).Capabilities()
 }
@@ -53,8 +82,8 @@ func (p *Provider) ValidateCredentials(ctx context.Context) error {
 	request.Type = common.StringPtr("ALL")
 	request.Offset = common.Int64Ptr(0)
 	request.Limit = common.Int64Ptr(1)
-	response, err := readCall(p, ctx, operationValidateCredentials, func() (*dnspod.DescribeDomainListResponse, error) {
-		return p.client.DescribeDomainListWithContext(ctx, request)
+	response, err := readCall(p, ctx, operationValidateCredentials, func(callCtx context.Context) (*dnspod.DescribeDomainListResponse, error) {
+		return p.client.DescribeDomainListWithContext(callCtx, request)
 	})
 	if err != nil {
 		return err
@@ -70,7 +99,7 @@ func (p *Provider) ListZones(ctx context.Context, pageRequest core.PageRequest) 
 	if err != nil {
 		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
 	}
-	offset, err := decodeOffsetCursor(normalized.Cursor)
+	offset, err := decodeOffsetCursor(normalized.Cursor, operationListZones)
 	if err != nil {
 		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
 	}
@@ -92,7 +121,7 @@ func (p *Provider) ListZones(ctx context.Context, pageRequest core.PageRequest) 
 		}
 		return items[i].Name < items[j].Name
 	})
-	page, err := paginate(items, normalized, offset)
+	page, err := paginate(items, normalized, offset, operationListZones)
 	if err != nil {
 		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
 	}
@@ -107,8 +136,8 @@ func (p *Provider) GetZone(ctx context.Context, zoneID string) (core.Zone, error
 	request := dnspod.NewDescribeDomainRequest()
 	request.Domain = common.StringPtr(strings.TrimSpace(stringValue(domain.Name)))
 	request.DomainId = common.Uint64Ptr(numericID)
-	response, err := readCall(p, ctx, operationGetZone, func() (*dnspod.DescribeDomainResponse, error) {
-		return p.client.DescribeDomainWithContext(ctx, request)
+	response, err := readCall(p, ctx, operationGetZone, func(callCtx context.Context) (*dnspod.DescribeDomainResponse, error) {
+		return p.client.DescribeDomainWithContext(callCtx, request)
 	})
 	if err != nil {
 		return core.Zone{}, err
@@ -131,7 +160,8 @@ func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, pageReques
 	if err != nil {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
 	}
-	offset, err := decodeOffsetCursor(normalized.Cursor)
+	cursorScope := operationListRecordSets + ":" + zoneID
+	offset, err := decodeOffsetCursor(normalized.Cursor, cursorScope)
 	if err != nil {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
 	}
@@ -147,7 +177,7 @@ func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, pageReques
 	if err != nil {
 		return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, requestID, err)
 	}
-	page, err := paginate(items, normalized, offset)
+	page, err := paginate(items, normalized, offset, cursorScope)
 	if err != nil {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
 	}
@@ -191,8 +221,7 @@ func (p *Provider) resolveZone(ctx context.Context, zoneID, operation string) (s
 }
 
 func (p *Provider) resolveDomain(ctx context.Context, zoneID, operation string) (*dnspod.DomainListItem, uint64, string, error) {
-	zoneID = strings.TrimSpace(zoneID)
-	if zoneID == "" {
+	if strings.TrimSpace(zoneID) == "" {
 		return nil, 0, "", core.NewError(core.ErrValidation, operation, "", 0, errors.New("zone ID is required"))
 	}
 	numericID, err := strconv.ParseUint(zoneID, 10, 64)
@@ -220,8 +249,8 @@ func (p *Provider) listAllDomains(ctx context.Context, operation string) ([]*dns
 		request.Type = common.StringPtr("ALL")
 		request.Offset = common.Int64Ptr(offset)
 		request.Limit = common.Int64Ptr(tencentDomainPageSize)
-		response, err := readCall(p, ctx, operation, func() (*dnspod.DescribeDomainListResponse, error) {
-			return p.client.DescribeDomainListWithContext(ctx, request)
+		response, err := readCall(p, ctx, operation, func(callCtx context.Context) (*dnspod.DescribeDomainListResponse, error) {
+			return p.client.DescribeDomainListWithContext(callCtx, request)
 		})
 		if err != nil {
 			return nil, requestID, err
@@ -260,8 +289,8 @@ func (p *Provider) listAllRecords(ctx context.Context, zoneName string, zoneID u
 		request.Offset = common.Uint64Ptr(offset)
 		request.Limit = common.Uint64Ptr(tencentRecordPageSize)
 		request.ErrorOnEmpty = common.StringPtr("no")
-		response, err := readCall(p, ctx, operation, func() (*dnspod.DescribeRecordListResponse, error) {
-			return p.client.DescribeRecordListWithContext(ctx, request)
+		response, err := readCall(p, ctx, operation, func(callCtx context.Context) (*dnspod.DescribeRecordListResponse, error) {
+			return p.client.DescribeRecordListWithContext(callCtx, request)
 		})
 		if err != nil {
 			return nil, requestID, err
@@ -289,45 +318,52 @@ func (p *Provider) listAllRecords(ctx context.Context, zoneName string, zoneID u
 	}
 }
 
-func readCall[T any](p *Provider, ctx context.Context, operation string, call func() (*T, error)) (*T, error) {
+func readCall[T any](p *Provider, ctx context.Context, operation string, call func(context.Context) (*T, error)) (*T, error) {
 	var lastError *core.ProviderError
 	for attempt := 0; attempt < readAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, core.NewError(core.ErrTimeout, operation, "", 0, err)
 		}
-		response, err := call()
+		metadata := &responseMetadata{}
+		callCtx := context.WithValue(ctx, responseMetadataContextKey{}, metadata)
+		response, err := call(callCtx)
 		if err == nil {
 			return response, nil
 		}
-		mapped := p.mapError(ctx, err, operation)
+		mapped := p.mapError(ctx, err, operation, metadata)
 		lastError = mapped
+		if mapped.RetryAfter > time.Second {
+			return nil, mapped
+		}
 		if attempt == readAttempts-1 || !retryableReadError(mapped) {
 			return nil, mapped
 		}
 		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
 		if mapped.RetryAfter > delay {
-			delay = min(mapped.RetryAfter, time.Second)
+			delay = mapped.RetryAfter
 		}
 		if err = waitContext(ctx, delay); err != nil {
-			return nil, core.NewError(core.ErrTimeout, operation, "", 0, err)
+			return nil, core.NewError(core.ErrTimeout, operation, mapped.ProviderRequestID, mapped.RetryAfter, p.sanitizedCause(err))
 		}
 	}
 	return nil, lastError
 }
 
-func mutationCall[T any](p *Provider, ctx context.Context, operation string, call func() (*T, error)) (*T, error) {
+func mutationCall[T any](p *Provider, ctx context.Context, operation string, call func(context.Context) (*T, error)) (*T, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, core.NewError(core.ErrTimeout, operation, "", 0, err)
 	}
-	response, err := call()
+	metadata := &responseMetadata{}
+	callCtx := context.WithValue(ctx, responseMetadataContextKey{}, metadata)
+	response, err := call(callCtx)
 	if err != nil {
-		return nil, p.mapError(ctx, err, operation)
+		return nil, p.mapError(ctx, err, operation, metadata)
 	}
 	return response, nil
 }
 
 func retryableReadError(err *core.ProviderError) bool {
-	return err != nil && (err.Code == core.ErrRateLimited || err.Code == core.ErrUpstream)
+	return err != nil && (err.Code == core.ErrRateLimited || err.Code == core.ErrTimeout || err.Code == core.ErrUpstream)
 }
 
 func waitContext(ctx context.Context, delay time.Duration) error {
@@ -341,30 +377,37 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func decodeOffsetCursor(cursor string) (int, error) {
-	cursor = strings.TrimSpace(cursor)
+func decodeOffsetCursor(cursor, scope string) (int, error) {
 	if cursor == "" {
 		return 0, nil
 	}
-	if !strings.HasPrefix(cursor, offsetCursorPrefix) {
+	if cursor != strings.TrimSpace(cursor) || !strings.HasPrefix(cursor, offsetCursorPrefix) {
 		return 0, errors.New("Tencent Cloud page cursor is invalid")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(cursor, offsetCursorPrefix))
 	if err != nil {
 		return 0, errors.New("Tencent Cloud page cursor is invalid")
 	}
-	offset, err := strconv.Atoi(string(decoded))
-	if err != nil || offset < 0 {
-		return 0, errors.New("Tencent Cloud page cursor is invalid")
+	var payload offsetCursorPayload
+	if err = json.Unmarshal(decoded, &payload); err != nil || payload.Scope != scope || payload.Offset < 0 {
+		return 0, errors.New("Tencent Cloud page cursor is invalid for this collection")
 	}
-	return offset, nil
+	canonical, err := encodeOffsetCursor(payload.Offset, payload.Scope)
+	if err != nil || canonical != cursor {
+		return 0, errors.New("Tencent Cloud page cursor is non-canonical")
+	}
+	return payload.Offset, nil
 }
 
-func encodeOffsetCursor(offset int) string {
-	return offsetCursorPrefix + base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(offset)))
+func encodeOffsetCursor(offset int, scope string) (string, error) {
+	encoded, err := json.Marshal(offsetCursorPayload{Scope: scope, Offset: offset})
+	if err != nil {
+		return "", fmt.Errorf("encode Tencent Cloud page cursor: %w", err)
+	}
+	return offsetCursorPrefix + base64.RawURLEncoding.EncodeToString(encoded), nil
 }
 
-func paginate[T any](items []T, request core.PageRequest, offset int) (core.Page[T], error) {
+func paginate[T any](items []T, request core.PageRequest, offset int, scope string) (core.Page[T], error) {
 	if offset > len(items) {
 		return core.Page[T]{}, errors.New("Tencent Cloud page cursor exceeds the result set")
 	}
@@ -373,7 +416,11 @@ func paginate[T any](items []T, request core.PageRequest, offset int) (core.Page
 	copy(pageItems, items[offset:end])
 	page := core.Page[T]{Items: pageItems}
 	if end < len(items) {
-		page.NextCursor = encodeOffsetCursor(end)
+		nextCursor, err := encodeOffsetCursor(end, scope)
+		if err != nil {
+			return core.Page[T]{}, err
+		}
+		page.NextCursor = nextCursor
 	}
 	if err := core.ValidatePage(request, page); err != nil {
 		return core.Page[T]{}, fmt.Errorf("Tencent Cloud page is invalid: %w", err)

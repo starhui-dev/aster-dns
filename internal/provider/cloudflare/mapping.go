@@ -114,9 +114,9 @@ func groupRecords(zoneName string, source []dns.RecordResponse) ([]core.RecordSe
 }
 
 func mapRecord(zoneName string, source dns.RecordResponse, recordType core.RecordType) (core.RecordEntry, recordGroupKey, []string, time.Time, error) {
-	recordID := strings.TrimSpace(source.ID)
-	if recordID == "" {
-		return core.RecordEntry{}, recordGroupKey{}, nil, time.Time{}, errors.New("Cloudflare DNS record ID is missing")
+	recordID := source.ID
+	if !validCloudflareOpaqueID(recordID) {
+		return core.RecordEntry{}, recordGroupKey{}, nil, time.Time{}, errors.New("Cloudflare DNS record ID is invalid")
 	}
 	name, err := core.CanonicalizeRecordName(source.Name, zoneName)
 	if err != nil {
@@ -136,7 +136,6 @@ func mapRecord(zoneName string, source dns.RecordResponse, recordType core.Recor
 		return core.RecordEntry{}, recordGroupKey{}, nil, time.Time{}, err
 	}
 	entry.ID = recordID
-	entry.Extensions.Cloudflare = &core.CloudflareRecordEntryExtensions{}
 	tags, err := recordTags(source)
 	if err != nil {
 		return core.RecordEntry{}, recordGroupKey{}, nil, time.Time{}, err
@@ -195,9 +194,12 @@ func normalizeTags(source []string) ([]string, error) {
 }
 
 func parseRecordContent(recordType core.RecordType, content string, priority float64) (core.RecordEntry, error) {
+	if recordType == core.RecordTypeTXT {
+		return core.RecordEntry{Value: content}, nil
+	}
 	content = strings.TrimSpace(content)
 	switch recordType {
-	case core.RecordTypeA, core.RecordTypeAAAA, core.RecordTypeTXT:
+	case core.RecordTypeA, core.RecordTypeAAAA:
 		return core.RecordEntry{Value: content}, nil
 	case core.RecordTypeCNAME, core.RecordTypeNS:
 		return core.RecordEntry{Target: stringPointer(content)}, nil
@@ -249,8 +251,10 @@ func parseRecordContent(recordType core.RecordType, content string, priority flo
 
 func wireRecordContent(recordType core.RecordType, entry core.RecordEntry) (string, float64, error) {
 	switch recordType {
-	case core.RecordTypeA, core.RecordTypeAAAA, core.RecordTypeTXT:
+	case core.RecordTypeA, core.RecordTypeAAAA:
 		return entry.Value, 0, nil
+	case core.RecordTypeTXT:
+		return wireTXTContent(entry.Value), 0, nil
 	case core.RecordTypeCNAME, core.RecordTypeNS:
 		return stringPointerValue(entry.Target), 0, nil
 	case core.RecordTypeMX:
@@ -262,6 +266,31 @@ func wireRecordContent(recordType core.RecordType, entry core.RecordEntry) (stri
 	default:
 		return "", 0, fmt.Errorf("unsupported Cloudflare record type %q", recordType)
 	}
+}
+
+func wireTXTContent(value string) string {
+	// Cloudflare requires an RFC 1035 quoted character string and splits values
+	// longer than 255 bytes server-side.
+	var result strings.Builder
+	result.Grow(len(value) + 2)
+	result.WriteByte('"')
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		switch {
+		case character == '"' || character == '\\':
+			result.WriteByte('\\')
+			result.WriteByte(character)
+		case character < 0x20 || character == 0x7f:
+			result.WriteByte('\\')
+			result.WriteByte('0' + character/100)
+			result.WriteByte('0' + character/10%10)
+			result.WriteByte('0' + character%10)
+		default:
+			result.WriteByte(character)
+		}
+	}
+	result.WriteByte('"')
+	return result.String()
 }
 
 func validateCloudflareInput(input core.CreateRecordSetInput, fallback recordOptions, allowReadOnly bool) (recordOptions, error) {
@@ -369,8 +398,8 @@ func encodeRecordSetID(ids []string) (string, error) {
 		return "", errors.New("Cloudflare logical record set contains no provider record IDs")
 	}
 	for _, id := range ids {
-		if strings.TrimSpace(id) == "" {
-			return "", errors.New("Cloudflare provider record ID is empty")
+		if !validCloudflareOpaqueID(id) {
+			return "", errors.New("Cloudflare provider record ID is invalid")
 		}
 	}
 	data, err := json.Marshal(ids)
@@ -381,7 +410,7 @@ func encodeRecordSetID(ids []string) (string, error) {
 }
 
 func decodeRecordSetID(id string) ([]string, error) {
-	if !strings.HasPrefix(id, recordSetIDPrefix) {
+	if id != strings.TrimSpace(id) || !strings.HasPrefix(id, recordSetIDPrefix) {
 		return nil, errors.New("Cloudflare logical record set ID is invalid")
 	}
 	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(id, recordSetIDPrefix))
@@ -394,8 +423,7 @@ func decodeRecordSetID(id string) ([]string, error) {
 	}
 	seen := make(map[string]struct{}, len(ids))
 	for _, recordID := range ids {
-		recordID = strings.TrimSpace(recordID)
-		if recordID == "" {
+		if !validCloudflareOpaqueID(recordID) {
 			return nil, errors.New("Cloudflare logical record set ID is invalid")
 		}
 		if _, exists := seen[recordID]; exists {
@@ -404,6 +432,10 @@ func decodeRecordSetID(id string) ([]string, error) {
 		seen[recordID] = struct{}{}
 	}
 	sort.Strings(ids)
+	canonical, canonicalErr := encodeRecordSetID(ids)
+	if canonicalErr != nil || canonical != id {
+		return nil, errors.New("Cloudflare logical record set ID is invalid")
+	}
 	return ids, nil
 }
 
@@ -428,7 +460,10 @@ func recordSetIntersectsIDs(recordSet core.RecordSet, ids []string) bool {
 	return false
 }
 
-func recordSetContainsIDs(recordSet core.RecordSet, ids []string) bool {
+func recordSetHasExactIDs(recordSet core.RecordSet, ids []string) bool {
+	if len(recordSet.Entries) != len(ids) {
+		return false
+	}
 	available := make(map[string]struct{}, len(recordSet.Entries))
 	for _, entry := range recordSet.Entries {
 		available[entry.ID] = struct{}{}

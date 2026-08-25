@@ -17,8 +17,8 @@ func TestCapabilityDescriptorValidation(t *testing.T) {
 		SupportsProxy:           true,
 		ExtensionFields: []ExtensionFieldDescriptor{{
 			Namespace: "cloudflare", Scope: ExtensionScopeRecordSet, Key: "proxied", Label: "Proxied",
-			Type:         DescriptorFieldBoolean,
-			RequiredWhen: []DescriptorCondition{{Field: "record_type", Values: []string{"A", "AAAA", "CNAME"}}},
+			Type:           DescriptorFieldBoolean,
+			ApplicableWhen: []DescriptorCondition{{Field: "type", Values: []string{"A", "AAAA", "CNAME"}}},
 		}},
 	}
 	if err := capabilities.Validate(); err != nil {
@@ -27,6 +27,26 @@ func TestCapabilityDescriptorValidation(t *testing.T) {
 	capabilities.SupportedRecordTypes = append(capabilities.SupportedRecordTypes, RecordTypeA)
 	if err := capabilities.Validate(); err == nil {
 		t.Fatal("duplicate record type passed")
+	}
+}
+func TestCapabilityFlagsRequireWritableDescriptors(t *testing.T) {
+	t.Parallel()
+	capabilities := Capabilities{
+		SupportedRecordTypes:    []RecordType{RecordTypeA},
+		NativeRecordGranularity: NativeRecordGranularityEntry,
+		SupportsWeight:          true,
+	}
+	if err := capabilities.Validate(); err == nil {
+		t.Fatal("weight capability without descriptor passed")
+	}
+	minimum := int64(0)
+	maximum := int64(100)
+	capabilities.ExtensionFields = []ExtensionFieldDescriptor{{
+		Namespace: "test", Scope: ExtensionScopeRecordEntry, Key: "weight", Label: "Weight",
+		Type: DescriptorFieldInteger, Minimum: &minimum, Maximum: &maximum,
+	}}
+	if err := capabilities.Validate(); err != nil {
+		t.Fatalf("weight capability with descriptor: %v", err)
 	}
 }
 

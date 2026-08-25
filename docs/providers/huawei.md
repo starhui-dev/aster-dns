@@ -90,7 +90,7 @@ Zone list、v2 recordset list 和 v2.1 recordset list 都支持：
 - `offset`：设置 marker 时不生效；
 - response `links.next`：表示仍有下一页。
 
-Adapter contract cursor 直接保存 Huawei marker。每次请求限制最大 500；若 `links.next` 存在，则以下一页 marker 继续。完整同步必须遍历到 `links.next` 为空。
+Adapter 不直接暴露 Huawei marker。公共 cursor 使用 canonical base64url envelope 保存 marker，并绑定 `list_zones` 或 `list_record_sets:<zone_id>` scope；跨集合、跨 Zone、非 canonical cursor 均返回 `validation`。每次 Provider 请求最大 500 条；`links.next` 存在时，下一页继续使用上一页最后一个资源 ID 作为原生 marker。
 
 官方来源：
 
@@ -110,7 +110,7 @@ Create 支持 `line`、`weight` 与初始 `status`（`ENABLE`/`DISABLE`）。Upd
 
 Typed mapping：
 
-- set scope：Huawei `status`，可写目标值为 `ENABLE` / `DISABLE`，read response 保留 Huawei 实际状态；
+- set scope：可写 `status` 只表示目标 `ENABLE` / `DISABLE`；只读 `provider_status` 保留 `ACTIVE`、`PENDING_*`、`FREEZE`、`ERROR` 等真实生命周期；只读 `default` 标识系统默认、不可修改/删除的 RRSet；
 - entry scope：Huawei `line`、`weight`。同一原生 Huawei RRSet 的每个 entry 继承相同 line/weight，便于统一 domain model 保留 vendor 语义。
 
 官方来源：
@@ -134,7 +134,7 @@ Typed mapping：
 - `SOA`
 - `CAA`
 
-平台通用 contract 当前不暴露 SOA mutation，因此 adapter capability 声明 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`SRV`、`NS`、`CAA`。SOA/default NS 可从 Provider 读取时必须保留；不可删除的默认 recordset mutation 由 Huawei 返回 validation error。
+平台通用 contract 当前不暴露 SOA mutation，因此 adapter capability 声明 `A`、`AAAA`、`CNAME`、`MX`、`TXT`、`SRV`、`NS`、`CAA`。SOA/default NS 可从 Provider 读取时必须保留；`default=true` 的系统 RRSet 在 adapter 内即返回 `unsupported`，不会把 update/delete 请求发送给 Provider。
 
 RecordSet TTL 当前 API 范围为 1–2147483647 秒，create 默认 300 秒。平台输入始终显式携带 TTL，因此 adapter 声明相同 min/max。
 
@@ -167,7 +167,7 @@ Adapter 映射：
 
 官方 DNS 状态码页列出 400、401、403、404、408、409、5xx；API Gateway 仍可能返回 429，因此 adapter 按 HTTP 429 分类。错误 body、signed request、AK/SK/security token 不进入 public error 或日志。
 
-只对 read operation 做有界 retry：连接错误、429、502、503、504 等 transient failure 可重试；create/update/delete 不自动重试。官方 SDK HTTP config 默认 retries 为 0，本实现保持为 0，避免 SDK 层对 mutation 产生不可见重试。
+Read operation 采用统一 bounded retry：最多 3 次，只重试 `rate_limited`、`timeout`、`upstream`；指数退避受 context 控制，`Retry-After` 大于 1 秒时直接返回给调用方而不提前重试。Create/update/delete 只执行一次；官方 SDK HTTP retries 固定为 0。
 
 官方来源：
 

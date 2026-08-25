@@ -52,6 +52,11 @@ func (r *Registry) Register(factory Factory) error {
 	if err := capabilities.Validate(); err != nil {
 		return fmt.Errorf("provider %s capabilities: %w", providerType, err)
 	}
+	for _, field := range capabilities.ExtensionFields {
+		if field.Namespace != providerType {
+			return fmt.Errorf("provider %s extension %q uses namespace %q", providerType, field.Key, field.Namespace)
+		}
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

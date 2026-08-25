@@ -20,7 +20,7 @@ func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input cor
 	if err != nil {
 		return core.RecordSet{}, core.NewError(core.ErrValidation, operationCreateRecordSet, "", 0, err)
 	}
-	route, err := validateAliyunInput(normalized, routing{})
+	route, err := validateAliyunInput(normalized, routing{status: statusEnable})
 	if err != nil {
 		return core.RecordSet{}, core.NewError(core.ErrValidation, operationCreateRecordSet, "", 0, err)
 	}
@@ -65,7 +65,7 @@ func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input cor
 		}
 	}
 	ids := entryIDs(created)
-	return p.findFinalRecordSet(ctx, zoneName, ids, desiredKey, operationCreateRecordSet)
+	return p.findFinalRecordSet(ctx, zoneName, ids, desiredKey, route.status, operationCreateRecordSet)
 }
 
 func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID string, input core.UpdateRecordSetInput) (core.RecordSet, error) {
@@ -138,6 +138,11 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 				return core.RecordSet{}, err
 			}
 		}
+		if remark, specified := desiredAliyunRemark(desired); specified && remark != aliyunRemark(currentEntry) {
+			if err = p.setRecordRemark(ctx, desired.ID, remark, operationUpdateRecordSet); err != nil {
+				return core.RecordSet{}, err
+			}
+		}
 		finalEntries = append(finalEntries, desired)
 	}
 
@@ -156,7 +161,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 			}
 		}
 	}
-	if currentRoute.status != desiredRoute.status {
+	if desiredRoute.status != "" && currentRoute.status != desiredRoute.status {
 		for _, desired := range finalEntries {
 			if err = p.setRecordStatus(ctx, desired.ID, desiredRoute.status, operationUpdateRecordSet); err != nil {
 				return core.RecordSet{}, err
@@ -183,7 +188,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 			return core.RecordSet{}, err
 		}
 	}
-	return p.findFinalRecordSet(ctx, zoneName, entryIDs(finalEntries), desiredKey, operationUpdateRecordSet)
+	return p.findFinalRecordSet(ctx, zoneName, entryIDs(finalEntries), desiredKey, desiredRoute.status, operationUpdateRecordSet)
 }
 
 func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID string, precondition core.Precondition) error {
@@ -240,14 +245,14 @@ func (p *Provider) listRecordSetsForMutation(ctx context.Context, zoneName, oper
 	return sets, requestID, nil
 }
 
-func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, ids []string, desiredKey recordGroupKey, operation string) (core.RecordSet, error) {
+func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, ids []string, desiredKey recordGroupKey, desiredStatus, operation string) (core.RecordSet, error) {
 	sets, requestID, err := p.listRecordSetsForMutation(ctx, zoneName, operation)
 	if err != nil {
 		return core.RecordSet{}, err
 	}
 	for _, recordSet := range sets {
 		if recordSetContainsIDs(recordSet, ids) {
-			if groupKeyFromRecordSet(recordSet) != desiredKey {
+			if groupKeyFromRecordSet(recordSet) != desiredKey || (desiredStatus != "" && routingFromRecordSet(recordSet).status != desiredStatus) {
 				return core.RecordSet{}, core.NewError(core.ErrConflict, operation, requestID, 0, errors.New("Alibaba Cloud final record state differs from the requested state"))
 			}
 			return recordSet, nil
@@ -276,15 +281,48 @@ func (p *Provider) addDomainRecord(ctx context.Context, zoneName, rr string, rec
 	if err != nil {
 		return core.RecordEntry{}, err
 	}
-	if response == nil || response.Body == nil || strings.TrimSpace(dara.StringValue(response.Body.RecordId)) == "" {
-		requestID := ""
-		if response != nil && response.Body != nil {
-			requestID = dara.StringValue(response.Body.RequestId)
-		}
-		return core.RecordEntry{}, p.providerPayloadError(operation, requestID, errors.New("Alibaba Cloud add-record response is missing the record ID"))
+	if response == nil || response.Body == nil {
+		return core.RecordEntry{}, p.providerPayloadError(operation, "", errors.New("Alibaba Cloud add-record response is missing"))
 	}
-	entry.ID = strings.TrimSpace(dara.StringValue(response.Body.RecordId))
+	recordID := dara.StringValue(response.Body.RecordId)
+	if strings.TrimSpace(recordID) == "" || recordID != strings.TrimSpace(recordID) {
+		return core.RecordEntry{}, p.providerPayloadError(operation, dara.StringValue(response.Body.RequestId), errors.New("Alibaba Cloud add-record response has an invalid record ID"))
+	}
+	entry.ID = recordID
+	if remark, specified := desiredAliyunRemark(entry); specified && remark != "" {
+		if err = p.setRecordRemark(ctx, entry.ID, remark, operation); err != nil {
+			return core.RecordEntry{}, err
+		}
+	}
 	return entry, nil
+}
+func (p *Provider) setRecordRemark(ctx context.Context, recordID, remark, operation string) error {
+	response, err := mutationCall(p, ctx, operation, func(runtime *dara.RuntimeOptions) (*alidns.UpdateDomainRecordRemarkResponse, error) {
+		return p.client.UpdateDomainRecordRemarkWithContext(ctx, &alidns.UpdateDomainRecordRemarkRequest{
+			RecordId: dara.String(recordID), Remark: dara.String(remark),
+		}, runtime)
+	})
+	if err != nil {
+		return err
+	}
+	if response == nil || response.Body == nil {
+		return p.providerPayloadError(operation, "", errors.New("Alibaba Cloud update-record-remark response is empty"))
+	}
+	return nil
+}
+
+func desiredAliyunRemark(entry core.RecordEntry) (string, bool) {
+	if entry.Extensions.Aliyun == nil {
+		return "", false
+	}
+	return entry.Extensions.Aliyun.Remark, true
+}
+
+func aliyunRemark(entry core.RecordEntry) string {
+	if entry.Extensions.Aliyun == nil {
+		return ""
+	}
+	return entry.Extensions.Aliyun.Remark
 }
 
 func (p *Provider) updateDomainRecord(ctx context.Context, rr string, recordType core.RecordType, ttl uint32, line string, entry core.RecordEntry, operation string) error {

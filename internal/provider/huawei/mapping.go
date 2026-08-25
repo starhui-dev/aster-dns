@@ -13,17 +13,18 @@ import (
 )
 
 type recordSetData struct {
-	id         string
-	name       string
-	zoneName   string
-	recordType string
-	ttl        int32
-	records    []string
-	status     string
-	line       string
-	weight     *int32
-	createdAt  string
-	updatedAt  string
+	id           string
+	name         string
+	zoneName     string
+	recordType   string
+	ttl          int32
+	records      []string
+	status       string
+	line         string
+	weight       *int32
+	defaultValue *bool
+	createdAt    string
+	updatedAt    string
 }
 
 type routing struct {
@@ -55,7 +56,7 @@ func normalizeZone(id, name, status, zoneType string, sourceNameservers *[]model
 	}
 	return core.NormalizeZone(core.Zone{
 		ID: id, Name: name, Status: status, Nameservers: nameservers,
-		Extensions: core.ZoneExtensions{Huawei: &core.HuaweiZoneExtensions{ZoneType: zoneType}},
+		Extensions: core.ZoneExtensions{Huawei: &core.HuaweiZoneExtensions{ZoneType: strings.ToLower(strings.TrimSpace(zoneType))}},
 	})
 }
 
@@ -63,7 +64,7 @@ func mapQueryRecordSet(source model.QueryRecordSetWithLineAndTagsResp) (core.Rec
 	return normalizeHuaweiRecordSet(recordSetData{
 		id: value(source.Id), name: value(source.Name), zoneName: value(source.ZoneName),
 		recordType: value(source.Type), ttl: value(source.Ttl), records: sliceValue(source.Records),
-		status: value(source.Status), line: value(source.Line), weight: source.Weight,
+		status: value(source.Status), line: value(source.Line), weight: source.Weight, defaultValue: source.Default,
 		createdAt: value(source.CreatedAt), updatedAt: value(source.UpdatedAt),
 	})
 }
@@ -75,7 +76,7 @@ func mapShowRecordSet(source *model.ShowRecordSetWithLineResponse) (core.RecordS
 	data := recordSetData{
 		id: value(source.Id), name: value(source.Name), zoneName: value(source.ZoneName),
 		recordType: value(source.Type), ttl: value(source.Ttl), records: sliceValue(source.Records),
-		status: value(source.Status), line: value(source.Line), weight: source.Weight,
+		status: value(source.Status), line: value(source.Line), weight: source.Weight, defaultValue: source.Default,
 		createdAt: value(source.CreatedAt), updatedAt: value(source.UpdatedAt),
 	}
 	recordSet, err := normalizeHuaweiRecordSet(data)
@@ -89,7 +90,7 @@ func mapCreateRecordSet(source *model.CreateRecordSetWithLineResponse, zoneName 
 	return normalizeHuaweiRecordSet(recordSetData{
 		id: value(source.Id), name: value(source.Name), zoneName: firstNonEmpty(value(source.ZoneName), zoneName),
 		recordType: value(source.Type), ttl: value(source.Ttl), records: sliceValue(source.Records),
-		status: value(source.Status), line: value(source.Line), weight: source.Weight,
+		status: value(source.Status), line: value(source.Line), weight: source.Weight, defaultValue: source.Default,
 		createdAt: value(source.CreatedAt), updatedAt: value(source.UpdatedAt),
 	})
 }
@@ -101,7 +102,7 @@ func mapUpdateRecordSet(source *model.UpdateRecordSetsResponse, zoneName string)
 	return normalizeHuaweiRecordSet(recordSetData{
 		id: value(source.Id), name: value(source.Name), zoneName: firstNonEmpty(value(source.ZoneName), zoneName),
 		recordType: value(source.Type), ttl: value(source.Ttl), records: sliceValue(source.Records),
-		status: value(source.Status), line: value(source.Line), weight: source.Weight,
+		status: value(source.Status), line: value(source.Line), weight: source.Weight, defaultValue: source.Default,
 		createdAt: value(source.CreatedAt), updatedAt: value(source.UpdatedAt),
 	})
 }
@@ -113,7 +114,7 @@ func mapSetRecordSetStatus(source *model.SetRecordSetsStatusResponse, zoneName s
 	return normalizeHuaweiRecordSet(recordSetData{
 		id: value(source.Id), name: value(source.Name), zoneName: firstNonEmpty(value(source.ZoneName), zoneName),
 		recordType: value(source.Type), ttl: value(source.Ttl), records: sliceValue(source.Records),
-		status: value(source.Status), line: value(source.Line), weight: source.Weight,
+		status: value(source.Status), line: value(source.Line), weight: source.Weight, defaultValue: source.Default,
 		createdAt: value(source.CreatedAt), updatedAt: value(source.UpdatedAt),
 	})
 }
@@ -134,11 +135,32 @@ func normalizeHuaweiRecordSet(data recordSetData) (core.RecordSet, error) {
 	if providerVersion == "" {
 		providerVersion = strings.TrimSpace(data.createdAt)
 	}
+	providerStatus := strings.ToUpper(strings.TrimSpace(data.status))
 	return core.NormalizeRecordSet(data.zoneName, core.RecordSet{
 		ID: data.id, Name: data.name, Type: recordType, TTL: uint32(data.ttl), Entries: entries,
-		Extensions:      core.RecordSetExtensions{Huawei: &core.HuaweiRecordSetExtensions{Status: strings.TrimSpace(data.status)}},
+		Extensions: core.RecordSetExtensions{Huawei: &core.HuaweiRecordSetExtensions{
+			Status: huaweiDesiredStatusFromProvider(providerStatus), ProviderStatus: providerStatus, Default: cloneBool(data.defaultValue),
+		}},
 		ProviderVersion: providerVersion,
 	})
+}
+func huaweiDesiredStatusFromProvider(status string) string {
+	switch status {
+	case "DISABLE", "PENDING_DISABLE":
+		return "DISABLE"
+	case "ACTIVE":
+		return "ENABLE"
+	default:
+		return ""
+	}
+}
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func parseHuaweiRecords(recordType core.RecordType, records []string, line string, weight *int32) ([]core.RecordEntry, error) {
@@ -270,9 +292,6 @@ func validateHuaweiInput(input core.CreateRecordSetInput, allowStatus string) (r
 	route, err := routingFromEntries(input.Entries)
 	if err != nil {
 		return routing{}, err
-	}
-	if input.Type == core.RecordTypeMX && route.weight != nil {
-		return routing{}, errors.New("Huawei Cloud MX record sets do not support routing weight")
 	}
 	return route, nil
 }

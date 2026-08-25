@@ -23,6 +23,13 @@ func TestNormalizeRecordSetSupportedTypes(t *testing.T) {
 		{name: "SRV", input: RecordSet{Name: "_SIP._TCP", Type: RecordTypeSRV, TTL: 300, Entries: []RecordEntry{{Priority: new(uint16(10)), Weight: new(uint16(20)), Port: new(uint16(5060)), Value: "SIP.Example.COM."}}}, wantName: "_sip._tcp.example.com", want: RecordEntry{Priority: new(uint16(10)), Weight: new(uint16(20)), Port: new(uint16(5060)), Target: new("sip.example.com")}},
 		{name: "CAA", input: RecordSet{Name: "@", Type: RecordTypeCAA, TTL: 300, Entries: []RecordEntry{{Flags: new(uint8(128)), Tag: new("ISSUE"), Value: `"letsencrypt.org"`}}}, wantName: "example.com", want: RecordEntry{Flags: new(uint8(128)), Tag: new("issue"), Value: "letsencrypt.org"}},
 	}
+	multiCNAME, err := NormalizeRecordSet("example.com", RecordSet{
+		ID: "weighted-cname", Name: "alias", Type: RecordTypeCNAME, TTL: 300,
+		Entries: []RecordEntry{{ID: "cname-1", Value: "a.example.net"}, {ID: "cname-2", Value: "b.example.net"}},
+	})
+	if err != nil || len(multiCNAME.Entries) != 2 || *multiCNAME.Entries[0].Target != "a.example.net" || *multiCNAME.Entries[1].Target != "b.example.net" {
+		t.Fatalf("multi-value CNAME = %#v, %v", multiCNAME, err)
+	}
 
 	for _, test := range tests {
 		test := test
@@ -44,6 +51,26 @@ func TestNormalizeRecordSetSupportedTypes(t *testing.T) {
 		})
 	}
 }
+func TestNormalizationPreservesOpaqueProviderIDs(t *testing.T) {
+	t.Parallel()
+	zone, err := NormalizeZone(Zone{ID: " zone opaque ID ", Name: "example.com"})
+	if err != nil {
+		t.Fatalf("normalize zone: %v", err)
+	}
+	if zone.ID != " zone opaque ID " {
+		t.Fatalf("zone ID = %q", zone.ID)
+	}
+	recordSet, err := NormalizeRecordSet("example.com", RecordSet{
+		ID: " record set opaque ID ", Name: "www", Type: RecordTypeA, TTL: 300,
+		Entries: []RecordEntry{{ID: " record entry opaque ID ", Value: "192.0.2.10"}},
+	})
+	if err != nil {
+		t.Fatalf("normalize record set: %v", err)
+	}
+	if recordSet.ID != " record set opaque ID " || recordSet.Entries[0].ID != " record entry opaque ID " {
+		t.Fatalf("record IDs = set %q entry %q", recordSet.ID, recordSet.Entries[0].ID)
+	}
+}
 
 func TestCanonicalizeZoneNameUsesIDNA(t *testing.T) {
 	t.Parallel()
@@ -60,7 +87,7 @@ func TestNormalizeRecordSetRejectsInvalidRecords(t *testing.T) {
 	t.Parallel()
 	tests := []RecordSet{
 		{Name: "www", Type: RecordTypeA, TTL: 300, Entries: []RecordEntry{{Value: "2001:db8::1"}}},
-		{Name: "www", Type: RecordTypeCNAME, TTL: 300, Entries: []RecordEntry{{Value: "a.example.com"}, {Value: "b.example.com"}}},
+		{Name: "www", Type: RecordTypeCNAME, TTL: 300, Entries: []RecordEntry{{Value: "."}}},
 		{Name: "@", Type: RecordTypeMX, TTL: 300, Entries: []RecordEntry{{Priority: new(uint16(10))}}},
 		{Name: "@", Type: RecordTypeTXT, TTL: 0, Entries: []RecordEntry{{Value: "value"}}},
 		{Name: "@", Type: RecordTypeA, TTL: 300, Entries: []RecordEntry{{Value: "192.0.2.1"}, {Value: "192.0.2.1"}}},

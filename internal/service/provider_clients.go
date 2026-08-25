@@ -78,15 +78,17 @@ func (m *ProviderClientManager) Get(ctx context.Context, accountID uuid.UUID) (p
 			return nil, account, provider.NewError(provider.ErrUpstream, "build_client", "", 0, errors.New("provider factory returned nil client"))
 		}
 
+		m.mu.Lock()
 		current, err := m.repository.GetProviderAccount(ctx, accountID)
 		if err != nil {
+			m.mu.Unlock()
 			return nil, ProviderAccount{}, err
 		}
 		if !current.Enabled || current.CredentialRevision != credential.Revision {
-			m.Invalidate(accountID)
+			delete(m.clients, accountID)
+			m.mu.Unlock()
 			continue
 		}
-		m.mu.Lock()
 		m.clients[accountID] = cachedProviderClient{credentialRevision: credential.Revision, client: client}
 		m.mu.Unlock()
 		return client, current, nil

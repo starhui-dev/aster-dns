@@ -8,10 +8,55 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	secretcrypto "github.com/starhui-dev/aster-dns/internal/crypto"
 	"github.com/starhui-dev/aster-dns/internal/provider"
 	"github.com/starhui-dev/aster-dns/internal/provider/fake"
 )
+
+type credentialReplacementRaceRepository struct {
+	ProviderRepository
+
+	mu                  sync.Mutex
+	blockNextAccountGet bool
+	accountRead         chan struct{}
+	releaseAccountRead  chan struct{}
+	credentialReplaced  chan struct{}
+}
+
+func (r *credentialReplacementRaceRepository) WithinTx(_ context.Context, operation func(ProviderRepository) error) error {
+	return operation(r)
+}
+
+func (r *credentialReplacementRaceRepository) GetProviderAccount(ctx context.Context, accountID uuid.UUID) (ProviderAccount, error) {
+	account, err := r.ProviderRepository.GetProviderAccount(ctx, accountID)
+	if err != nil {
+		return ProviderAccount{}, err
+	}
+	r.mu.Lock()
+	block := r.blockNextAccountGet
+	if block {
+		r.blockNextAccountGet = false
+		close(r.accountRead)
+	}
+	r.mu.Unlock()
+	if block {
+		select {
+		case <-ctx.Done():
+			return ProviderAccount{}, ctx.Err()
+		case <-r.releaseAccountRead:
+		}
+	}
+	return account, nil
+}
+
+func (r *credentialReplacementRaceRepository) ReplaceProviderAccountCredential(ctx context.Context, accountID uuid.UUID, expectedRevision uint64, material CredentialMaterial) (ProviderAccount, error) {
+	account, err := r.ProviderRepository.ReplaceProviderAccountCredential(ctx, accountID, expectedRevision, material)
+	if err == nil {
+		close(r.credentialReplaced)
+	}
+	return account, err
+}
 
 func TestProviderAccountLifecycleAndCredentialRevisionInvalidation(t *testing.T) {
 	t.Parallel()
@@ -84,6 +129,59 @@ func TestProviderAccountLifecycleAndCredentialRevisionInvalidation(t *testing.T)
 	}
 	if repository.audits[len(repository.audits)-1].ProviderAccountID != nil {
 		t.Fatal("delete audit retained a deleted provider account foreign key")
+	}
+}
+func TestCredentialReplacementCannotLeaveStaleClientCached(t *testing.T) {
+	baseRepository := newMemoryProviderRepository()
+	repository := &credentialReplacementRaceRepository{
+		ProviderRepository: baseRepository,
+		accountRead:        make(chan struct{}),
+		releaseAccountRead: make(chan struct{}),
+		credentialReplaced: make(chan struct{}),
+	}
+	factory := fake.NewFactory()
+	accounts, clients := newProviderServices(t, repository, factory)
+	actor := Actor{ID: mustUUIDv7(t), Username: "admin"}
+	metadata := RequestMetadata{RequestID: "req-credential-race"}
+	account, err := accounts.CreateAccount(context.Background(), actor, CreateProviderAccountInput{
+		ProviderType: fake.Type, Name: "Credential race", Credentials: json.RawMessage(`{"token":"first-secret"}`),
+	}, metadata)
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	repository.mu.Lock()
+	repository.blockNextAccountGet = true
+	repository.mu.Unlock()
+	getDone := make(chan error, 1)
+	go func() {
+		_, _, getErr := clients.Get(context.Background(), account.ID)
+		getDone <- getErr
+	}()
+	<-repository.accountRead
+
+	replaceDone := make(chan error, 1)
+	go func() {
+		_, replaceErr := accounts.ReplaceCredentials(context.Background(), actor, account.ID, json.RawMessage(`{"token":"second-secret"}`), metadata)
+		replaceDone <- replaceErr
+	}()
+	<-repository.credentialReplaced
+	close(repository.releaseAccountRead)
+	if err = <-getDone; err != nil {
+		t.Fatalf("build stale client: %v", err)
+	}
+	if err = <-replaceDone; err != nil {
+		t.Fatalf("replace credentials: %v", err)
+	}
+	if _, cached := clients.cached(account.ID, account.CredentialRevision); cached {
+		t.Fatal("credential replacement left the old client revision cached")
+	}
+	_, current, err := clients.Get(context.Background(), account.ID)
+	if err != nil {
+		t.Fatalf("build replacement client: %v", err)
+	}
+	if current.CredentialRevision != account.CredentialRevision+1 || factory.BuildCount() != 2 {
+		t.Fatalf("replacement client revision=%d builds=%d", current.CredentialRevision, factory.BuildCount())
 	}
 }
 

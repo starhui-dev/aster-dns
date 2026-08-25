@@ -45,6 +45,7 @@ type fixtureRecord struct {
 	Status          string
 	Weight          int32
 	LBAStatus       bool
+	Remark          string
 	CreateTimestamp int64
 	UpdateTimestamp int64
 }
@@ -57,6 +58,12 @@ type fixtureFailure struct {
 	retryAfter string
 	err        error
 }
+
+type fixtureTimeoutError struct{}
+
+func (fixtureTimeoutError) Error() string { return "fixture request timed out" }
+
+func (fixtureTimeoutError) Timeout() bool { return true }
 
 type capturedRequest struct {
 	action        string
@@ -95,7 +102,7 @@ func newAliyunFixture(t *testing.T) *aliyunFixture {
 				{ID: "record-a-disabled", DomainName: "example.com", RR: "a", Type: "A", Value: "192.0.2.4", TTL: 300, Line: defaultLine, Status: statusDisable, CreateTimestamp: 100, UpdateTimestamp: 104},
 				{ID: "record-weight-1", DomainName: "example.com", RR: "weighted", Type: "A", Value: "198.51.100.1", TTL: 60, Line: defaultLine, Status: statusEnable, Weight: 20, LBAStatus: true, CreateTimestamp: 100, UpdateTimestamp: 105},
 				{ID: "record-weight-2", DomainName: "example.com", RR: "weighted", Type: "A", Value: "198.51.100.2", TTL: 60, Line: defaultLine, Status: statusEnable, Weight: 80, LBAStatus: true, CreateTimestamp: 100, UpdateTimestamp: 106},
-				{ID: "record-txt", DomainName: "example.com", RR: "txt", Type: "TXT", Value: `"segment-one" "segment-two"`, TTL: 600, Line: defaultLine, Status: statusEnable, CreateTimestamp: 100, UpdateTimestamp: 107},
+				{ID: "record-txt", DomainName: "example.com", RR: "txt", Type: "TXT", Value: `"segment-one" "segment-two"`, TTL: 600, Line: defaultLine, Status: statusEnable, Remark: "managed SPF", CreateTimestamp: 100, UpdateTimestamp: 107},
 				{ID: "record-mx", DomainName: "example.com", RR: "@", Type: "MX", Value: "mail.example.com", TTL: 600, Priority: 10, Line: defaultLine, Status: statusEnable, CreateTimestamp: 100, UpdateTimestamp: 108},
 				{ID: "record-srv", DomainName: "example.com", RR: "z-sip._tcp", Type: "SRV", Value: "1 5 5060 sip.example.com", TTL: 600, Line: defaultLine, Status: statusEnable, CreateTimestamp: 100, UpdateTimestamp: 109},
 				{ID: "record-caa", DomainName: "example.com", RR: "@", Type: "CAA", Value: `0 issue "letsencrypt.org"`, TTL: 600, Line: defaultLine, Status: statusEnable, CreateTimestamp: 100, UpdateTimestamp: 110},
@@ -248,6 +255,16 @@ func (f *aliyunFixture) handleLocked(action string, parameters url.Values) (int,
 			return http.StatusNotFound, map[string]any{"Code": "RecordIdNotExist", "Message": "record not found", "RequestId": "request-record-missing"}
 		}
 		return http.StatusOK, map[string]any{"RequestId": "request-update", "RecordId": record.ID}
+	case "UpdateDomainRecordRemark":
+		record, ok := f.mutateRecordLocked(parameters.Get("RecordId"), func(record *fixtureRecord) {
+			record.Remark = parameters.Get("Remark")
+			record.UpdateTimestamp = f.nextTimestamp
+			f.nextTimestamp++
+		})
+		if !ok {
+			return http.StatusNotFound, map[string]any{"Code": "RecordIdNotExist", "Message": "record not found", "RequestId": "request-record-missing"}
+		}
+		return http.StatusOK, map[string]any{"RequestId": "request-remark", "RecordId": record.ID}
 	case "DeleteDomainRecord":
 		if !f.deleteRecordLocked(parameters.Get("RecordId")) {
 			return http.StatusNotFound, map[string]any{"Code": "RecordIdNotExist", "Message": "record not found", "RequestId": "request-record-missing"}
@@ -365,7 +382,7 @@ func recordPayload(record fixtureRecord) map[string]any {
 	return map[string]any{
 		"RecordId": record.ID, "DomainName": record.DomainName, "RR": record.RR, "Type": record.Type,
 		"Value": record.Value, "TTL": record.TTL, "Priority": record.Priority, "Line": record.Line,
-		"Status": record.Status, "Weight": record.Weight, "LbaStatus": record.LBAStatus,
+		"Status": record.Status, "Weight": record.Weight, "LbaStatus": record.LBAStatus, "Remark": record.Remark,
 		"CreateTimestamp": record.CreateTimestamp, "UpdateTimestamp": record.UpdateTimestamp,
 	}
 }
@@ -424,8 +441,31 @@ func TestFactoryMetadataAndCapabilities(t *testing.T) {
 	if err := capabilities.Validate(); err != nil {
 		t.Fatalf("capabilities: %v", err)
 	}
-	if capabilities.NativeRecordGranularity != core.NativeRecordGranularityEntry || !capabilities.SupportsRoutingLine || !capabilities.SupportsRecordStatus || !capabilities.SupportsWeight {
+	if capabilities.NativeRecordGranularity != core.NativeRecordGranularityEntry || !capabilities.SupportsRoutingLine || !capabilities.SupportsRecordStatus || !capabilities.SupportsWeight || !capabilities.SupportsComments {
 		t.Fatalf("capabilities = %#v", capabilities)
+	}
+	foundGroupID := false
+	foundWeight := false
+	foundRemark := false
+	for _, field := range capabilities.ExtensionFields {
+		if field.Namespace == Type && field.Scope == core.ExtensionScopeZone && field.Key == "group_id" {
+			foundGroupID = true
+			if field.Type != core.DescriptorFieldString || !field.ReadOnly {
+				t.Fatalf("group_id descriptor = %#v", field)
+			}
+		}
+		if field.Namespace == Type && field.Scope == core.ExtensionScopeRecordEntry && field.Key == "weight" {
+			foundWeight = true
+			if len(field.ApplicableWhen) != 1 || field.ApplicableWhen[0].Field != "type" || len(field.ApplicableWhen[0].Values) != 2 || field.ApplicableWhen[0].Values[0] != string(core.RecordTypeA) || field.ApplicableWhen[0].Values[1] != string(core.RecordTypeAAAA) {
+				t.Fatalf("weight descriptor = %#v", field)
+			}
+		}
+		if field.Namespace == Type && field.Scope == core.ExtensionScopeRecordEntry && field.Key == "remark" && field.Type == core.DescriptorFieldString && !field.ReadOnly {
+			foundRemark = true
+		}
+	}
+	if !foundGroupID || !foundWeight || !foundRemark {
+		t.Fatalf("required Aliyun extension descriptors missing: %#v", capabilities.ExtensionFields)
 	}
 }
 
@@ -480,9 +520,39 @@ func TestPaginationTraversesAllNativePages(t *testing.T) {
 	}
 }
 
+func TestPaginationCursorsAreScopedToTheirCollection(t *testing.T) {
+	fixture := newAliyunFixture(t)
+	provider := fixture.provider(t)
+	zones, err := provider.ListZones(context.Background(), core.PageRequest{Limit: 1})
+	if err != nil || zones.NextCursor == "" {
+		t.Fatalf("zone cursor = %q, err = %v", zones.NextCursor, err)
+	}
+	recordSets, err := provider.ListRecordSets(context.Background(), "domain-1", core.PageRequest{Limit: 1})
+	if err != nil || recordSets.NextCursor == "" {
+		t.Fatalf("record-set cursor = %q, err = %v", recordSets.NextCursor, err)
+	}
+	if _, err = provider.ListRecordSets(context.Background(), "domain-1", core.PageRequest{Cursor: zones.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("zone cursor used for records = %v", err)
+	}
+	if _, err = provider.ListZones(context.Background(), core.PageRequest{Cursor: recordSets.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("record cursor used for zones = %v", err)
+	}
+	if _, err = provider.ListRecordSets(context.Background(), "domain-2", core.PageRequest{Cursor: recordSets.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("record cursor used for another zone = %v", err)
+	}
+}
+
 func TestRecordGroupingExtensionsAndNormalization(t *testing.T) {
 	fixture := newAliyunFixture(t)
-	page, err := fixture.provider(t).ListRecordSets(context.Background(), "domain-1", core.PageRequest{Limit: 100})
+	provider := fixture.provider(t)
+	zone, err := provider.GetZone(context.Background(), "domain-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zone.ID != "domain-1" || zone.Extensions.Aliyun == nil || zone.Extensions.Aliyun.GroupID != "group-1" {
+		t.Fatalf("zone opaque ID and extensions = %#v", zone)
+	}
+	page, err := provider.ListRecordSets(context.Background(), "domain-1", core.PageRequest{Limit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,25 +567,40 @@ func TestRecordGroupingExtensionsAndNormalization(t *testing.T) {
 			t.Fatal("unsupported HTTPS record leaked into the common contract")
 		}
 	}
-	if len(aSets) != 3 {
+	if len(aSets) != 2 {
 		t.Fatalf("same-name A sets = %#v", aSets)
 	}
-	var defaultEnabled core.RecordSet
+	var defaultSet core.RecordSet
 	for _, recordSet := range aSets {
-		route := routingFromRecordSet(recordSet)
-		if route.line == defaultLine && route.status == statusEnable {
-			defaultEnabled = recordSet
+		if routingFromRecordSet(recordSet).line == defaultLine {
+			defaultSet = recordSet
 		}
 	}
-	if len(defaultEnabled.Entries) != 2 || defaultEnabled.Entries[0].ID == "" || defaultEnabled.Entries[1].ID == "" {
-		t.Fatalf("default enabled set = %#v", defaultEnabled)
+	if len(defaultSet.Entries) != 3 || defaultSet.Extensions.Aliyun == nil || defaultSet.Extensions.Aliyun.Status != "" {
+		t.Fatalf("mixed-status default set = %#v", defaultSet)
+	}
+	entryStatuses := make(map[string]string, len(defaultSet.Entries))
+	for _, entry := range defaultSet.Entries {
+		entryStatuses[entry.ID] = entry.Extensions.Aliyun.Status
+	}
+	if entryStatuses["record-a-1"] != statusEnable || entryStatuses["record-a-2"] != statusEnable || entryStatuses["record-a-disabled"] != statusDisable {
+		t.Fatalf("entry statuses = %#v", entryStatuses)
+	}
+	entryIDs, decodeErr := decodeRecordSetID(defaultSet.ID)
+	if decodeErr != nil || len(entryIDs) != len(defaultSet.Entries) {
+		t.Fatalf("record-set opaque ID = %q, ids = %#v, err = %v", defaultSet.ID, entryIDs, decodeErr)
+	}
+	for index := range entryIDs {
+		if entryIDs[index] != defaultSet.Entries[index].ID {
+			t.Fatalf("record-set ID entries = %#v, entries = %#v", entryIDs, defaultSet.Entries)
+		}
 	}
 	weighted := byName["weighted.example.com/A"]
 	if len(weighted.Entries) != 2 || weighted.Entries[0].Extensions.Aliyun == nil || weighted.Entries[0].Extensions.Aliyun.Weight == nil {
 		t.Fatalf("weighted set = %#v", weighted)
 	}
 	txt := byName["txt.example.com/TXT"]
-	if len(txt.Entries) != 1 || txt.Entries[0].Value != "segment-onesegment-two" {
+	if len(txt.Entries) != 1 || txt.Entries[0].Value != "segment-onesegment-two" || txt.Entries[0].Extensions.Aliyun == nil || txt.Entries[0].Extensions.Aliyun.Remark != "managed SPF" {
 		t.Fatalf("TXT = %#v", txt)
 	}
 	mx := byName["example.com/MX"].Entries[0]
@@ -532,6 +617,44 @@ func TestRecordGroupingExtensionsAndNormalization(t *testing.T) {
 	}
 }
 
+func TestRejectsCrossDomainPayloadAndInvalidMXPriority(t *testing.T) {
+	t.Run("cross-domain record payload", func(t *testing.T) {
+		fixture := newAliyunFixture(t)
+		fixture.records["example.com"][0].DomainName = "example.net"
+		_, err := fixture.provider(t).ListRecordSets(context.Background(), "domain-1", core.PageRequest{Limit: 100})
+		if !core.IsErrorCode(err, core.ErrUpstream) {
+			t.Fatalf("cross-domain payload error = %v", err)
+		}
+	})
+
+	t.Run("provider MX payload", func(t *testing.T) {
+		fixture := newAliyunFixture(t)
+		for index := range fixture.records["example.com"] {
+			if fixture.records["example.com"][index].ID == "record-mx" {
+				fixture.records["example.com"][index].Priority = 51
+			}
+		}
+		_, err := fixture.provider(t).ListRecordSets(context.Background(), "domain-1", core.PageRequest{Limit: 100})
+		if !core.IsErrorCode(err, core.ErrUpstream) {
+			t.Fatalf("invalid provider MX priority error = %v", err)
+		}
+	})
+
+	for _, priority := range []uint16{0, 51} {
+		priority := priority
+		t.Run("mutation MX priority "+strconv.Itoa(int(priority)), func(t *testing.T) {
+			fixture := newAliyunFixture(t)
+			_, err := fixture.provider(t).CreateRecordSet(context.Background(), "domain-1", core.CreateRecordSetInput{
+				Name: "invalid-mx-" + strconv.Itoa(int(priority)), Type: core.RecordTypeMX, TTL: 600,
+				Entries: []core.RecordEntry{{Priority: &priority, Target: stringPointer("mail.example.com")}},
+			})
+			if !core.IsErrorCode(err, core.ErrValidation) || fixture.count("AddDomainRecord") != 0 {
+				t.Fatalf("invalid MX mutation error = %v, add calls = %d", err, fixture.count("AddDomainRecord"))
+			}
+		})
+	}
+}
+
 func TestCreateUpdateDeleteRequestMapping(t *testing.T) {
 	fixture := newAliyunFixture(t)
 	provider := fixture.provider(t)
@@ -541,16 +664,16 @@ func TestCreateUpdateDeleteRequestMapping(t *testing.T) {
 	created, err := provider.CreateRecordSet(context.Background(), "domain-1", core.CreateRecordSetInput{
 		Name: "weighted-new", Type: core.RecordTypeA, TTL: 120,
 		Entries: []core.RecordEntry{
-			{Value: "203.0.113.10", Extensions: core.RecordEntryExtensions{Aliyun: &core.AliyunRecordEntryExtensions{Line: routeLine, Status: statusDisable, Weight: &weight30}}},
-			{Value: "203.0.113.11", Extensions: core.RecordEntryExtensions{Aliyun: &core.AliyunRecordEntryExtensions{Line: routeLine, Status: statusDisable, Weight: &weight70}}},
+			{Value: "203.0.113.10", Extensions: core.RecordEntryExtensions{Aliyun: &core.AliyunRecordEntryExtensions{Line: routeLine, Status: statusDisable, Weight: &weight30, Remark: "primary"}}},
+			{Value: "203.0.113.11", Extensions: core.RecordEntryExtensions{Aliyun: &core.AliyunRecordEntryExtensions{Line: routeLine, Status: statusDisable, Weight: &weight70, Remark: "secondary"}}},
 		},
 		Extensions: core.RecordSetExtensions{Aliyun: &core.AliyunRecordSetExtensions{Status: statusDisable}},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if len(created.Entries) != 2 || fixture.count("AddDomainRecord") != 2 || fixture.count("SetDNSSLBStatus") != 1 || fixture.count("UpdateDNSSLBWeight") != 2 || fixture.count("SetDomainRecordStatus") != 2 {
-		t.Fatalf("create actions: add=%d slb=%d weight=%d status=%d result=%#v", fixture.count("AddDomainRecord"), fixture.count("SetDNSSLBStatus"), fixture.count("UpdateDNSSLBWeight"), fixture.count("SetDomainRecordStatus"), created)
+	if len(created.Entries) != 2 || fixture.count("AddDomainRecord") != 2 || fixture.count("UpdateDomainRecordRemark") != 2 || fixture.count("SetDNSSLBStatus") != 1 || fixture.count("UpdateDNSSLBWeight") != 2 || fixture.count("SetDomainRecordStatus") != 2 {
+		t.Fatalf("create actions: add=%d remark=%d slb=%d weight=%d status=%d result=%#v", fixture.count("AddDomainRecord"), fixture.count("UpdateDomainRecordRemark"), fixture.count("SetDNSSLBStatus"), fixture.count("UpdateDNSSLBWeight"), fixture.count("SetDomainRecordStatus"), created)
 	}
 	addRequest := fixture.lastRequest("AddDomainRecord")
 	if addRequest.parameters.Get("DomainName") != "example.com" || addRequest.parameters.Get("RR") != "weighted-new" || addRequest.parameters.Get("TTL") != "120" || addRequest.parameters.Get("Line") != routeLine {
@@ -562,7 +685,8 @@ func TestCreateUpdateDeleteRequestMapping(t *testing.T) {
 	first.Value = "203.0.113.20"
 	first.Extensions.Aliyun.Status = statusEnable
 	first.Extensions.Aliyun.Weight = &weight40
-	newEntry := core.RecordEntry{Value: "203.0.113.21", Extensions: core.RecordEntryExtensions{Aliyun: &core.AliyunRecordEntryExtensions{Line: routeLine, Status: statusEnable, Weight: &weight70}}}
+	first.Extensions.Aliyun.Remark = "primary-updated"
+	newEntry := core.RecordEntry{Value: "203.0.113.21", Extensions: core.RecordEntryExtensions{Aliyun: &core.AliyunRecordEntryExtensions{Line: routeLine, Status: statusEnable, Weight: &weight70, Remark: "tertiary"}}}
 	updated, err := provider.UpdateRecordSet(context.Background(), "domain-1", created.ID, core.UpdateRecordSetInput{
 		Desired: core.CreateRecordSetInput{
 			Name: "weighted-new", Type: core.RecordTypeA, TTL: 180, Entries: []core.RecordEntry{first, newEntry},
@@ -579,6 +703,16 @@ func TestCreateUpdateDeleteRequestMapping(t *testing.T) {
 	updateRequest := fixture.lastRequest("UpdateDomainRecord")
 	if updateRequest.parameters.Get("RecordId") != first.ID || updateRequest.parameters.Get("Value") != "203.0.113.20" || updateRequest.parameters.Get("TTL") != "180" {
 		t.Fatalf("update request = %s", updateRequest.parameters.Encode())
+	}
+	if fixture.count("UpdateDomainRecordRemark") != 4 {
+		t.Fatalf("remark calls = %d", fixture.count("UpdateDomainRecordRemark"))
+	}
+	updatedRemarks := make(map[string]string, len(updated.Entries))
+	for _, entry := range updated.Entries {
+		updatedRemarks[entry.Value] = entry.Extensions.Aliyun.Remark
+	}
+	if updatedRemarks["203.0.113.20"] != "primary-updated" || updatedRemarks["203.0.113.21"] != "tertiary" {
+		t.Fatalf("updated remarks = %#v", updatedRemarks)
 	}
 
 	if err = provider.DeleteRecordSet(context.Background(), "domain-1", updated.ID, core.Precondition{ExpectedFingerprint: updated.Fingerprint, ProviderVersion: updated.ProviderVersion}); err != nil {
@@ -603,9 +737,28 @@ func TestErrorMappingRequestIDRetryAndSecretRedaction(t *testing.T) {
 	}
 
 	fixture = newAliyunFixture(t)
+	fixture.fail("DescribeDomains", fixtureFailure{err: fixtureTimeoutError{}})
+	if _, err := fixture.provider(t).ListZones(context.Background(), core.PageRequest{Limit: 10}); err != nil {
+		t.Fatalf("transient read timeout did not recover: %v", err)
+	}
+	if fixture.count("DescribeDomains") != 2 {
+		t.Fatalf("timeout read calls = %d", fixture.count("DescribeDomains"))
+	}
+
+	fixture = newAliyunFixture(t)
+	fixture.fail("DescribeDomains", fixtureFailure{
+		status: http.StatusTooManyRequests, code: "Throttling.User", message: "retry later", requestID: "request-long-retry", retryAfter: "2500",
+	})
+	_, retryErr := fixture.provider(t).ListZones(context.Background(), core.PageRequest{Limit: 10})
+	var retryProviderError *core.ProviderError
+	if !errors.As(retryErr, &retryProviderError) || retryProviderError.Code != core.ErrRateLimited || retryProviderError.RetryAfter != 2500*time.Millisecond || fixture.count("DescribeDomains") != 1 {
+		t.Fatalf("long retry-after error = %#v, calls = %d", retryErr, fixture.count("DescribeDomains"))
+	}
+
+	fixture = newAliyunFixture(t)
 	fixture.fail("DescribeDomains", fixtureFailure{
 		status: http.StatusBadRequest, code: "InvalidAccessKeyId.NotFound",
-		message:   "access_key_secret=" + fixtureSecret + " authorization=Bearer " + fixtureSecret,
+		message:   "https://alidns.aliyuncs.com/?AccessKeyId=" + fixtureAccessKey + "&Signature=signed-url-secret&SecurityToken=" + fixtureSecret + " authorization=Bearer " + fixtureSecret,
 		requestID: "request-auth", retryAfter: "2500",
 	})
 	err := fixture.provider(t).ValidateCredentials(context.Background())
@@ -617,16 +770,20 @@ func TestErrorMappingRequestIDRetryAndSecretRedaction(t *testing.T) {
 		t.Fatalf("provider error = %#v", err)
 	}
 	if strings.Contains(err.Error(), fixtureSecret) || strings.Contains(fmt.Sprintf("%+v", err), fixtureSecret) {
-		t.Fatalf("secret leaked in error: %+v", err)
+		t.Fatalf("secret leaked in public error: %+v", err)
+	}
+	cause := providerError.Unwrap()
+	if cause == nil || strings.Contains(cause.Error(), fixtureSecret) || strings.Contains(cause.Error(), fixtureAccessKey) || strings.Contains(cause.Error(), "signed-url-secret") {
+		t.Fatalf("secret or signed URL leaked in server-side cause: %v", cause)
 	}
 
 	fixture = newAliyunFixture(t)
-	fixture.fail("AddDomainRecord", fixtureFailure{status: http.StatusInternalServerError, code: "InternalError", message: "mutation failed", requestID: "request-mutation"})
+	fixture.fail("AddDomainRecord", fixtureFailure{err: fixtureTimeoutError{}})
 	_, err = fixture.provider(t).CreateRecordSet(context.Background(), "domain-1", core.CreateRecordSetInput{
 		Name: "no-retry", Type: core.RecordTypeTXT, TTL: 600, Entries: []core.RecordEntry{{Value: "value"}},
 	})
-	if !core.IsErrorCode(err, core.ErrUpstream) || fixture.count("AddDomainRecord") != 1 {
-		t.Fatalf("mutation error = %v, calls = %d", err, fixture.count("AddDomainRecord"))
+	if !core.IsErrorCode(err, core.ErrTimeout) || fixture.count("AddDomainRecord") != 1 {
+		t.Fatalf("mutation timeout = %v, calls = %d", err, fixture.count("AddDomainRecord"))
 	}
 }
 
@@ -637,13 +794,19 @@ func TestProviderErrorClassificationAndRetryAfter(t *testing.T) {
 		provider   string
 		want       core.ErrorCode
 	}{
-		{name: "authentication", statusCode: 400, provider: "InvalidAccessKeyId.NotFound", want: core.ErrAuthentication},
-		{name: "forbidden", statusCode: 403, provider: "Forbidden.RAM", want: core.ErrForbidden},
-		{name: "not found", statusCode: 404, provider: "RecordIdNotExist", want: core.ErrNotFound},
-		{name: "conflict", statusCode: 400, provider: "DomainRecordDuplicate", want: core.ErrConflict},
-		{name: "rate limited", statusCode: 429, provider: "Throttling.User", want: core.ErrRateLimited},
-		{name: "validation", statusCode: 400, provider: "InvalidRR", want: core.ErrValidation},
-		{name: "upstream", statusCode: 500, provider: "InternalError", want: core.ErrUpstream},
+		{name: "authentication code", statusCode: 400, provider: "InvalidAccessKeyId.NotFound", want: core.ErrAuthentication},
+		{name: "authentication status", statusCode: http.StatusUnauthorized, provider: "", want: core.ErrAuthentication},
+		{name: "forbidden status", statusCode: http.StatusForbidden, provider: "Forbidden.RAM", want: core.ErrForbidden},
+		{name: "forbidden ownership", statusCode: http.StatusBadRequest, provider: "DomainRecordNotBelongToUser", want: core.ErrForbidden},
+		{name: "not found", statusCode: http.StatusNotFound, provider: "RecordIdNotExist", want: core.ErrNotFound},
+		{name: "conflict code", statusCode: http.StatusBadRequest, provider: "DomainRecordDuplicate", want: core.ErrConflict},
+		{name: "conflict status", statusCode: http.StatusConflict, provider: "", want: core.ErrConflict},
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, provider: "Throttling.User", want: core.ErrRateLimited},
+		{name: "rate limited code", statusCode: http.StatusBadRequest, provider: "OperationIsTooFrequent", want: core.ErrRateLimited},
+		{name: "unsupported", statusCode: http.StatusNotImplemented, provider: "", want: core.ErrUnsupported},
+		{name: "timeout", statusCode: http.StatusGatewayTimeout, provider: "", want: core.ErrTimeout},
+		{name: "validation", statusCode: http.StatusUnprocessableEntity, provider: "InvalidRR", want: core.ErrValidation},
+		{name: "upstream", statusCode: http.StatusInternalServerError, provider: "InternalError", want: core.ErrUpstream},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -664,6 +827,13 @@ func TestProviderErrorClassificationAndRetryAfter(t *testing.T) {
 	if strings.Contains(mapped.Unwrap().Error(), fixtureSecret) {
 		t.Fatalf("throttling cause leaked secret: %v", mapped.Unwrap())
 	}
+	unsafeRequestID := provider.mapError(&openapi.ClientError{
+		StatusCode: dara.Int(http.StatusBadRequest), Code: dara.String("InvalidRR"),
+		Message: dara.String("invalid record"), RequestId: dara.String("unsafe\nrequest-id"),
+	}, operationCreateRecordSet)
+	if unsafeRequestID.ProviderRequestID != "" {
+		t.Fatalf("unsafe provider request ID was retained: %q", unsafeRequestID.ProviderRequestID)
+	}
 }
 
 func TestContextCancellationStopsSDKRequest(t *testing.T) {
@@ -680,11 +850,41 @@ func TestContextCancellationStopsSDKRequest(t *testing.T) {
 	cancel()
 	select {
 	case err := <-result:
-		if !core.IsErrorCode(err, core.ErrTimeout) {
+		if !core.IsErrorCode(err, core.ErrTimeout) || !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancellation error = %v", err)
+		}
+		if fixture.count("DescribeDomains") != 1 {
+			t.Fatalf("canceled read calls = %d", fixture.count("DescribeDomains"))
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Alibaba Cloud SDK request ignored context cancellation")
+	}
+}
+
+func TestMutationCallMapsContextCancellationWithoutRetry(t *testing.T) {
+	provider := &Provider{}
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	result := make(chan error, 1)
+	calls := 0
+	go func() {
+		_, err := mutationCall(provider, ctx, operationCreateRecordSet, func(*dara.RuntimeOptions) (*struct{}, error) {
+			calls++
+			close(started)
+			<-ctx.Done()
+			return nil, errors.New("opaque transport cancellation")
+		})
+		result <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-result:
+		if !core.IsErrorCode(err, core.ErrTimeout) || !errors.Is(err, context.Canceled) || calls != 1 {
+			t.Fatalf("mutation cancellation = %v, calls = %d", err, calls)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("mutation call ignored context cancellation")
 	}
 }
 

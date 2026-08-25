@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,15 @@ func TestProviderErrorClassificationAndSafeMapping(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), canary) || strings.Contains(public.Message, canary) {
 		t.Fatal("provider error exposed its cause")
+	}
+	encoded, marshalErr := json.Marshal(err)
+	if marshalErr != nil || strings.Contains(string(encoded), canary) {
+		t.Fatalf("provider error JSON leaked cause: %s, %v", encoded, marshalErr)
+	}
+	for _, formatted := range []string{fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err)} {
+		if strings.Contains(formatted, canary) {
+			t.Fatalf("provider error formatting leaked cause: %s", formatted)
+		}
 	}
 	if got := MapError(context.DeadlineExceeded, "list_zones"); got.Code != ErrTimeout {
 		t.Fatalf("deadline code = %q", got.Code)
@@ -46,5 +57,8 @@ func TestProviderRedactorCanary(t *testing.T) {
 	}
 	if strings.Count(redacted, "[REDACTED]") < 4 {
 		t.Fatalf("redactor did not cover all sensitive values: %s", redacted)
+	}
+	if short := Redact("raw=abc", "abc"); strings.Contains(short, "abc") {
+		t.Fatalf("redactor leaked short explicit secret: %s", short)
 	}
 }

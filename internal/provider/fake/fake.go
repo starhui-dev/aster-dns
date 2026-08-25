@@ -51,6 +51,9 @@ func (*Factory) Capabilities() core.Capabilities {
 }
 
 func (f *Factory) Build(ctx context.Context, config core.AccountConfig, credential core.Credential) (core.Provider, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, core.NewError(core.ErrTimeout, "build_client", "", 0, err)
+	}
 	var credentials Credentials
 	if err := credential.Decode(&credentials); err != nil || credentials.Token == "" {
 		return nil, core.NewError(core.ErrAuthentication, "build_client", "", 0, err)

@@ -11,7 +11,7 @@ import (
 )
 
 func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input core.CreateRecordSetInput) (core.RecordSet, error) {
-	zone, err := p.getZoneForMutation(ctx, zoneID)
+	zone, err := p.getZoneForMutation(ctx, zoneID, operationCreateRecordSet)
 	if err != nil {
 		return core.RecordSet{}, err
 	}
@@ -40,7 +40,7 @@ func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input cor
 		}
 		body.Weight = int32Weight(route.weight)
 	}
-	response, err := mutationCall(p, ctx, operationCreateRecordSet, func(client *dns.DnsClient) (*model.CreateRecordSetWithLineResponse, error) {
+	response, metadata, err := mutationCall(p, ctx, operationCreateRecordSet, func(client *dns.DnsClient) (*model.CreateRecordSetWithLineResponse, error) {
 		return client.CreateRecordSetWithLine(&model.CreateRecordSetWithLineRequest{ZoneId: zone.ID, Body: body})
 	})
 	if err != nil {
@@ -48,7 +48,7 @@ func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input cor
 	}
 	recordSet, err := mapCreateRecordSet(response, zone.Name)
 	if err != nil {
-		return core.RecordSet{}, p.providerPayloadError(operationCreateRecordSet, err)
+		return core.RecordSet{}, p.providerPayloadError(operationCreateRecordSet, metadata, err)
 	}
 	return recordSet, nil
 }
@@ -57,9 +57,12 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 	if err := input.Precondition.Validate(); err != nil {
 		return core.RecordSet{}, core.NewError(core.ErrValidation, operationUpdateRecordSet, "", 0, err)
 	}
-	current, zoneName, err := p.getRecordSet(ctx, zoneID, recordSetID)
+	current, zoneName, err := p.getRecordSet(ctx, zoneID, recordSetID, operationUpdateRecordSet)
 	if err != nil {
 		return core.RecordSet{}, err
+	}
+	if isHuaweiDefaultRecordSet(current) {
+		return core.RecordSet{}, core.NewError(core.ErrUnsupported, operationUpdateRecordSet, "", 0, errors.New("Huawei Cloud system default record sets are read-only"))
 	}
 	matches, err := input.Precondition.Matches(current)
 	if err != nil {
@@ -82,7 +85,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 	}
 	currentRoute, err := routingFromEntries(current.Entries)
 	if err != nil {
-		return core.RecordSet{}, p.providerPayloadError(operationUpdateRecordSet, err)
+		return core.RecordSet{}, p.providerPayloadError(operationUpdateRecordSet, nil, err)
 	}
 	route, err := mergeUpdateRouting(currentRoute, desiredRoute)
 	if err != nil {
@@ -97,7 +100,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 		Name: huaweiFQDN(normalized.Name), Type: string(normalized.Type), Ttl: &ttl, Records: &records,
 		Weight: int32Weight(route.weight),
 	}
-	response, err := mutationCall(p, ctx, operationUpdateRecordSet, func(client *dns.DnsClient) (*model.UpdateRecordSetsResponse, error) {
+	response, metadata, err := mutationCall(p, ctx, operationUpdateRecordSet, func(client *dns.DnsClient) (*model.UpdateRecordSetsResponse, error) {
 		return client.UpdateRecordSets(&model.UpdateRecordSetsRequest{ZoneId: zoneID, RecordsetId: recordSetID, Body: body})
 	})
 	if err != nil {
@@ -105,13 +108,13 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 	}
 	recordSet, err := mapUpdateRecordSet(response, zoneName)
 	if err != nil {
-		return core.RecordSet{}, p.providerPayloadError(operationUpdateRecordSet, err)
+		return core.RecordSet{}, p.providerPayloadError(operationUpdateRecordSet, metadata, err)
 	}
 	desiredStatus := huaweiDesiredStatus(normalized)
 	if !shouldSetStatus(currentStatus, desiredStatus) {
 		return recordSet, nil
 	}
-	statusResponse, err := mutationCall(p, ctx, operationUpdateRecordSet, func(client *dns.DnsClient) (*model.SetRecordSetsStatusResponse, error) {
+	statusResponse, statusMetadata, err := mutationCall(p, ctx, operationUpdateRecordSet, func(client *dns.DnsClient) (*model.SetRecordSetsStatusResponse, error) {
 		return client.SetRecordSetsStatus(&model.SetRecordSetsStatusRequest{
 			RecordsetId: recordSetID,
 			Body:        &model.SetRecordSetsStatusRequestBody{Status: desiredStatus},
@@ -122,7 +125,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 	}
 	recordSet, err = mapSetRecordSetStatus(statusResponse, zoneName)
 	if err != nil {
-		return core.RecordSet{}, p.providerPayloadError(operationUpdateRecordSet, err)
+		return core.RecordSet{}, p.providerPayloadError(operationUpdateRecordSet, statusMetadata, err)
 	}
 	return recordSet, nil
 }
@@ -131,9 +134,12 @@ func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID stri
 	if err := precondition.Validate(); err != nil {
 		return core.NewError(core.ErrValidation, operationDeleteRecordSet, "", 0, err)
 	}
-	current, _, err := p.getRecordSet(ctx, zoneID, recordSetID)
+	current, _, err := p.getRecordSet(ctx, zoneID, recordSetID, operationDeleteRecordSet)
 	if err != nil {
 		return err
+	}
+	if isHuaweiDefaultRecordSet(current) {
+		return core.NewError(core.ErrUnsupported, operationDeleteRecordSet, "", 0, errors.New("Huawei Cloud system default record sets are read-only"))
 	}
 	matches, err := precondition.Matches(current)
 	if err != nil {
@@ -142,18 +148,20 @@ func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID stri
 	if !matches {
 		return core.NewError(core.ErrConflict, operationDeleteRecordSet, "", 0, nil)
 	}
-	_, err = mutationCall(p, ctx, operationDeleteRecordSet, func(client *dns.DnsClient) (*model.DeleteRecordSetsResponse, error) {
+	_, _, err = mutationCall(p, ctx, operationDeleteRecordSet, func(client *dns.DnsClient) (*model.DeleteRecordSetsResponse, error) {
 		return client.DeleteRecordSets(&model.DeleteRecordSetsRequest{ZoneId: zoneID, RecordsetId: recordSetID})
 	})
 	return err
 }
+func isHuaweiDefaultRecordSet(recordSet core.RecordSet) bool {
+	return recordSet.Extensions.Huawei != nil && recordSet.Extensions.Huawei.Default != nil && *recordSet.Extensions.Huawei.Default
+}
 
-func (p *Provider) getZoneForMutation(ctx context.Context, zoneID string) (core.Zone, error) {
-	zoneID = strings.TrimSpace(zoneID)
-	if zoneID == "" {
-		return core.Zone{}, core.NewError(core.ErrValidation, operationGetZone, "", 0, errors.New("zone ID is required"))
+func (p *Provider) getZoneForMutation(ctx context.Context, zoneID, operation string) (core.Zone, error) {
+	if strings.TrimSpace(zoneID) == "" {
+		return core.Zone{}, core.NewError(core.ErrValidation, operation, "", 0, errors.New("zone ID is required"))
 	}
-	response, err := readCall(p, ctx, operationGetZone, func(client *dns.DnsClient) (*model.ShowPublicZoneResponse, error) {
+	response, metadata, err := readCall(p, ctx, operation, func(client *dns.DnsClient) (*model.ShowPublicZoneResponse, error) {
 		return client.ShowPublicZone(&model.ShowPublicZoneRequest{ZoneId: zoneID})
 	})
 	if err != nil {
@@ -161,7 +169,7 @@ func (p *Provider) getZoneForMutation(ctx context.Context, zoneID string) (core.
 	}
 	zone, err := mapShowPublicZone(response, nil)
 	if err != nil {
-		return core.Zone{}, p.providerPayloadError(operationGetZone, err)
+		return core.Zone{}, p.providerPayloadError(operation, metadata, err)
 	}
 	return zone, nil
 }

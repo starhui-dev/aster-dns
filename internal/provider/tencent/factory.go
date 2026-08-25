@@ -95,7 +95,12 @@ func (*Factory) Capabilities() core.Capabilities {
 		SupportsRoutingLine:     true,
 		SupportsWeight:          true,
 		SupportsRecordStatus:    true,
+		SupportsComments:        true,
 		ExtensionFields: []core.ExtensionFieldDescriptor{
+			{
+				Namespace: Type, Scope: core.ExtensionScopeZone, Key: "grade", Label: "DNS plan",
+				Type: core.DescriptorFieldString, ReadOnly: true,
+			},
 			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordSet, Key: "status", Label: "Status",
 				Type: core.DescriptorFieldEnum,
@@ -115,6 +120,13 @@ func (*Factory) Capabilities() core.Capabilities {
 			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordEntry, Key: "weight", Label: "Routing weight",
 				Type: core.DescriptorFieldInteger, Minimum: &minimumWeight, Maximum: &maximumWeight,
+				ApplicableWhen: []core.DescriptorCondition{{Field: "type", Values: []string{
+					string(core.RecordTypeA), string(core.RecordTypeAAAA), string(core.RecordTypeCNAME),
+				}}},
+			},
+			{
+				Namespace: Type, Scope: core.ExtensionScopeRecordEntry, Key: "remark", Label: "Remark",
+				Type: core.DescriptorFieldString,
 			},
 			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordEntry, Key: "status", Label: "Provider record status",
@@ -181,9 +193,14 @@ func (f *Factory) Build(ctx context.Context, config core.AccountConfig, credenti
 		redacted := core.Redact(err.Error(), values.SecretID, values.SecretKey, values.Token)
 		return nil, core.NewError(core.ErrAuthentication, "build_client", "", 0, errors.New(redacted))
 	}
-	if f.roundTripper != nil {
-		client.WithHttpTransport(f.roundTripper)
+	baseTransport := f.roundTripper
+	if baseTransport == nil && common.DefaultHttpClient != nil {
+		baseTransport = common.DefaultHttpClient.Transport
 	}
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	client.WithHttpTransport(&responseMetadataRoundTripper{base: baseTransport})
 
 	return &Provider{
 		client:       client,

@@ -33,7 +33,7 @@ Cloudflare 官方建议创建可限制权限和资源范围的 API Token。Aster
 - `GET /zones` / SDK `Zones.List`；
 - `GET /zones/{zone_id}` / SDK `Zones.Get`。
 
-Zone list 使用 `page` + `per_page`，响应 `result_info` 包含总数/总页数。Adapter 拉完所有 Cloudflare 页面后排序，再应用公共 contract 的 opaque offset cursor；Cloudflare 的 page number 不泄漏到公共 API。
+Zone list 使用 `page` + `per_page`，响应 `result_info` 包含总数/总页数。Adapter 拉完所有 Cloudflare 页面后排序，再应用绑定 `list_zones` scope 的 canonical opaque offset cursor；Cloudflare page number 不泄漏到公共 API。
 
 官方来源：
 
@@ -52,7 +52,7 @@ Zone list 使用 `page` + `per_page`，响应 `result_info` 包含总数/总页�
 
 Record list 同样使用 `page` + `per_page` 和 `result_info`，不是 cursor API。Adapter 显式携带原始 `context.Context` 请求每一页，不使用 SDK `GetNextPage`：`v7.9.0` 的 generated pagination helper clone 下一页请求时使用 `context.Background()`，会切断调用方取消信号。
 
-Cloudflare 原生粒度是单条 record。Adapter 按 DNS 语义及 Cloudflare attributes 组合为 logical `RecordSet`，并在每个 `RecordEntry.ID` 保留真实 Cloudflare record ID。logical ID 只编码排序后的 opaque record IDs，不根据 name/value 猜身份。
+Cloudflare 原生粒度是单条 record。Adapter 按 DNS 语义及 Cloudflare attributes 组合为 logical `RecordSet`，并在每个 `RecordEntry.ID` 保留真实 Cloudflare record ID。logical ID 只编码排序后的 opaque record IDs，不根据 name/value 猜身份。公共 record cursor 绑定 `list_record_sets:<zone_id>`，跨集合、跨 Zone、非 canonical cursor 均返回 `validation`。
 
 官方来源：
 
@@ -175,7 +175,7 @@ Cloudflare 原生 entry 粒度意味着多-entry RecordSet 的 mutation 不是�
 
 - 每个 SDK call 接收调用方 `context.Context`；取消或 deadline 映射为标准 `timeout`。
 - Factory 配置 30 秒 `option.WithRequestTimeout`，调用方更短的 context deadline 优先生效。
-- SDK 默认可 retry；本 Adapter 将 client 默认和每个 mutation call 都固定为 0 次 retry。Read path 当前也不自动 retry，避免隐藏限流与测试不可观察的额外请求。
+- SDK 默认可 retry；本 Adapter 将 client 默认和每个 SDK call 的自动 retry 固定为 0。Read path 在 adapter 层最多尝试 3 次，只重试 `rate_limited`、`timeout`、`upstream`，退避受 context 控制，`Retry-After` 大于 1 秒时直接返回；mutation 始终单次尝试。
 - 全分页显式复用原始 context，避免 SDK `v7.9.0` 下一页 helper 使用 background context 的行为。
 
 官方来源：

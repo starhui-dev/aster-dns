@@ -45,7 +45,7 @@ Official sources:
 - Each `DomainListItem` contains the opaque numeric `DomainId`, name, status, grade, effective nameservers, and timestamps.
 - Default frequency limit: 20 requests/second.
 
-The adapter walks all native pages before applying the provider contract's opaque local cursor. This produces stable logical pagination and keeps the Provider contract independent of native offsets.
+The adapter walks all native pages before applying a canonical opaque local cursor. Zone cursors are bound to `list_zones`; record cursors are bound to `list_record_sets:<zone_id>`. Cross-collection, cross-domain, and non-canonical cursors fail with `validation` instead of reusing a raw native offset.
 
 ### Get
 
@@ -60,14 +60,14 @@ Official sources:
 
 DNSPod's native mutation object is one record, not an RRSet. Every record has an opaque numeric `RecordId`.
 
-- `DescribeRecordList` uses `Offset` and `Limit`; the default limit is 100 and the documented maximum is 3000. The response includes `RecordCountInfo.TotalCount` and per-record ID, owner, type, value, line name, line ID, weight, status, TTL, MX priority, and update time. Default frequency limit: 100 requests/second.
-- `DescribeRecord` gets one record by `RecordId` and returns line name/ID, weight, TTL, enabled status, and update time. Default frequency limit: 200 requests/second.
+- `DescribeRecordList` uses `Offset` and `Limit`; the default limit is 100 and the documented maximum is 3000. The response includes `RecordCountInfo.TotalCount` and per-record ID, owner, type, value, line name, line ID, weight, status, remark, TTL, MX priority, and update time. Default frequency limit: 100 requests/second.
+- `DescribeRecord` gets one record by `RecordId` and returns line name/ID, weight, TTL, enabled status, remark, and update time. Default frequency limit: 200 requests/second.
 - `CreateRecord` returns the new `RecordId` and provider `RequestId`.
 - `ModifyRecord` modifies one existing `RecordId` and returns that ID plus the provider `RequestId`.
 - `DeleteRecord` deletes one existing `RecordId` and returns the provider `RequestId`.
 - Tencent documents a short indexing delay after record creation. Final-state reads therefore use the record IDs returned by mutations instead of guessing identity from name/value.
 
-The adapter reconstructs logical `RecordSet` values. It groups only records with the same canonical owner, type, TTL, routing line name, routing line ID, and status. Weight remains entry-specific. Consequently, two records with the same owner/type but different routing metadata remain distinct logical sets, and every native record ID and extension remains on its `RecordEntry`.
+The adapter reconstructs logical `RecordSet` values by canonical owner, type, TTL, routing line name, and routing line ID. Weight, status, and remark remain entry-specific and do not split one DNS RRSet. Mixed entry statuses produce an empty aggregate record-set status; every numeric provider record ID and typed extension remains on its `RecordEntry`.
 
 Official sources:
 
@@ -88,9 +88,10 @@ Official sources:
 
 Typed capability descriptors expose:
 
-- record-set `status` (`ENABLE` or `DISABLE`);
+- record-set `status` (`ENABLE` or `DISABLE` when uniform; empty when mixed);
 - record-entry `line` and `line_id`;
-- record-entry `weight` (0 through 100);
+- record-entry `weight` (0 through 100, applicable to A/AAAA/CNAME);
+- writable record-entry `remark`;
 - read-only record-entry `status`, mirroring the native record metadata.
 
 Official sources:
@@ -120,7 +121,7 @@ Adapter taxonomy:
 
 The API overview documents frequency limits per action and states that the limit dimension is `API + access region + sub-account`. Relevant published limits are 20 requests/second for domain list/info, line list, and type list; 100 for record list; and 200 for record info. The overview does not publish a numeric per-second value for `CreateRecord`, `ModifyRecord`, or `DeleteRecord`; their operation-frequency errors are still classified as `rate_limited` and are not retried automatically.
 
-The official SDK error type exposes `Code`, `Message`, and `RequestId`, but no structured retry-after field. The adapter preserves only a sanitized request ID in public errors and does not expose the upstream message.
+The official SDK error type exposes `Code`, `Message`, and `RequestId`, but no structured retry-after field. The adapter preserves sanitized payload/HTTP request IDs and maps an HTTP `Retry-After` header when present; upstream messages remain private and redacted.
 
 Official sources:
 
@@ -133,7 +134,7 @@ Official sources:
 
 ## Retry and concurrency policy
 
-- Read-only calls use at most three adapter attempts for `rate_limited` or transient `upstream` failures. Backoff is bounded and context-aware.
+- Read-only calls use at most three adapter attempts for `rate_limited`, `timeout`, or transient `upstream` failures. Backoff is bounded and context-aware; `Retry-After` above one second is returned without an early retry.
 - SDK automatic retries and region failover remain disabled for every call.
 - Mutations receive exactly one SDK attempt. Multi-entry logical mutations may require multiple native calls and are not represented as atomic.
 - Update and delete first re-fetch the current logical set and compare the required canonical fingerprint and optional provider version. A mismatch returns `conflict` before mutation.

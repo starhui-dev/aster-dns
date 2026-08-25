@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/huaweicloud/huaweicloud-sdk-go-v3/core/sdkerr"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 	"github.com/starhui-dev/aster-dns/internal/provider/contracttest"
 )
@@ -405,6 +406,23 @@ func TestFactoryMetadataAndCapabilities(t *testing.T) {
 	if !capabilities.SupportsRoutingLine || !capabilities.SupportsWeight || !capabilities.SupportsRecordStatus || capabilities.NativeRecordGranularity != core.NativeRecordGranularityRRSet {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
+	foundZoneType, foundProviderStatus, foundDefault := false, false, false
+	for _, field := range capabilities.ExtensionFields {
+		if field.Namespace != Type {
+			t.Fatalf("extension namespace = %q", field.Namespace)
+		}
+		switch {
+		case field.Scope == core.ExtensionScopeZone && field.Key == "zone_type" && field.Type == core.DescriptorFieldEnum && field.ReadOnly:
+			foundZoneType = true
+		case field.Scope == core.ExtensionScopeRecordSet && field.Key == "provider_status" && field.Type == core.DescriptorFieldString && field.ReadOnly:
+			foundProviderStatus = true
+		case field.Scope == core.ExtensionScopeRecordSet && field.Key == "default" && field.Type == core.DescriptorFieldBoolean && field.ReadOnly:
+			foundDefault = true
+		}
+	}
+	if !foundZoneType || !foundProviderStatus || !foundDefault {
+		t.Fatalf("read-only descriptors missing: %#v", capabilities.ExtensionFields)
+	}
 }
 
 func TestHuaweiProviderConformance(t *testing.T) {
@@ -423,8 +441,9 @@ func TestListZonesAndRecordSetsPagination(t *testing.T) {
 	fixture := newHuaweiFixture(t)
 	provider := fixture.provider(t)
 	firstZones, err := provider.ListZones(context.Background(), core.PageRequest{Limit: 1})
-	if err != nil || len(firstZones.Items) != 1 || firstZones.NextCursor != "zone-1" {
-		t.Fatalf("first zones = %#v, %v", firstZones, err)
+	zoneMarker, cursorErr := decodeMarkerCursor(firstZones.NextCursor, operationListZones)
+	if err != nil || cursorErr != nil || len(firstZones.Items) != 1 || zoneMarker != "zone-1" {
+		t.Fatalf("first zones = %#v, list error = %v, cursor error = %v", firstZones, err, cursorErr)
 	}
 	secondZones, err := provider.ListZones(context.Background(), core.PageRequest{Cursor: firstZones.NextCursor, Limit: 1})
 	if err != nil || len(secondZones.Items) != 1 || secondZones.NextCursor != "" {
@@ -435,16 +454,24 @@ func TestListZonesAndRecordSetsPagination(t *testing.T) {
 	}
 
 	firstRecords, err := provider.ListRecordSets(context.Background(), "zone-1", core.PageRequest{Limit: 1})
-	if err != nil || len(firstRecords.Items) != 1 || firstRecords.NextCursor != "record-a" {
-		t.Fatalf("first records = %#v, %v", firstRecords, err)
+	recordMarker, cursorErr := decodeMarkerCursor(firstRecords.NextCursor, operationListRecordSets+":zone-1")
+	if err != nil || cursorErr != nil || len(firstRecords.Items) != 1 || recordMarker != "record-a" {
+		t.Fatalf("first records = %#v, list error = %v, cursor error = %v", firstRecords, err, cursorErr)
 	}
 	secondRecords, err := provider.ListRecordSets(context.Background(), "zone-1", core.PageRequest{Cursor: firstRecords.NextCursor, Limit: 1})
-	if err != nil || len(secondRecords.Items) != 1 || secondRecords.NextCursor != "record-txt" {
-		t.Fatalf("second records = %#v, %v", secondRecords, err)
+	secondRecordMarker, cursorErr := decodeMarkerCursor(secondRecords.NextCursor, operationListRecordSets+":zone-1")
+	if err != nil || cursorErr != nil || len(secondRecords.Items) != 1 || secondRecordMarker != "record-txt" {
+		t.Fatalf("second records = %#v, list error = %v, cursor error = %v", secondRecords, err, cursorErr)
 	}
 	request := fixture.lastRequest(http.MethodGet, "/v2.1/recordsets")
 	if request.query.Get("zone_id") != "zone-1" || request.query.Get("marker") != "record-a" {
 		t.Fatalf("record query = %s", request.query.Encode())
+	}
+	if _, err = provider.ListZones(context.Background(), core.PageRequest{Cursor: firstRecords.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("record cursor accepted for zones: %v", err)
+	}
+	if _, err = provider.ListRecordSets(context.Background(), "zone-2", core.PageRequest{Cursor: firstRecords.NextCursor, Limit: 1}); !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("zone-1 cursor accepted for zone-2: %v", err)
 	}
 }
 
@@ -468,7 +495,7 @@ func TestRecordSetFixturesPreserveRRSetSemantics(t *testing.T) {
 			t.Fatalf("Huawei routing extension = %#v", entry.Extensions)
 		}
 	}
-	if aRecord.Extensions.Huawei == nil || aRecord.Extensions.Huawei.Status != "ACTIVE" {
+	if aRecord.Extensions.Huawei == nil || aRecord.Extensions.Huawei.Status != "ENABLE" || aRecord.Extensions.Huawei.ProviderStatus != "ACTIVE" {
 		t.Fatalf("Huawei status extension = %#v", aRecord.Extensions)
 	}
 	txt := byID["record-txt"]
@@ -487,8 +514,9 @@ func TestRecordSetFixturesPreserveRRSetSemantics(t *testing.T) {
 	if value(caa.Flags) != 0 || value(caa.Tag) != "issue" || caa.Value != "letsencrypt.org" {
 		t.Fatalf("CAA entry = %#v", caa)
 	}
-	if byID["record-soa"].Type != core.RecordTypeSOA {
-		t.Fatalf("SOA RRSet = %#v", byID["record-soa"])
+	soa := byID["record-soa"]
+	if soa.Type != core.RecordTypeSOA || soa.Extensions.Huawei == nil || soa.Extensions.Huawei.Default == nil || !*soa.Extensions.Huawei.Default {
+		t.Fatalf("SOA RRSet = %#v", soa)
 	}
 }
 func TestValidateCredentialsUsesMinimumReadOnlyRequest(t *testing.T) {
@@ -516,7 +544,7 @@ func TestHuaweiRecordStatusMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	createRequest := fixture.lastRequest(http.MethodPost, "/v2.1/zones/zone-1/recordsets")
-	if !strings.Contains(string(createRequest.body), `"status":"DISABLE"`) || created.Extensions.Huawei == nil || created.Extensions.Huawei.Status != "PENDING_CREATE" {
+	if !strings.Contains(string(createRequest.body), `"status":"DISABLE"`) || created.Extensions.Huawei == nil || created.Extensions.Huawei.Status != "" || created.Extensions.Huawei.ProviderStatus != "PENDING_CREATE" {
 		t.Fatalf("create status request = %s, response = %#v", createRequest.body, created.Extensions)
 	}
 
@@ -585,6 +613,28 @@ func TestRecordSetCreateUpdateDeleteAndPreconditions(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 }
+func TestHuaweiSystemDefaultRecordSetIsReadOnly(t *testing.T) {
+	fixture := newHuaweiFixture(t)
+	provider := fixture.provider(t)
+	current, err := provider.GetRecordSet(context.Background(), "zone-1", "record-soa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	precondition := core.Precondition{ExpectedFingerprint: current.Fingerprint, ProviderVersion: current.ProviderVersion}
+	_, err = provider.UpdateRecordSet(context.Background(), "zone-1", current.ID, core.UpdateRecordSetInput{
+		Desired:      core.CreateRecordSetInput{Name: current.Name, Type: current.Type, TTL: current.TTL, Entries: current.Entries, Extensions: current.Extensions},
+		Precondition: precondition,
+	})
+	if !core.IsErrorCode(err, core.ErrUnsupported) {
+		t.Fatalf("default update = %v", err)
+	}
+	if err = provider.DeleteRecordSet(context.Background(), "zone-1", current.ID, precondition); !core.IsErrorCode(err, core.ErrUnsupported) {
+		t.Fatalf("default delete = %v", err)
+	}
+	if fixture.count(http.MethodPut, "/v2.1/zones/zone-1/recordsets/record-soa") != 0 || fixture.count(http.MethodDelete, "/v2.1/zones/zone-1/recordsets/record-soa") != 0 {
+		t.Fatal("system default record set mutation reached provider")
+	}
+}
 
 func TestHuaweiReadRetriesButMutationDoesNot(t *testing.T) {
 	t.Run("read", func(t *testing.T) {
@@ -615,6 +665,19 @@ func TestHuaweiReadRetriesButMutationDoesNot(t *testing.T) {
 		}
 	})
 }
+func TestHuaweiLongRetryAfterIsNotRetried(t *testing.T) {
+	fixture := newHuaweiFixture(t)
+	headers := make(http.Header)
+	headers.Set("Retry-After", "2")
+	fixture.fail(http.MethodGet, "/v2/zones", fixtureFailure{status: http.StatusTooManyRequests, code: "DNS.0014", message: "slow down", headers: headers})
+	_, err := fixture.provider(t).ListZones(context.Background(), core.PageRequest{Limit: 1})
+	if !core.IsErrorCode(err, core.ErrRateLimited) {
+		t.Fatalf("long retry-after error = %v", err)
+	}
+	if count := fixture.count(http.MethodGet, "/v2/zones"); count != 1 {
+		t.Fatalf("long retry-after attempts = %d", count)
+	}
+}
 
 func TestHuaweiErrorMappingAndRequestID(t *testing.T) {
 	tests := []struct {
@@ -628,6 +691,12 @@ func TestHuaweiErrorMappingAndRequestID(t *testing.T) {
 		{name: "not_found", status: http.StatusNotFound, want: core.ErrNotFound},
 		{name: "conflict_status", status: http.StatusConflict, want: core.ErrConflict},
 		{name: "conflict_code", status: http.StatusBadRequest, code: "DNS.0312", want: core.ErrConflict},
+		{name: "not_found_code", status: http.StatusBadRequest, code: "DNS.0302", want: core.ErrNotFound},
+		{name: "unstable_conflict_code", status: http.StatusBadRequest, code: "DNS.0314", want: core.ErrConflict},
+		{name: "rate_limit_code", status: http.StatusForbidden, code: "DNS.0014", want: core.ErrRateLimited},
+		{name: "unsupported_code", status: http.StatusBadRequest, code: "DNS.0037", want: core.ErrUnsupported},
+		{name: "timeout_code", status: http.StatusInternalServerError, code: "DNS.0023", want: core.ErrTimeout},
+		{name: "upstream_code", status: http.StatusBadRequest, code: "DNS.0036", want: core.ErrUpstream},
 		{name: "rate_limit", status: http.StatusTooManyRequests, want: core.ErrRateLimited},
 		{name: "timeout", status: http.StatusGatewayTimeout, want: core.ErrTimeout},
 		{name: "upstream", status: http.StatusInternalServerError, want: core.ErrUpstream},
@@ -663,12 +732,16 @@ func TestHuaweiSecretRedaction(t *testing.T) {
 	fixture.fail(http.MethodGet, "/v2/zones", fixtureFailure{status: http.StatusUnauthorized, code: "APIGW.0301", message: message})
 	err := fixture.provider(t).ValidateCredentials(context.Background())
 	var providerError *core.ProviderError
-	if !errors.As(err, &providerError) || providerError.Cause == nil {
+	if !errors.As(err, &providerError) {
 		t.Fatalf("provider error = %#v", err)
 	}
-	cause := providerError.Cause.Error()
-	if strings.Contains(cause, fixtureAK) || strings.Contains(cause, fixtureSecret) || !strings.Contains(cause, "[REDACTED]") {
-		t.Fatalf("cause was not redacted: %s", cause)
+	cause := errors.Unwrap(providerError)
+	if cause == nil {
+		t.Fatalf("provider error cause = nil: %#v", err)
+	}
+	causeMessage := cause.Error()
+	if strings.Contains(causeMessage, fixtureAK) || strings.Contains(causeMessage, fixtureSecret) || !strings.Contains(causeMessage, "[REDACTED]") {
+		t.Fatalf("cause was not redacted: %s", causeMessage)
 	}
 }
 
@@ -704,6 +777,15 @@ func TestHuaweiContextCancellationAndTimeout(t *testing.T) {
 			t.Fatalf("timeout error = %v", err)
 		}
 	})
+	t.Run("opaque SDK wrapper after cancellation", func(t *testing.T) {
+		fixture := newHuaweiFixture(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		mapped := fixture.provider(t).mapError(ctx, errors.New("opaque SDK wrapper"), operationListZones, &responseMetadata{requestID: "canceled-request-id"})
+		if mapped.Code != core.ErrTimeout || mapped.ProviderRequestID != "canceled-request-id" {
+			t.Fatalf("canceled opaque error = %#v", mapped)
+		}
+	})
 }
 
 func TestHuaweiRoutingLineCannotChangeInPlace(t *testing.T) {
@@ -726,5 +808,112 @@ func TestHuaweiRoutingLineCannotChangeInPlace(t *testing.T) {
 	}
 	if fixture.count(http.MethodPut, "/v2.1/zones/zone-1/recordsets/record-a") != 0 {
 		t.Fatal("unsupported line change reached Huawei Cloud")
+	}
+}
+
+func TestHuaweiFactoryRejectsTrailingAccountOptions(t *testing.T) {
+	_, err := NewFactory().Build(context.Background(), core.AccountConfig{
+		ID: "00000000-0000-7000-8000-000000000003", Type: Type, Name: "invalid-options",
+		Options: json.RawMessage(`{"region":"ap-southeast-3"} {}`), CredentialRevision: 1,
+	}, core.NewCredential([]byte(`{"access_key":"test-ak","secret_key":"test-secret"}`)))
+	if !core.IsErrorCode(err, core.ErrValidation) {
+		t.Fatalf("trailing account options error = %v", err)
+	}
+}
+
+func TestHuaweiMXRoutingWeight(t *testing.T) {
+	fixture := newHuaweiFixture(t)
+	provider := fixture.provider(t)
+	weight := uint16(25)
+	primaryPriority, backupPriority := uint16(10), uint16(20)
+	extensions := core.RecordEntryExtensions{Huawei: &core.HuaweiRecordEntryExtensions{Line: "default_view", Weight: &weight}}
+	created, err := provider.CreateRecordSet(context.Background(), "zone-1", core.CreateRecordSetInput{
+		Name: "weighted-mail", Type: core.RecordTypeMX, TTL: 300,
+		Entries: []core.RecordEntry{
+			{Priority: &primaryPriority, Target: stringPointer("mail.example.com"), Extensions: extensions},
+			{Priority: &backupPriority, Target: stringPointer("backup.example.com"), Extensions: extensions},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create weighted MX: %v", err)
+	}
+	if len(created.Entries) != 2 || created.Entries[0].ID != "" || created.Entries[0].Extensions.Huawei == nil || created.Entries[0].Extensions.Huawei.Weight == nil || *created.Entries[0].Extensions.Huawei.Weight != weight {
+		t.Fatalf("weighted MX response = %#v", created)
+	}
+	request := fixture.lastRequest(http.MethodPost, "/v2.1/zones/zone-1/recordsets")
+	body := string(request.body)
+	if !strings.Contains(body, `"weight":25`) || !strings.Contains(body, `"10 mail.example.com."`) || !strings.Contains(body, `"20 backup.example.com."`) {
+		t.Fatalf("weighted MX request = %s", body)
+	}
+}
+
+func TestHuaweiPayloadErrorCarriesRequestID(t *testing.T) {
+	fixture := newHuaweiFixture(t)
+	fixture.mu.Lock()
+	fixture.records["zone-1"] = []fixtureRecord{{
+		Name: "broken.example.com.", ZoneID: "zone-1", ZoneName: "example.com.", Type: "A", TTL: 60,
+		Records: []string{"192.0.2.80"}, Status: "ACTIVE", CreatedAt: "2026-08-24T03:00:00.000",
+	}}
+	fixture.mu.Unlock()
+	_, err := fixture.provider(t).ListRecordSets(context.Background(), "zone-1", core.PageRequest{Limit: 10})
+	var providerError *core.ProviderError
+	if !errors.As(err, &providerError) || providerError.Code != core.ErrUpstream || providerError.Operation != operationListRecordSets || providerError.ProviderRequestID != "fixture-request-id" {
+		t.Fatalf("payload error = %#v", err)
+	}
+}
+
+func TestHuaweiEncodedAuthorizationDiagnosticRedaction(t *testing.T) {
+	provider := newHuaweiFixture(t).provider(t)
+	const canary = "encoded-authorization-canary"
+	mapped := provider.mapError(context.Background(), &sdkerr.ServiceResponseError{
+		StatusCode: http.StatusUnauthorized, RequestId: "encoded-request-id", ErrorCode: "APIGW.0301",
+		ErrorMessage: `{"encoded_authorization_message":"` + canary + `"}`, EncodedAuthorizationMessage: canary,
+	}, operationValidateCredentials, nil)
+	cause := errors.Unwrap(mapped)
+	if cause == nil || strings.Contains(cause.Error(), canary) || strings.Contains(strings.ToLower(cause.Error()), "encoded_authorization_message") {
+		t.Fatalf("encoded authorization diagnostic leaked: %#v", cause)
+	}
+	if mapped.Code != core.ErrAuthentication || mapped.ProviderRequestID != "encoded-request-id" {
+		t.Fatalf("encoded authorization mapping = %#v", mapped)
+	}
+}
+
+func TestHuaweiMutationValidationUsesMutationOperation(t *testing.T) {
+	provider := &Provider{}
+	validPrecondition := core.Precondition{ExpectedFingerprint: "v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+	tests := []struct {
+		name      string
+		operation string
+		call      func() error
+	}{
+		{
+			name: "create", operation: operationCreateRecordSet,
+			call: func() error {
+				_, err := provider.CreateRecordSet(context.Background(), "", core.CreateRecordSetInput{})
+				return err
+			},
+		},
+		{
+			name: "update", operation: operationUpdateRecordSet,
+			call: func() error {
+				_, err := provider.UpdateRecordSet(context.Background(), "", "record-id", core.UpdateRecordSetInput{Precondition: validPrecondition})
+				return err
+			},
+		},
+		{
+			name: "delete", operation: operationDeleteRecordSet,
+			call: func() error {
+				return provider.DeleteRecordSet(context.Background(), "", "record-id", validPrecondition)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.call()
+			var providerError *core.ProviderError
+			if !errors.As(err, &providerError) || providerError.Code != core.ErrValidation || providerError.Operation != test.operation {
+				t.Fatalf("mutation validation error = %#v", err)
+			}
+		})
 	}
 }

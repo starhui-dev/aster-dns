@@ -77,9 +77,13 @@ func (*Factory) Capabilities() core.Capabilities {
 		SupportsComments:        true,
 		ExtensionFields: []core.ExtensionFieldDescriptor{
 			{
+				Namespace: Type, Scope: core.ExtensionScopeZone, Key: "paused", Label: "Zone paused",
+				Type: core.DescriptorFieldBoolean, ReadOnly: true,
+			},
+			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordSet, Key: "proxied", Label: "Cloudflare proxy",
 				Type: core.DescriptorFieldBoolean,
-				RequiredWhen: []core.DescriptorCondition{{Field: "type", Values: []string{
+				ApplicableWhen: []core.DescriptorCondition{{Field: "type", Values: []string{
 					string(core.RecordTypeA), string(core.RecordTypeAAAA), string(core.RecordTypeCNAME),
 				}}},
 			},

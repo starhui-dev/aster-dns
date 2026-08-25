@@ -3,10 +3,10 @@ package aliyun
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,10 +25,11 @@ const (
 	operationUpdateRecordSet     = "update_record_set"
 	operationDeleteRecordSet     = "delete_record_set"
 
-	aliyunDomainPageSize = int64(100)
-	aliyunRecordPageSize = int64(500)
-	readAttempts         = 3
-	offsetCursorPrefix   = "aliyun-offset-v1:"
+	aliyunDomainPageSize  = int64(100)
+	aliyunRecordPageSize  = int64(500)
+	readAttempts          = 3
+	maximumReadRetryDelay = time.Second
+	offsetCursorPrefix    = "aliyun-offset-v1:"
 )
 
 const (
@@ -36,6 +37,11 @@ const (
 	statusDisable = "Disable"
 	defaultLine   = "default"
 )
+
+type offsetCursorPayload struct {
+	Scope  string `json:"scope"`
+	Offset int    `json:"offset"`
+}
 
 type Provider struct {
 	client       *alidns.Client
@@ -72,7 +78,8 @@ func (p *Provider) ListZones(ctx context.Context, pageRequest core.PageRequest) 
 	if err != nil {
 		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
 	}
-	offset, err := decodeOffsetCursor(normalized.Cursor)
+	cursorScope := operationListZones
+	offset, err := decodeOffsetCursor(normalized.Cursor, cursorScope)
 	if err != nil {
 		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
 	}
@@ -97,7 +104,7 @@ func (p *Provider) ListZones(ctx context.Context, pageRequest core.PageRequest) 
 		}
 		return items[i].Name < items[j].Name
 	})
-	page, err := paginate(items, normalized, offset)
+	page, err := paginate(items, normalized, offset, cursorScope)
 	if err != nil {
 		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
 	}
@@ -126,7 +133,7 @@ func (p *Provider) GetZone(ctx context.Context, zoneID string) (core.Zone, error
 	if mapErr != nil {
 		return core.Zone{}, p.providerPayloadError(operationGetZone, dara.StringValue(response.Body.RequestId), mapErr)
 	}
-	if zone.ID != strings.TrimSpace(zoneID) {
+	if zone.ID != zoneID {
 		return core.Zone{}, p.providerPayloadError(operationGetZone, dara.StringValue(response.Body.RequestId), errors.New("Alibaba Cloud returned a different domain ID"))
 	}
 	return zone, nil
@@ -137,7 +144,8 @@ func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, pageReques
 	if err != nil {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
 	}
-	offset, err := decodeOffsetCursor(normalized.Cursor)
+	cursorScope := operationListRecordSets + ":" + zoneID
+	offset, err := decodeOffsetCursor(normalized.Cursor, cursorScope)
 	if err != nil {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
 	}
@@ -153,7 +161,7 @@ func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, pageReques
 	if err != nil {
 		return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, requestID, err)
 	}
-	page, err := paginate(items, normalized, offset)
+	page, err := paginate(items, normalized, offset, cursorScope)
 	if err != nil {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
 	}
@@ -197,8 +205,7 @@ func (p *Provider) resolveZoneName(ctx context.Context, zoneID, operation string
 }
 
 func (p *Provider) resolveDomain(ctx context.Context, zoneID, operation string) (*alidns.DescribeDomainsResponseBodyDomainsDomain, string, error) {
-	zoneID = strings.TrimSpace(zoneID)
-	if zoneID == "" {
+	if strings.TrimSpace(zoneID) == "" {
 		return nil, "", core.NewError(core.ErrValidation, operation, "", 0, errors.New("zone ID is required"))
 	}
 	domains, requestID, err := p.listAllDomains(ctx, operation)
@@ -206,7 +213,7 @@ func (p *Provider) resolveDomain(ctx context.Context, zoneID, operation string) 
 		return nil, "", err
 	}
 	for _, domain := range domains {
-		if domain != nil && strings.TrimSpace(dara.StringValue(domain.DomainId)) == zoneID {
+		if domain != nil && dara.StringValue(domain.DomainId) == zoneID {
 			return domain, requestID, nil
 		}
 	}
@@ -293,13 +300,19 @@ func readCall[T any](p *Provider, ctx context.Context, operation string, call fu
 			return response, nil
 		}
 		mapped := p.mapError(err, operation)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, core.NewError(core.ErrTimeout, operation, "", 0, p.sanitizedCause(contextErr))
+		}
 		lastError = mapped
 		if attempt == readAttempts-1 || !retryableReadError(mapped) {
 			return nil, mapped
 		}
 		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
 		if mapped.RetryAfter > delay {
-			delay = min(mapped.RetryAfter, time.Second)
+			if mapped.RetryAfter > maximumReadRetryDelay {
+				return nil, mapped
+			}
+			delay = mapped.RetryAfter
 		}
 		if err = waitContext(ctx, delay); err != nil {
 			return nil, core.NewError(core.ErrTimeout, operation, "", 0, err)
@@ -314,6 +327,9 @@ func mutationCall[T any](p *Provider, ctx context.Context, operation string, cal
 	}
 	response, err := call(p.runtimeOptions())
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, core.NewError(core.ErrTimeout, operation, "", 0, p.sanitizedCause(contextErr))
+		}
 		return nil, p.mapError(err, operation)
 	}
 	return response, nil
@@ -334,7 +350,7 @@ func (p *Provider) runtimeOptions() *dara.RuntimeOptions {
 }
 
 func retryableReadError(err *core.ProviderError) bool {
-	return err != nil && (err.Code == core.ErrRateLimited || err.Code == core.ErrUpstream)
+	return err != nil && (err.Code == core.ErrRateLimited || err.Code == core.ErrTimeout || err.Code == core.ErrUpstream)
 }
 
 func waitContext(ctx context.Context, delay time.Duration) error {
@@ -348,30 +364,37 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func decodeOffsetCursor(cursor string) (int, error) {
-	cursor = strings.TrimSpace(cursor)
+func decodeOffsetCursor(cursor, expectedScope string) (int, error) {
 	if cursor == "" {
 		return 0, nil
 	}
-	if !strings.HasPrefix(cursor, offsetCursorPrefix) {
+	if strings.TrimSpace(cursor) != cursor || !strings.HasPrefix(cursor, offsetCursorPrefix) {
 		return 0, errors.New("Alibaba Cloud page cursor is invalid")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(cursor, offsetCursorPrefix))
 	if err != nil {
 		return 0, errors.New("Alibaba Cloud page cursor is invalid")
 	}
-	offset, err := strconv.Atoi(string(decoded))
-	if err != nil || offset < 0 {
+	var payload offsetCursorPayload
+	if err = json.Unmarshal(decoded, &payload); err != nil || payload.Scope != expectedScope || payload.Offset < 0 {
 		return 0, errors.New("Alibaba Cloud page cursor is invalid")
 	}
-	return offset, nil
+	canonical, err := encodeOffsetCursor(payload.Offset, payload.Scope)
+	if err != nil || canonical != cursor {
+		return 0, errors.New("Alibaba Cloud page cursor is invalid")
+	}
+	return payload.Offset, nil
 }
 
-func encodeOffsetCursor(offset int) string {
-	return offsetCursorPrefix + base64.RawURLEncoding.EncodeToString([]byte(strconv.Itoa(offset)))
+func encodeOffsetCursor(offset int, scope string) (string, error) {
+	encoded, err := json.Marshal(offsetCursorPayload{Scope: scope, Offset: offset})
+	if err != nil {
+		return "", err
+	}
+	return offsetCursorPrefix + base64.RawURLEncoding.EncodeToString(encoded), nil
 }
 
-func paginate[T any](items []T, request core.PageRequest, offset int) (core.Page[T], error) {
+func paginate[T any](items []T, request core.PageRequest, offset int, cursorScope string) (core.Page[T], error) {
 	if offset > len(items) {
 		return core.Page[T]{}, errors.New("Alibaba Cloud page cursor exceeds the result set")
 	}
@@ -380,7 +403,11 @@ func paginate[T any](items []T, request core.PageRequest, offset int) (core.Page
 	copy(pageItems, items[offset:end])
 	page := core.Page[T]{Items: pageItems}
 	if end < len(items) {
-		page.NextCursor = encodeOffsetCursor(end)
+		nextCursor, err := encodeOffsetCursor(end, cursorScope)
+		if err != nil {
+			return core.Page[T]{}, fmt.Errorf("encode Alibaba Cloud page cursor: %w", err)
+		}
+		page.NextCursor = nextCursor
 	}
 	if err := core.ValidatePage(request, page); err != nil {
 		return core.Page[T]{}, fmt.Errorf("Alibaba Cloud page is invalid: %w", err)

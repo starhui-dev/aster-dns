@@ -17,9 +17,10 @@ import (
 const recordSetIDPrefix = "tencent-recordset-v1:"
 
 type routing struct {
-	line   string
-	lineID string
-	status string
+	line           string
+	lineID         string
+	status         string
+	statusOverride bool
 }
 
 type recordGroupKey struct {
@@ -28,7 +29,6 @@ type recordGroupKey struct {
 	ttl        uint32
 	line       string
 	lineID     string
-	status     string
 }
 
 type recordGroup struct {
@@ -126,7 +126,7 @@ func groupRecords(zoneName string, source []*dnspod.RecordListItem) ([]core.Reco
 			ID: id, Name: group.key.name, Type: group.key.recordType, TTL: group.key.ttl,
 			Entries: group.entries,
 			Extensions: core.RecordSetExtensions{Tencent: &core.TencentRecordSetExtensions{
-				Status: group.key.status,
+				Status: aggregateTencentStatus(group.entries),
 			}},
 			ProviderVersion: group.providerVersion,
 		})
@@ -150,8 +150,8 @@ func groupRecords(zoneName string, source []*dnspod.RecordListItem) ([]core.Reco
 		if leftRoute.lineID != rightRoute.lineID {
 			return leftRoute.lineID < rightRoute.lineID
 		}
-		if leftRoute.status != rightRoute.status {
-			return leftRoute.status < rightRoute.status
+		if leftRoute.line != rightRoute.line {
+			return leftRoute.line < rightRoute.line
 		}
 		return left.ID < right.ID
 	})
@@ -173,13 +173,13 @@ func mapRecord(zoneName string, source *dnspod.RecordListItem, recordType core.R
 	}
 	line := strings.TrimSpace(stringValue(source.Line))
 	if line == "" {
-		line = defaultLine
+		return core.RecordEntry{}, recordGroupKey{}, "", errors.New("Tencent Cloud record routing line is missing")
 	}
 	lineID := strings.TrimSpace(stringValue(source.LineId))
-	if lineID == "" && line == defaultLine {
-		lineID = defaultLineID
+	if lineID == "" {
+		return core.RecordEntry{}, recordGroupKey{}, "", errors.New("Tencent Cloud record routing line ID is missing")
 	}
-	status, err := normalizeStatus(stringValue(source.Status), statusEnable)
+	status, err := normalizeStatus(stringValue(source.Status), "")
 	if err != nil {
 		return core.RecordEntry{}, recordGroupKey{}, "", err
 	}
@@ -197,10 +197,10 @@ func mapRecord(zoneName string, source *dnspod.RecordListItem, recordType core.R
 	}
 	entry.ID = strconv.FormatUint(recordID, 10)
 	entry.Extensions.Tencent = &core.TencentRecordEntryExtensions{
-		Line: line, LineID: lineID, Weight: routingWeight, Status: status,
+		Line: line, LineID: lineID, Weight: routingWeight, Status: status, Remark: stringValue(source.Remark),
 	}
 	return entry, recordGroupKey{
-		name: name, recordType: recordType, ttl: uint32(ttl), line: line, lineID: lineID, status: status,
+		name: name, recordType: recordType, ttl: uint32(ttl), line: line, lineID: lineID,
 	}, strings.TrimSpace(stringValue(source.UpdatedOn)), nil
 }
 
@@ -322,15 +322,13 @@ func validateTencentInput(input core.CreateRecordSetInput, fallback routing) (ro
 	if result.lineID == "" && result.line == defaultLine {
 		result.lineID = defaultLineID
 	}
-	if result.status == "" {
-		result.status = statusEnable
-	}
 	if input.Extensions.Tencent != nil && strings.TrimSpace(input.Extensions.Tencent.Status) != "" {
-		status, err := normalizeStatus(input.Extensions.Tencent.Status, result.status)
+		status, err := normalizeStatus(input.Extensions.Tencent.Status, "")
 		if err != nil {
 			return routing{}, err
 		}
 		result.status = status
+		result.statusOverride = true
 	}
 
 	var entryRoute *routing
@@ -338,7 +336,7 @@ func validateTencentInput(input core.CreateRecordSetInput, fallback routing) (ro
 		if entry.Extensions.Cloudflare != nil || entry.Extensions.Huawei != nil || entry.Extensions.Aliyun != nil {
 			return routing{}, errors.New("record entry contains extensions for another provider")
 		}
-		effective := result
+		effective := routing{line: result.line, lineID: result.lineID}
 		if extension := entry.Extensions.Tencent; extension != nil {
 			line := strings.TrimSpace(extension.Line)
 			lineID := strings.TrimSpace(extension.LineID)
@@ -350,33 +348,30 @@ func validateTencentInput(input core.CreateRecordSetInput, fallback routing) (ro
 				effective.lineID = lineID
 			}
 			if strings.TrimSpace(extension.Status) != "" {
-				status, err := normalizeStatus(extension.Status, effective.status)
-				if err != nil {
+				if _, err := normalizeStatus(extension.Status, ""); err != nil {
 					return routing{}, err
 				}
-				effective.status = status
 			}
-			if extension.Weight != nil && *extension.Weight > 100 {
-				return routing{}, errors.New("Tencent Cloud routing weight must be between 0 and 100")
+			if extension.Weight != nil {
+				if *extension.Weight > 100 {
+					return routing{}, errors.New("Tencent Cloud routing weight must be between 0 and 100")
+				}
+				if !tencentRecordTypeSupportsWeight(input.Type) {
+					return routing{}, fmt.Errorf("Tencent Cloud record type %q does not support routing weight", input.Type)
+				}
 			}
 		}
-		if effective.line == "" {
-			return routing{}, errors.New("Tencent Cloud routing line is required")
-		}
-		if effective.lineID == "" && effective.line == defaultLine {
-			effective.lineID = defaultLineID
+		if effective.line == "" || effective.lineID == "" {
+			return routing{}, errors.New("Tencent Cloud routing line and line ID are required")
 		}
 		if entryRoute == nil {
 			copy := effective
 			entryRoute = &copy
-		} else if entryRoute.line != effective.line || entryRoute.lineID != effective.lineID || entryRoute.status != effective.status {
-			return routing{}, errors.New("Tencent Cloud line, line ID, and status must be consistent across one logical record set")
+		} else if entryRoute.line != effective.line || entryRoute.lineID != effective.lineID {
+			return routing{}, errors.New("Tencent Cloud line and line ID must be consistent across one logical record set")
 		}
 	}
 	if entryRoute != nil {
-		if entryRoute.status != result.status {
-			return routing{}, errors.New("Tencent Cloud entry status differs from the record set status")
-		}
 		result.line = entryRoute.line
 		result.lineID = entryRoute.lineID
 	}
@@ -384,9 +379,12 @@ func validateTencentInput(input core.CreateRecordSetInput, fallback routing) (ro
 }
 
 func routingFromRecordSet(recordSet core.RecordSet) routing {
-	result := routing{line: defaultLine, lineID: defaultLineID, status: statusEnable}
-	if recordSet.Extensions.Tencent != nil {
-		result.status, _ = normalizeStatus(recordSet.Extensions.Tencent.Status, statusEnable)
+	result := routing{line: defaultLine, lineID: defaultLineID}
+	if recordSet.Extensions.Tencent != nil && strings.TrimSpace(recordSet.Extensions.Tencent.Status) != "" {
+		result.status, _ = normalizeStatus(recordSet.Extensions.Tencent.Status, "")
+	}
+	if result.status == "" {
+		result.status = aggregateTencentStatus(recordSet.Entries)
 	}
 	if len(recordSet.Entries) > 0 && recordSet.Entries[0].Extensions.Tencent != nil {
 		extension := recordSet.Entries[0].Extensions.Tencent
@@ -403,7 +401,7 @@ func routingFromRecordSet(recordSet core.RecordSet) routing {
 func groupKeyFromInput(input core.CreateRecordSetInput, route routing) recordGroupKey {
 	return recordGroupKey{
 		name: input.Name, recordType: input.Type, ttl: input.TTL,
-		line: route.line, lineID: route.lineID, status: route.status,
+		line: route.line, lineID: route.lineID,
 	}
 }
 
@@ -411,8 +409,49 @@ func groupKeyFromRecordSet(recordSet core.RecordSet) recordGroupKey {
 	route := routingFromRecordSet(recordSet)
 	return recordGroupKey{
 		name: recordSet.Name, recordType: recordSet.Type, ttl: recordSet.TTL,
-		line: route.line, lineID: route.lineID, status: route.status,
+		line: route.line, lineID: route.lineID,
 	}
+}
+
+func aggregateTencentStatus(entries []core.RecordEntry) string {
+	status := ""
+	for _, entry := range entries {
+		if entry.Extensions.Tencent == nil || strings.TrimSpace(entry.Extensions.Tencent.Status) == "" {
+			return ""
+		}
+		entryStatus, err := normalizeStatus(entry.Extensions.Tencent.Status, "")
+		if err != nil {
+			return ""
+		}
+		if status == "" {
+			status = entryStatus
+			continue
+		}
+		if status != entryStatus {
+			return ""
+		}
+	}
+	return status
+}
+
+func effectiveTencentStatus(entry core.RecordEntry, route routing, fallback string) (string, error) {
+	if route.statusOverride {
+		return normalizeStatus(route.status, "")
+	}
+	if entry.Extensions.Tencent != nil && strings.TrimSpace(entry.Extensions.Tencent.Status) != "" {
+		return normalizeStatus(entry.Extensions.Tencent.Status, "")
+	}
+	if strings.TrimSpace(route.status) != "" {
+		return normalizeStatus(route.status, "")
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return normalizeStatus(fallback, "")
+	}
+	return statusEnable, nil
+}
+
+func sameRouting(left, right routing) bool {
+	return left.line == right.line && left.lineID == right.lineID
 }
 
 func normalizeStatus(value, fallback string) (string, error) {
@@ -440,6 +479,15 @@ func tencentRecordTypeSupported(recordType core.RecordType) bool {
 	}
 }
 
+func tencentRecordTypeSupportsWeight(recordType core.RecordType) bool {
+	switch recordType {
+	case core.RecordTypeA, core.RecordTypeAAAA, core.RecordTypeCNAME:
+		return true
+	default:
+		return false
+	}
+}
+
 func encodeRecordSetID(ids []string) (string, error) {
 	if len(ids) == 0 {
 		return "", errors.New("Tencent Cloud logical record set contains no provider record IDs")
@@ -447,11 +495,12 @@ func encodeRecordSetID(ids []string) (string, error) {
 	ids = append([]string(nil), ids...)
 	sort.Strings(ids)
 	for index, id := range ids {
-		id = strings.TrimSpace(id)
+		if id == "" || id != strings.TrimSpace(id) {
+			return "", errors.New("Tencent Cloud logical record set contains invalid provider record IDs")
+		}
 		if _, err := strconv.ParseUint(id, 10, 64); err != nil || id == "0" || (index > 0 && id == ids[index-1]) {
 			return "", errors.New("Tencent Cloud logical record set contains invalid provider record IDs")
 		}
-		ids[index] = id
 	}
 	encoded, err := json.Marshal(ids)
 	if err != nil {
@@ -461,8 +510,7 @@ func encodeRecordSetID(ids []string) (string, error) {
 }
 
 func decodeRecordSetID(id string) ([]string, error) {
-	id = strings.TrimSpace(id)
-	if !strings.HasPrefix(id, recordSetIDPrefix) {
+	if id != strings.TrimSpace(id) || !strings.HasPrefix(id, recordSetIDPrefix) {
 		return nil, errors.New("Tencent Cloud record set ID is invalid")
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(id, recordSetIDPrefix))

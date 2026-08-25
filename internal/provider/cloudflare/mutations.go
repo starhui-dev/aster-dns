@@ -15,6 +15,9 @@ import (
 )
 
 func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input core.CreateRecordSetInput) (core.RecordSet, error) {
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
+
 	zone, err := p.GetZone(ctx, zoneID)
 	if err != nil {
 		return core.RecordSet{}, reoperation(err, operationCreateRecordSet)
@@ -50,6 +53,9 @@ func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input cor
 }
 
 func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID string, input core.UpdateRecordSetInput) (core.RecordSet, error) {
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
+
 	current, zone, sets, err := p.currentRecordSetForMutation(ctx, zoneID, recordSetID, operationUpdateRecordSet)
 	if err != nil {
 		return core.RecordSet{}, err
@@ -122,6 +128,9 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 }
 
 func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID string, precondition core.Precondition) error {
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
+
 	current, zone, _, err := p.currentRecordSetForMutation(ctx, zoneID, recordSetID, operationDeleteRecordSet)
 	if err != nil {
 		return err
@@ -134,7 +143,7 @@ func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID stri
 			return err
 		}
 	}
-	return nil
+	return p.verifyRecordSetDeleted(ctx, zone, current, operationDeleteRecordSet)
 }
 
 func (p *Provider) currentRecordSetForMutation(ctx context.Context, zoneID, recordSetID, operation string) (core.RecordSet, core.Zone, []core.RecordSet, error) {
@@ -145,9 +154,6 @@ func (p *Provider) currentRecordSetForMutation(ctx context.Context, zoneID, reco
 	zone, err := p.GetZone(ctx, zoneID)
 	if err != nil {
 		return core.RecordSet{}, core.Zone{}, nil, reoperation(err, operation)
-	}
-	if _, _, err = p.getRecord(ctx, zone.ID, ids[0], operation); err != nil {
-		return core.RecordSet{}, core.Zone{}, nil, err
 	}
 	sets, raw, err := p.listRecordSetsForMutation(ctx, zone, operation)
 	if err != nil {
@@ -184,14 +190,29 @@ func (p *Provider) findFinalRecordSet(ctx context.Context, zone core.Zone, ids [
 		return core.RecordSet{}, err
 	}
 	for _, recordSet := range sets {
-		if recordSetContainsIDs(recordSet, ids) {
+		if recordSetHasExactIDs(recordSet, ids) {
 			if !equivalentGroupKey(groupKeyFromRecordSet(recordSet), desiredKey) {
 				return core.RecordSet{}, core.NewError(core.ErrConflict, operation, responseRequestID(raw), 0, errors.New("Cloudflare final record state differs from the requested state"))
 			}
 			return recordSet, nil
 		}
 	}
-	return core.RecordSet{}, core.NewError(core.ErrConflict, operation, responseRequestID(raw), 0, errors.New("Cloudflare final record state could not be re-fetched"))
+	return core.RecordSet{}, core.NewError(core.ErrConflict, operation, responseRequestID(raw), 0, errors.New("Cloudflare final record state could not be re-fetched exactly"))
+}
+
+func (p *Provider) verifyRecordSetDeleted(ctx context.Context, zone core.Zone, deleted core.RecordSet, operation string) error {
+	sets, raw, err := p.listRecordSetsForMutation(ctx, zone, operation)
+	if err != nil {
+		return err
+	}
+	deletedIDs := entryIDs(deleted.Entries)
+	deletedKey := groupKeyFromRecordSet(deleted)
+	for _, recordSet := range sets {
+		if recordSetIntersectsIDs(recordSet, deletedIDs) || equivalentGroupKey(groupKeyFromRecordSet(recordSet), deletedKey) {
+			return core.NewError(core.ErrConflict, operation, responseRequestID(raw), 0, errors.New("Cloudflare logical record set still exists after deletion"))
+		}
+	}
+	return nil
 }
 
 func (p *Provider) createRecord(ctx context.Context, zoneID string, input core.CreateRecordSetInput, options recordOptions, entry core.RecordEntry, operation string) (*dns.RecordResponse, error) {
@@ -204,8 +225,8 @@ func (p *Provider) createRecord(ctx context.Context, zoneID string, input core.C
 	if err != nil {
 		return nil, p.mapError(operation, err)
 	}
-	if response == nil || strings.TrimSpace(response.ID) == "" {
-		return nil, p.providerPayloadError(operation, raw, errors.New("Cloudflare create-record response is missing the record ID"))
+	if response == nil || !validCloudflareOpaqueID(response.ID) {
+		return nil, p.providerPayloadError(operation, raw, errors.New("Cloudflare create-record response has an invalid record ID"))
 	}
 	return response, nil
 }
@@ -220,7 +241,7 @@ func (p *Provider) updateRecord(ctx context.Context, zoneID, recordID string, in
 	if err != nil {
 		return nil, p.mapError(operation, err)
 	}
-	if response == nil || strings.TrimSpace(response.ID) != recordID {
+	if response == nil || response.ID != recordID {
 		return nil, p.providerPayloadError(operation, raw, errors.New("Cloudflare update-record response has an invalid record ID"))
 	}
 	return response, nil

@@ -14,7 +14,7 @@ var providerSensitivePatterns = []*regexp.Regexp{
 func Redact(text string, secretValues ...string) string {
 	redacted := text
 	for _, secret := range secretValues {
-		if len(secret) < 4 {
+		if secret == "" {
 			continue
 		}
 		for _, candidate := range []string{secret, url.QueryEscape(secret), url.PathEscape(secret)} {

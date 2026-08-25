@@ -111,9 +111,6 @@ func normalizeRecordSet(zoneName string, recordSet RecordSet, includeFingerprint
 	if len(recordSet.Entries) == 0 {
 		return RecordSet{}, errors.New("record set must contain at least one entry")
 	}
-	if recordSet.Type == RecordTypeCNAME && len(recordSet.Entries) != 1 {
-		return RecordSet{}, errors.New("CNAME record set must contain exactly one entry")
-	}
 	entries := make([]RecordEntry, len(recordSet.Entries))
 	seen := make(map[string]struct{}, len(recordSet.Entries))
 	for index, entry := range recordSet.Entries {
@@ -147,7 +144,6 @@ func normalizeRecordSet(zoneName string, recordSet RecordSet, includeFingerprint
 }
 
 func normalizeRecordEntry(recordType RecordType, entry RecordEntry) (RecordEntry, error) {
-	entry.ID = strings.TrimSpace(entry.ID)
 	switch recordType {
 	case RecordTypeA, RecordTypeAAAA:
 		if err := requireOnlyValue(entry); err != nil {

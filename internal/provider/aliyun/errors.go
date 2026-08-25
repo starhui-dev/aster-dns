@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"net"
 	"strings"
 	"time"
 
@@ -26,8 +25,8 @@ func (p *Provider) mapError(err error, operation string) *core.ProviderError {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return core.NewError(core.ErrTimeout, operation, "", 0, p.sanitizedCause(err))
 	}
-	var networkError net.Error
-	if errors.As(err, &networkError) && networkError.Timeout() {
+	var timeoutError interface{ Timeout() bool }
+	if errors.As(err, &timeoutError) && timeoutError.Timeout() {
 		return core.NewError(core.ErrTimeout, operation, "", 0, p.sanitizedCause(err))
 	}
 
@@ -59,41 +58,68 @@ func classifyAliyunError(statusCode int, providerCode string) core.ErrorCode {
 	switch {
 	case statusCode == 429,
 		strings.Contains(code, "throttl"),
-		strings.Contains(code, "rate"),
-		strings.Contains(code, "flowcontrol"):
+		strings.Contains(code, "flowcontrol"),
+		strings.Contains(code, "ratelimit"),
+		strings.Contains(code, "requestlimit"),
+		strings.Contains(code, "frequencylimit"),
+		strings.Contains(code, "toofrequent"):
 		return core.ErrRateLimited
-	case strings.Contains(code, "invalidaccesskey"),
+	case statusCode == 401,
+		strings.Contains(code, "invalidaccesskey"),
+		strings.Contains(code, "missingaccesskey"),
 		strings.Contains(code, "signaturedoesnotmatch"),
 		strings.Contains(code, "signatureinvalid"),
+		strings.Contains(code, "incompletesignature"),
+		strings.Contains(code, "signaturenonce"),
 		strings.Contains(code, "invalidsecuritytoken"),
 		strings.Contains(code, "invalidcredential"),
 		strings.Contains(code, "tokeninvalid"),
-		strings.Contains(code, "missingsecuritytoken"):
+		strings.Contains(code, "missingsecuritytoken"),
+		strings.Contains(code, "requesttimetooskewed"),
+		strings.Contains(code, "invalidtimestamp"):
 		return core.ErrAuthentication
 	case statusCode == 403,
 		strings.Contains(code, "forbidden"),
 		strings.Contains(code, "accessdenied"),
 		strings.Contains(code, "permission"),
 		strings.Contains(code, "ramdenied"),
-		strings.Contains(code, "locked"):
+		strings.Contains(code, "locked"),
+		strings.Contains(code, "notbelong"),
+		strings.Contains(code, "addedbyothers"),
+		strings.Contains(code, "riskcontrol"):
 		return core.ErrForbidden
 	case statusCode == 404,
 		strings.Contains(code, "notfound"),
 		strings.Contains(code, "notexist"),
-		strings.Contains(code, "recordidnotexist"),
-		strings.Contains(code, "domainnotexist"):
+		strings.Contains(code, "notexsit"):
 		return core.ErrNotFound
-	case strings.Contains(code, "duplicate"),
+	case statusCode == 409,
+		strings.Contains(code, "duplicate"),
 		strings.Contains(code, "conflict"),
 		strings.Contains(code, "alreadyexist"),
-		strings.Contains(code, "recordexist"):
+		strings.Contains(code, "recordexist"),
+		strings.Contains(code, "hasexist"),
+		strings.Contains(code, "hasexsit"):
 		return core.ErrConflict
+	case statusCode == 405,
+		statusCode == 501,
+		strings.Contains(code, "unsupported"),
+		strings.Contains(code, "notsupport"),
+		strings.Contains(code, "notimplemented"):
+		return core.ErrUnsupported
+	case statusCode == 408, statusCode == 504:
+		return core.ErrTimeout
 	case statusCode == 400,
+		statusCode == 406,
+		statusCode == 413,
+		statusCode == 422,
 		strings.Contains(code, "invalidparameter"),
 		strings.Contains(code, "parameterillegal"),
 		strings.Contains(code, "invalidrr"),
 		strings.Contains(code, "invalidtype"),
 		strings.Contains(code, "invalidttl"),
+		strings.Contains(code, "missingparameter"),
+		strings.Contains(code, "unknownparameter"),
 		strings.Contains(code, "illegal"):
 		return core.ErrValidation
 	default:
@@ -108,6 +134,12 @@ func (p *Provider) providerPayloadError(operation, requestID string, err error) 
 func (p *Provider) sanitizedCause(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
 	}
 	return errors.New(core.Redact(err.Error(), p.secretValues...))
 }

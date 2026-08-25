@@ -90,7 +90,12 @@ func (*Factory) Capabilities() core.Capabilities {
 		SupportsRoutingLine:     true,
 		SupportsWeight:          true,
 		SupportsRecordStatus:    true,
+		SupportsComments:        true,
 		ExtensionFields: []core.ExtensionFieldDescriptor{
+			{
+				Namespace: Type, Scope: core.ExtensionScopeZone, Key: "group_id", Label: "Domain group ID",
+				Type: core.DescriptorFieldString, ReadOnly: true,
+			},
 			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordSet, Key: "status", Label: "Status",
 				Type: core.DescriptorFieldEnum,
@@ -112,8 +117,15 @@ func (*Factory) Capabilities() core.Capabilities {
 				},
 			},
 			{
+				Namespace: Type, Scope: core.ExtensionScopeRecordEntry, Key: "remark", Label: "Remark",
+				Type: core.DescriptorFieldString,
+			},
+			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordEntry, Key: "weight", Label: "Routing weight",
 				Type: core.DescriptorFieldInteger, Minimum: &minimumWeight, Maximum: &maximumWeight,
+				ApplicableWhen: []core.DescriptorCondition{{Field: "type", Values: []string{
+					string(core.RecordTypeA), string(core.RecordTypeAAAA),
+				}}},
 			},
 		},
 	}

@@ -82,7 +82,7 @@ Official sources:
 
 ## Record operations and native granularity
 
-Alibaba Cloud DNS `2015-01-09` exposes individual record objects, not native RRSet objects. Each record has its own opaque `RecordId`, value, TTL, line, status, and optional weight metadata.
+Alibaba Cloud DNS `2015-01-09` exposes individual record objects, not native RRSet objects. Each record has its own opaque `RecordId`, value, TTL, line, status, optional weight, and optional remark metadata.
 
 | Provider operation | Official API |
 |---|---|
@@ -92,12 +92,13 @@ Alibaba Cloud DNS `2015-01-09` exposes individual record objects, not native RRS
 | Update record | `UpdateDomainRecord` |
 | Delete record | `DeleteDomainRecord` |
 | Change status | `SetDomainRecordStatus` |
+| Change remark | `UpdateDomainRecordRemark` |
 | Enable/disable weighted routing | `SetDNSSLBStatus` |
 | Change record weight | `UpdateDNSSLBWeight` |
 
 `DescribeDomainRecords` uses one-based `PageNumber` pagination. `PageSize` defaults to 20 and has a maximum of 500. Responses contain `TotalCount`, `PageNumber`, `PageSize`, `RequestId`, and an array of individual records.
 
-The adapter reconstructs logical `RecordSet` values only after traversing all native record pages for the zone. It groups records only when all set-level semantics match: canonical owner name, record type, TTL, routing line, status, and weighted-routing mode. Different line or status values are separate logical sets even when name and type match. Every native `RecordId` is preserved in `RecordEntry.ID`. A synthetic opaque `RecordSet.ID` contains only the sorted provider record IDs; mutation targeting never guesses identity from record name or value.
+The adapter reconstructs logical `RecordSet` values only after traversing all native record pages for the zone. It groups records by canonical owner name, record type, TTL, routing line, and weighted-routing mode. Per-entry status and remark do not split one DNS RRSet: mixed statuses remain on typed `RecordEntry` extensions and produce an empty aggregate set status. Every native `RecordId` is preserved in `RecordEntry.ID`. A synthetic opaque `RecordSet.ID` contains only the sorted provider record IDs; mutation targeting never guesses identity from record name or value. Local cursors are canonical and bound to the Zone/collection that produced them.
 
 Official sources:
 
@@ -121,9 +122,15 @@ Official sources:
 
 ### Record status
 
-Record status values are `Enable` and `Disable`. Status is read from each native record and changed through `SetDomainRecordStatus`. Logical sets never merge records with different statuses. The adapter exposes status in Alibaba typed extensions at record-set and entry scope.
+Record status values are `Enable` and `Disable`. Status is read from each native record and changed through `SetDomainRecordStatus`. The adapter keeps per-entry status in a read-only typed extension; the record-set extension is `Enable`/`Disable` only when every member agrees, otherwise it is empty. An explicit record-set status mutation applies to every member; absent an explicit status, mixed provider state is preserved.
 
 Official source: [SetDomainRecordStatus](https://www.alibabacloud.com/help/en/dns/api-alidns-2015-01-09-setdomainrecordstatus)
+
+### Record remark
+
+`DescribeDomainRecords` returns optional per-record remarks. The adapter preserves them in writable entry-scope `aliyun.remark` typed extensions and uses `UpdateDomainRecordRemark` for create/update round trips, including explicit clearing. Remark-only changes remain single-attempt mutations and do not change logical RRSet identity.
+
+Official source: [UpdateDomainRecordRemark](https://www.alibabacloud.com/help/en/dns/api-alidns-2015-01-09-updatedomainrecordremark)
 
 ### Weight
 
@@ -204,8 +211,8 @@ The generated v5.6.0 SDK includes `WithContext` methods for all operations used 
 
 The V2.0 SDK does not enable retries by default. The adapter sets SDK auto-retry off explicitly and applies:
 
-- bounded adapter-level retry only to transient reads (`rate_limited` and `upstream`);
-- no blind retry for add, update, status, weight, or delete mutations;
+- at most three adapter attempts for transient reads classified as `rate_limited`, `timeout`, or `upstream`; `Retry-After` above one second is returned without an early retry;
+- no blind retry for add, update, remark, status, weight, or delete mutations;
 - request read/connect timeouts through official SDK runtime options;
 - immediate termination when the caller context is canceled or reaches its deadline.
 

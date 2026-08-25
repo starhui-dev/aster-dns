@@ -14,6 +14,7 @@ import (
 	cloudflaresdk "github.com/cloudflare/cloudflare-go/v7"
 	"github.com/cloudflare/cloudflare-go/v7/dns"
 	"github.com/cloudflare/cloudflare-go/v7/option"
+	"github.com/cloudflare/cloudflare-go/v7/packages/pagination"
 	"github.com/cloudflare/cloudflare-go/v7/zones"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 )
@@ -29,10 +30,12 @@ const (
 	operationUpdateRecordSet     = "update_record_set"
 	operationDeleteRecordSet     = "delete_record_set"
 
-	zonePageSize         = 50
-	recordPageSize       = 5000
-	offsetCursorPrefix   = "cloudflare-offset-v1:"
-	maxProviderPageCount = 1_000_000
+	zonePageSize          = 50
+	recordPageSize        = 5000
+	readAttempts          = 3
+	maximumReadRetryDelay = time.Second
+	offsetCursorPrefix    = "cloudflare-offset-v1:"
+	maxProviderPageCount  = 1_000_000
 )
 
 type Provider struct {
@@ -42,17 +45,85 @@ type Provider struct {
 	secretValues []string
 }
 
+func (p *Provider) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	timeout := p.timeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func readCall[T any](p *Provider, ctx context.Context, operation string, call func() (*T, error)) (*T, error) {
+	var lastError error
+	for attempt := 0; attempt < readAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, core.NewError(core.ErrTimeout, operation, "", 0, p.redactedError(err))
+		}
+		response, err := call()
+		if err == nil {
+			return response, nil
+		}
+		mappedError := p.mapError(operation, err)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, core.NewError(core.ErrTimeout, operation, "", 0, p.redactedError(contextErr))
+		}
+		lastError = mappedError
+		var mapped *core.ProviderError
+		if !errors.As(mappedError, &mapped) || attempt == readAttempts-1 || !retryableReadError(mapped) {
+			return nil, mappedError
+		}
+		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
+		if mapped.RetryAfter > delay {
+			if mapped.RetryAfter > maximumReadRetryDelay {
+				return nil, mappedError
+			}
+			delay = mapped.RetryAfter
+		}
+		if err = waitContext(ctx, delay); err != nil {
+			return nil, core.NewError(core.ErrTimeout, operation, "", 0, p.redactedError(err))
+		}
+	}
+	return nil, lastError
+}
+
+func retryableReadError(err *core.ProviderError) bool {
+	return err != nil && (err.Code == core.ErrRateLimited || err.Code == core.ErrTimeout || err.Code == core.ErrUpstream)
+}
+
+func waitContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func validCloudflareOpaqueID(id string) bool {
+	return id != "" && id == strings.TrimSpace(id)
+}
+
 func (p *Provider) Capabilities(context.Context) core.Capabilities {
 	return (&Factory{}).Capabilities()
 }
 
 func (p *Provider) ValidateCredentials(ctx context.Context) error {
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
+
 	var raw *http.Response
-	page, err := p.zones.List(ctx, zones.ZoneListParams{
-		Page: cloudflaresdk.F(float64(1)), PerPage: cloudflaresdk.F(float64(1)),
-	}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
+	page, err := readCall(p, ctx, operationValidateCredentials, func() (*pagination.V4PagePaginationArray[zones.Zone], error) {
+		return p.zones.List(ctx, zones.ZoneListParams{
+			Page: cloudflaresdk.F(float64(1)), PerPage: cloudflaresdk.F(float64(5)),
+		}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
+	})
 	if err != nil {
-		return p.mapError(operationValidateCredentials, err)
+		return err
 	}
 	if page == nil {
 		return p.providerPayloadError(operationValidateCredentials, raw, errors.New("Cloudflare returned an empty zone-list response"))
@@ -60,16 +131,18 @@ func (p *Provider) ValidateCredentials(ctx context.Context) error {
 	if len(page.Result) == 0 {
 		return nil
 	}
-	zoneID := strings.TrimSpace(page.Result[0].ID)
-	if zoneID == "" {
-		return p.providerPayloadError(operationValidateCredentials, raw, errors.New("Cloudflare returned a zone without an ID"))
+	zoneID := page.Result[0].ID
+	if !validCloudflareOpaqueID(zoneID) {
+		return p.providerPayloadError(operationValidateCredentials, raw, errors.New("Cloudflare returned a zone with an invalid ID"))
 	}
 	var recordRaw *http.Response
-	recordPage, err := p.records.List(ctx, dns.RecordListParams{
-		ZoneID: cloudflaresdk.F(zoneID), Page: cloudflaresdk.F(float64(1)), PerPage: cloudflaresdk.F(float64(1)),
-	}, option.WithResponseInto(&recordRaw), option.WithMaxRetries(0))
+	recordPage, err := readCall(p, ctx, operationValidateCredentials, func() (*pagination.V4PagePaginationArray[dns.RecordResponse], error) {
+		return p.records.List(ctx, dns.RecordListParams{
+			ZoneID: cloudflaresdk.F(zoneID), Page: cloudflaresdk.F(float64(1)), PerPage: cloudflaresdk.F(float64(1)),
+		}, option.WithResponseInto(&recordRaw), option.WithMaxRetries(0))
+	})
 	if err != nil {
-		return p.mapError(operationValidateCredentials, err)
+		return err
 	}
 	if recordPage == nil {
 		return p.providerPayloadError(operationValidateCredentials, recordRaw, errors.New("Cloudflare returned an empty DNS record-list response"))
@@ -78,7 +151,10 @@ func (p *Provider) ValidateCredentials(ctx context.Context) error {
 }
 
 func (p *Provider) ListZones(ctx context.Context, request core.PageRequest) (core.Page[core.Zone], error) {
-	normalized, offset, err := normalizePagination(request)
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
+
+	normalized, offset, err := normalizePagination(request, operationListZones)
 	if err != nil {
 		return core.Page[core.Zone]{}, core.NewError(core.ErrValidation, operationListZones, "", 0, err)
 	}
@@ -100,18 +176,22 @@ func (p *Provider) ListZones(ctx context.Context, request core.PageRequest) (cor
 		}
 		return items[i].Name < items[j].Name
 	})
-	return paginate(items, normalized, offset)
+	return paginate(items, normalized, offset, operationListZones)
 }
 
 func (p *Provider) GetZone(ctx context.Context, zoneID string) (core.Zone, error) {
-	zoneID = strings.TrimSpace(zoneID)
-	if zoneID == "" {
-		return core.Zone{}, core.NewError(core.ErrValidation, operationGetZone, "", 0, errors.New("zone ID is required"))
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
+
+	if !validCloudflareOpaqueID(zoneID) {
+		return core.Zone{}, core.NewError(core.ErrValidation, operationGetZone, "", 0, errors.New("zone ID is required and must be unmodified"))
 	}
 	var raw *http.Response
-	source, err := p.zones.Get(ctx, zones.ZoneGetParams{ZoneID: cloudflaresdk.F(zoneID)}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
+	source, err := readCall(p, ctx, operationGetZone, func() (*zones.Zone, error) {
+		return p.zones.Get(ctx, zones.ZoneGetParams{ZoneID: cloudflaresdk.F(zoneID)}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
+	})
 	if err != nil {
-		return core.Zone{}, p.mapError(operationGetZone, err)
+		return core.Zone{}, err
 	}
 	if source == nil {
 		return core.Zone{}, p.providerPayloadError(operationGetZone, raw, errors.New("Cloudflare returned an empty zone response"))
@@ -127,7 +207,14 @@ func (p *Provider) GetZone(ctx context.Context, zoneID string) (core.Zone, error
 }
 
 func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, request core.PageRequest) (core.Page[core.RecordSet], error) {
-	normalized, offset, err := normalizePagination(request)
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
+
+	if !validCloudflareOpaqueID(zoneID) {
+		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, errors.New("zone ID is required and must be unmodified"))
+	}
+	cursorScope := operationListRecordSets + ":" + zoneID
+	normalized, offset, err := normalizePagination(request, cursorScope)
 	if err != nil {
 		return core.Page[core.RecordSet]{}, core.NewError(core.ErrValidation, operationListRecordSets, "", 0, err)
 	}
@@ -143,10 +230,13 @@ func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, request co
 	if err != nil {
 		return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, raw, err)
 	}
-	return paginate(items, normalized, offset)
+	return paginate(items, normalized, offset, cursorScope)
 }
 
 func (p *Provider) GetRecordSet(ctx context.Context, zoneID, recordSetID string) (core.RecordSet, error) {
+	ctx, cancel := p.requestContext(ctx)
+	defer cancel()
+
 	ids, err := decodeRecordSetID(recordSetID)
 	if err != nil {
 		return core.RecordSet{}, core.NewError(core.ErrValidation, operationGetRecordSet, "", 0, err)
@@ -154,9 +244,6 @@ func (p *Provider) GetRecordSet(ctx context.Context, zoneID, recordSetID string)
 	zone, err := p.GetZone(ctx, zoneID)
 	if err != nil {
 		return core.RecordSet{}, reoperation(err, operationGetRecordSet)
-	}
-	if _, _, err = p.getRecord(ctx, zone.ID, ids[0], operationGetRecordSet); err != nil {
-		return core.RecordSet{}, err
 	}
 	records, raw, err := p.listAllRecords(ctx, zone.ID, operationGetRecordSet)
 	if err != nil {
@@ -181,18 +268,30 @@ func (p *Provider) GetRecordSet(ctx context.Context, zoneID, recordSetID string)
 
 func (p *Provider) listAllZones(ctx context.Context, operation string) ([]zones.Zone, *http.Response, error) {
 	items := make([]zones.Zone, 0)
+	seenIDs := make(map[string]struct{})
 	var raw *http.Response
 	for pageNumber := 1; pageNumber <= maxProviderPageCount; pageNumber++ {
-		page, err := p.zones.List(ctx, zones.ZoneListParams{
-			Page: cloudflaresdk.F(float64(pageNumber)), PerPage: cloudflaresdk.F(float64(zonePageSize)),
-		}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
+		page, err := readCall(p, ctx, operation, func() (*pagination.V4PagePaginationArray[zones.Zone], error) {
+			return p.zones.List(ctx, zones.ZoneListParams{
+				Page: cloudflaresdk.F(float64(pageNumber)), PerPage: cloudflaresdk.F(float64(zonePageSize)),
+			}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
+		})
 		if err != nil {
-			return nil, raw, p.mapError(operation, err)
+			return nil, raw, err
 		}
 		if page == nil {
 			return nil, raw, p.providerPayloadError(operation, raw, errors.New("Cloudflare returned an empty zone-list response"))
 		}
-		items = append(items, page.Result...)
+		for _, zone := range page.Result {
+			if !validCloudflareOpaqueID(zone.ID) {
+				return nil, raw, p.providerPayloadError(operation, raw, errors.New("Cloudflare returned a zone with an invalid ID"))
+			}
+			if _, duplicate := seenIDs[zone.ID]; duplicate {
+				return nil, raw, p.providerPayloadError(operation, raw, errors.New("Cloudflare repeated a zone across pagination pages"))
+			}
+			seenIDs[zone.ID] = struct{}{}
+			items = append(items, zone)
+		}
 		hasMore, pageErr := cloudflarePageHasMore(page.JSON.RawJSON(), pageNumber, len(items), len(page.Result), zonePageSize)
 		if pageErr != nil {
 			return nil, raw, p.providerPayloadError(operation, raw, pageErr)
@@ -206,18 +305,30 @@ func (p *Provider) listAllZones(ctx context.Context, operation string) ([]zones.
 
 func (p *Provider) listAllRecords(ctx context.Context, zoneID, operation string) ([]dns.RecordResponse, *http.Response, error) {
 	items := make([]dns.RecordResponse, 0)
+	seenIDs := make(map[string]struct{})
 	var raw *http.Response
 	for pageNumber := 1; pageNumber <= maxProviderPageCount; pageNumber++ {
-		page, err := p.records.List(ctx, dns.RecordListParams{
-			ZoneID: cloudflaresdk.F(zoneID), Page: cloudflaresdk.F(float64(pageNumber)), PerPage: cloudflaresdk.F(float64(recordPageSize)),
-		}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
+		page, err := readCall(p, ctx, operation, func() (*pagination.V4PagePaginationArray[dns.RecordResponse], error) {
+			return p.records.List(ctx, dns.RecordListParams{
+				ZoneID: cloudflaresdk.F(zoneID), Page: cloudflaresdk.F(float64(pageNumber)), PerPage: cloudflaresdk.F(float64(recordPageSize)),
+			}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
+		})
 		if err != nil {
-			return nil, raw, p.mapError(operation, err)
+			return nil, raw, err
 		}
 		if page == nil {
 			return nil, raw, p.providerPayloadError(operation, raw, errors.New("Cloudflare returned an empty DNS record-list response"))
 		}
-		items = append(items, page.Result...)
+		for _, record := range page.Result {
+			if !validCloudflareOpaqueID(record.ID) {
+				return nil, raw, p.providerPayloadError(operation, raw, errors.New("Cloudflare returned a DNS record with an invalid ID"))
+			}
+			if _, duplicate := seenIDs[record.ID]; duplicate {
+				return nil, raw, p.providerPayloadError(operation, raw, errors.New("Cloudflare repeated a DNS record across pagination pages"))
+			}
+			seenIDs[record.ID] = struct{}{}
+			items = append(items, record)
+		}
 		hasMore, pageErr := cloudflarePageHasMore(page.JSON.RawJSON(), pageNumber, len(items), len(page.Result), recordPageSize)
 		if pageErr != nil {
 			return nil, raw, p.providerPayloadError(operation, raw, pageErr)
@@ -229,21 +340,9 @@ func (p *Provider) listAllRecords(ctx context.Context, zoneID, operation string)
 	return nil, raw, p.providerPayloadError(operation, raw, errors.New("Cloudflare DNS record pagination did not terminate"))
 }
 
-func (p *Provider) getRecord(ctx context.Context, zoneID, recordID, operation string) (*dns.RecordResponse, *http.Response, error) {
-	var raw *http.Response
-	record, err := p.records.Get(ctx, recordID, dns.RecordGetParams{ZoneID: cloudflaresdk.F(zoneID)}, option.WithResponseInto(&raw), option.WithMaxRetries(0))
-	if err != nil {
-		return nil, raw, p.mapError(operation, err)
-	}
-	if record == nil {
-		return nil, raw, p.providerPayloadError(operation, raw, errors.New("Cloudflare returned an empty DNS record response"))
-	}
-	return record, raw, nil
-}
-
 func mapZone(source zones.Zone) (core.Zone, error) {
-	if strings.TrimSpace(source.ID) == "" {
-		return core.Zone{}, errors.New("Cloudflare zone ID is missing")
+	if !validCloudflareOpaqueID(source.ID) {
+		return core.Zone{}, errors.New("Cloudflare zone ID is invalid")
 	}
 	paused := source.Paused
 	return core.NormalizeZone(core.Zone{
@@ -253,6 +352,9 @@ func mapZone(source zones.Zone) (core.Zone, error) {
 }
 
 func cloudflarePageHasMore(document string, pageNumber, totalLoaded, pageCount, requestedPageSize int) (bool, error) {
+	if pageNumber <= 0 || totalLoaded < 0 || pageCount < 0 || requestedPageSize <= 0 || pageCount > requestedPageSize {
+		return false, errors.New("Cloudflare pagination values are invalid")
+	}
 	if document != "" {
 		var envelope struct {
 			ResultInfo struct {
@@ -264,21 +366,46 @@ func cloudflarePageHasMore(document string, pageNumber, totalLoaded, pageCount, 
 		if err := json.Unmarshal([]byte(document), &envelope); err != nil {
 			return false, errors.New("decode Cloudflare pagination metadata")
 		}
-		if envelope.ResultInfo.TotalPages > 0 {
-			return pageNumber < envelope.ResultInfo.TotalPages, nil
+		info := envelope.ResultInfo
+		if info.Page < 0 || info.TotalCount < 0 || info.TotalPages < 0 {
+			return false, errors.New("Cloudflare pagination metadata is invalid")
 		}
-		if envelope.ResultInfo.TotalCount > 0 {
-			return totalLoaded < envelope.ResultInfo.TotalCount, nil
+		if info.Page > 0 && info.Page != pageNumber {
+			return false, errors.New("Cloudflare pagination returned a non-advancing page number")
+		}
+		if info.TotalCount > 0 && totalLoaded > info.TotalCount {
+			return false, errors.New("Cloudflare pagination exceeded its total count")
+		}
+		if info.TotalPages > 0 {
+			if info.TotalPages < pageNumber {
+				return false, errors.New("Cloudflare pagination exceeded its total pages")
+			}
+			hasMore := pageNumber < info.TotalPages
+			if hasMore && pageCount == 0 {
+				return false, errors.New("Cloudflare pagination returned an empty non-final page")
+			}
+			if !hasMore && info.TotalCount > 0 && totalLoaded < info.TotalCount {
+				return false, errors.New("Cloudflare pagination ended before its total count")
+			}
+			return hasMore, nil
+		}
+		if info.TotalCount > 0 {
+			hasMore := totalLoaded < info.TotalCount
+			if hasMore && pageCount == 0 {
+				return false, errors.New("Cloudflare pagination returned an empty non-final page")
+			}
+			return hasMore, nil
 		}
 	}
 	return pageCount >= requestedPageSize, nil
 }
 
 type offsetCursor struct {
-	Offset int `json:"offset"`
+	Scope  string `json:"scope"`
+	Offset int    `json:"offset"`
 }
 
-func normalizePagination(request core.PageRequest) (core.PageRequest, int, error) {
+func normalizePagination(request core.PageRequest, scope string) (core.PageRequest, int, error) {
 	normalized, err := core.NormalizePageRequest(request)
 	if err != nil {
 		return core.PageRequest{}, 0, err
@@ -286,7 +413,7 @@ func normalizePagination(request core.PageRequest) (core.PageRequest, int, error
 	if normalized.Cursor == "" {
 		return normalized, 0, nil
 	}
-	if !strings.HasPrefix(normalized.Cursor, offsetCursorPrefix) {
+	if normalized.Cursor != strings.TrimSpace(normalized.Cursor) || !strings.HasPrefix(normalized.Cursor, offsetCursorPrefix) {
 		return core.PageRequest{}, 0, errors.New("page cursor is invalid")
 	}
 	encoded := strings.TrimPrefix(normalized.Cursor, offsetCursorPrefix)
@@ -295,24 +422,39 @@ func normalizePagination(request core.PageRequest) (core.PageRequest, int, error
 		return core.PageRequest{}, 0, errors.New("page cursor is invalid")
 	}
 	var cursor offsetCursor
-	if err = json.Unmarshal(data, &cursor); err != nil || cursor.Offset < 0 {
-		return core.PageRequest{}, 0, errors.New("page cursor is invalid")
+	if err = json.Unmarshal(data, &cursor); err != nil || cursor.Scope != scope || cursor.Offset < 0 {
+		return core.PageRequest{}, 0, errors.New("page cursor is invalid for this collection")
+	}
+	canonical, err := encodeOffsetCursor(cursor.Offset, cursor.Scope)
+	if err != nil || canonical != normalized.Cursor {
+		return core.PageRequest{}, 0, errors.New("page cursor is non-canonical")
 	}
 	return normalized, cursor.Offset, nil
 }
 
-func paginate[T any](items []T, request core.PageRequest, offset int) (core.Page[T], error) {
+func encodeOffsetCursor(offset int, scope string) (string, error) {
+	data, err := json.Marshal(offsetCursor{Scope: scope, Offset: offset})
+	if err != nil {
+		return "", fmt.Errorf("encode page cursor: %w", err)
+	}
+	return offsetCursorPrefix + base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func paginate[T any](items []T, request core.PageRequest, offset int, scope string) (core.Page[T], error) {
 	if offset > len(items) {
 		return core.Page[T]{}, errors.New("page cursor is outside the result set")
 	}
 	end := min(offset+request.Limit, len(items))
 	page := core.Page[T]{Items: append([]T(nil), items[offset:end]...)}
 	if end < len(items) {
-		data, err := json.Marshal(offsetCursor{Offset: end})
+		var err error
+		page.NextCursor, err = encodeOffsetCursor(end, scope)
 		if err != nil {
-			return core.Page[T]{}, fmt.Errorf("encode page cursor: %w", err)
+			return core.Page[T]{}, err
 		}
-		page.NextCursor = offsetCursorPrefix + base64.RawURLEncoding.EncodeToString(data)
+	}
+	if err := core.ValidatePage(request, page); err != nil {
+		return core.Page[T]{}, fmt.Errorf("page is invalid: %w", err)
 	}
 	return page, nil
 }

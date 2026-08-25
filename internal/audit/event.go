@@ -65,6 +65,12 @@ func sanitizeValue(value any) any {
 
 func sensitiveKey(key string) bool {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "-", "_"), " ", "_"))
+	if normalized == "token" || strings.HasSuffix(normalized, "_token") ||
+		normalized == "credential" || normalized == "credentials" || normalized == "credential_value" ||
+		strings.Contains(normalized, "access_key") || strings.Contains(normalized, "api_key") ||
+		strings.Contains(normalized, "ciphertext") || strings.Contains(normalized, "nonce") {
+		return true
+	}
 	for _, fragment := range []string{
 		"authorization",
 		"cookie",
