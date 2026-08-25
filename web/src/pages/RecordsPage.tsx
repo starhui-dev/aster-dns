@@ -262,6 +262,10 @@ export default function RecordsPage() {
       } else {
         setError(errorState(caught));
       }
+      const dialog = untrack(editorDialog);
+      queueMicrotask(() => {
+        if (dialog?.open) dialog.querySelector<HTMLElement>("#record-name")?.focus();
+      });
     } finally {
       setBusy(false);
     }

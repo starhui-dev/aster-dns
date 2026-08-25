@@ -219,7 +219,7 @@ export default function ZonesPage() {
                       <td class="px-3 py-4">
                         <A
                           class="font-semibold text-primary hover:underline"
-                          href={`/zones/${zone.id}`}
+                          href={`/zones/${zone.id}/records`}
                         >
                           {zone.name}
                         </A>
@@ -264,7 +264,7 @@ export default function ZonesPage() {
                           </Button>
                           <A
                             class="inline-flex min-h-8 items-center rounded-md border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover"
-                            href={`/zones/${zone.id}`}
+                            href={`/zones/${zone.id}/records`}
                           >
                             Records
                           </A>

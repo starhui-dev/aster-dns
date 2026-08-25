@@ -6,6 +6,7 @@ import App from "./App";
 describe("App", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.history.replaceState({}, "", "/");
   });
 
   it("renders authenticated security state and admin navigation", async () => {
@@ -52,7 +53,130 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Continue with Passkey" })).toBeInTheDocument();
     expect(screen.getByText("Password fallback")).toBeInTheDocument();
   });
+
+  it("links cross-account zones to their record management routes", async () => {
+    window.history.replaceState({}, "", "/zones");
+    vi.stubGlobal("fetch", vi.fn(zonesFetch));
+
+    render(() => <App />);
+
+    expect(await screen.findByRole("heading", { name: "Zones", level: 2 })).toBeInTheDocument();
+    const cloudflareZone = await screen.findByRole("link", { name: "example.com" });
+    const huaweiZone = await screen.findByRole("link", { name: "example.cn" });
+    expect(cloudflareZone).toHaveAttribute("href", `/zones/${cloudflareZoneID}/records`);
+    expect(huaweiZone).toHaveAttribute("href", `/zones/${huaweiZoneID}/records`);
+  });
 });
+
+const cloudflareZoneID = "01900000-0000-7000-8000-000000000201";
+const huaweiZoneID = "01900000-0000-7000-8000-000000000202";
+
+async function zonesFetch(input: RequestInfo | URL): Promise<Response> {
+  const path = String(input);
+  if (path.endsWith("/auth/session")) return authenticatedFetch(input);
+  if (path.endsWith("/provider-types")) {
+    return jsonResponse({
+      provider_types: [
+        providerType("cloudflare", "Cloudflare DNS"),
+        providerType("huawei", "Huawei Cloud DNS"),
+      ],
+    });
+  }
+  if (path.endsWith("/provider-accounts")) {
+    return jsonResponse({
+      provider_accounts: [
+        providerAccount(
+          "01900000-0000-7000-8000-000000000101",
+          "cloudflare",
+          "Cloudflare production",
+        ),
+        providerAccount("01900000-0000-7000-8000-000000000102", "huawei", "Huawei production"),
+      ],
+    });
+  }
+  if (path.includes("/zones?")) {
+    return jsonResponse({
+      zones: [
+        zone(
+          cloudflareZoneID,
+          "01900000-0000-7000-8000-000000000101",
+          "cloudflare",
+          "Cloudflare production",
+          "example.com",
+        ),
+        zone(
+          huaweiZoneID,
+          "01900000-0000-7000-8000-000000000102",
+          "huawei",
+          "Huawei production",
+          "example.cn",
+        ),
+      ],
+      total: 2,
+    });
+  }
+  throw new Error(`Unexpected request: ${path}`);
+}
+
+function providerType(type: string, displayName: string) {
+  return {
+    type,
+    display_name: displayName,
+    credential_fields: [],
+    account_options: [],
+    capabilities: {
+      supported_record_types: ["A"],
+      native_record_granularity: "record_set",
+      supports_proxy: false,
+      supports_routing_line: false,
+      supports_weight: false,
+      supports_record_status: false,
+      supports_dnssec: false,
+      supports_native_batch: false,
+      supports_comments: false,
+      extension_fields: [],
+    },
+  };
+}
+
+function providerAccount(id: string, providerTypeName: string, name: string) {
+  return {
+    id,
+    provider_type: providerTypeName,
+    name,
+    description: "",
+    enabled: true,
+    options: {},
+    credential_configured: true,
+    credential_revision: 1,
+    validation_status: "valid",
+    zone_count: 1,
+    created_at: "2026-08-24T00:00:00Z",
+    updated_at: "2026-08-26T00:00:00Z",
+  };
+}
+
+function zone(
+  id: string,
+  providerAccountID: string,
+  providerTypeName: string,
+  providerAccountName: string,
+  name: string,
+) {
+  return {
+    id,
+    provider_account_id: providerAccountID,
+    provider_type: providerTypeName,
+    provider_account_name: providerAccountName,
+    account_enabled: true,
+    validation_status: "valid",
+    name,
+    status: "active",
+    metadata: { nameservers: [] },
+    fetched_at: "2026-08-26T00:00:00Z",
+    stale: false,
+  };
+}
 
 async function authenticatedFetch(input: RequestInfo | URL): Promise<Response> {
   const path = String(input);

@@ -8,8 +8,10 @@ import RecordsPage from "./RecordsPage";
 
 const zoneID = "01900000-0000-7000-8000-000000000201";
 let recordsets: RecordSet[];
+let createShouldFail: boolean;
 
 beforeEach(() => {
+  createShouldFail = false;
   recordsets = [
     {
       id: "record-1",
@@ -77,6 +79,31 @@ describe("RecordsPage", () => {
       expect(screen.queryByText("www.example.com")).not.toBeInTheDocument();
     });
   });
+
+  it("restores focus inside the record editor after a server validation error", async () => {
+    createShouldFail = true;
+    vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
+
+    render(() => (
+      <AuthProvider>
+        <Router>
+          <Route path="/zones/:zoneId/records" component={RecordsPage} />
+        </Router>
+      </AuthProvider>
+    ));
+
+    expect(await screen.findByRole("heading", { name: "example.com" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add record" }));
+    const name = await screen.findByLabelText("Name");
+    fireEvent.input(name, { target: { value: "invalid.example.com" } });
+    fireEvent.input(screen.getByLabelText("Value"), { target: { value: "not-an-ip" } });
+    const save = screen.getByRole("button", { name: "Save record set" });
+    save.focus();
+    fireEvent.click(save);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The record value is invalid.");
+    await waitFor(() => expect(document.activeElement).toBe(name));
+  });
 });
 
 async function fakeProviderFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -113,6 +140,18 @@ async function fakeProviderFetch(input: RequestInfo | URL, init?: RequestInit): 
     });
   }
   if (path.endsWith(`/zones/${zoneID}/recordsets`) && method === "POST") {
+    if (createShouldFail) {
+      return jsonResponse(
+        {
+          error: {
+            code: "validation",
+            message: "The record value is invalid.",
+            request_id: "req_invalid_record",
+          },
+        },
+        422,
+      );
+    }
     const body = JSON.parse(String(init?.body)) as {
       name: string;
       type: string;
