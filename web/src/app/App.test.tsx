@@ -13,8 +13,8 @@ describe("App", () => {
 
     render(() => <App />);
 
-    expect(await screen.findByText("API connected")).toBeInTheDocument();
-    expect(screen.getByText("Authentication security active")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "DNS control plane" })).toBeInTheDocument();
+    expect(screen.getByText("Indexed zones")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Users" })).toBeInTheDocument();
   });
 
@@ -72,14 +72,14 @@ async function authenticatedFetch(input: RequestInfo | URL): Promise<Response> {
       },
     });
   }
-  if (path.endsWith("/api/v1")) {
-    return jsonResponse({
-      name: "Aster DNS",
-      api_version: "v1",
-      version: "test",
-      commit: "test",
-      status: "available",
-    });
+  if (path.endsWith("/provider-accounts")) {
+    return jsonResponse({ provider_accounts: [] });
+  }
+  if (path.includes("/zones?limit=200")) {
+    return jsonResponse({ zones: [], total: 0 });
+  }
+  if (path.includes("/audit-events?limit=20")) {
+    return jsonResponse({ audit_events: [], total: 0 });
   }
   throw new Error(`Unexpected request: ${path}`);
 }

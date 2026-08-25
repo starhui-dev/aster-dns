@@ -14,11 +14,16 @@ import (
 	"github.com/starhui-dev/aster-dns/internal/provider"
 )
 
+type ProviderCacheInvalidator interface {
+	InvalidateAccount(uuid.UUID)
+}
+
 type ProviderAccountService struct {
 	repository ProviderRepository
 	registry   *provider.Registry
 	vault      *secretcrypto.CredentialVault
 	clients    *ProviderClientManager
+	cache      ProviderCacheInvalidator
 	now        func() time.Time
 }
 
@@ -30,6 +35,10 @@ func NewProviderAccountService(repository ProviderRepository, registry *provider
 		repository: repository, registry: registry, vault: vault, clients: clients,
 		now: func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+func (s *ProviderAccountService) SetCacheInvalidator(cache ProviderCacheInvalidator) {
+	s.cache = cache
 }
 
 func (s *ProviderAccountService) ProviderDefinitions() []provider.ProviderDefinition {
@@ -159,6 +168,9 @@ func (s *ProviderAccountService) UpdateAccount(ctx context.Context, actor Actor,
 	}
 	if input.Enabled != nil || len(input.Options) != 0 {
 		s.clients.Invalidate(accountID)
+		if s.cache != nil {
+			s.cache.InvalidateAccount(accountID)
+		}
 	}
 	return updated, nil
 }
@@ -183,6 +195,9 @@ func (s *ProviderAccountService) DeleteAccount(ctx context.Context, actor Actor,
 		return err
 	}
 	s.clients.Invalidate(accountID)
+	if s.cache != nil {
+		s.cache.InvalidateAccount(accountID)
+	}
 	return nil
 }
 
@@ -230,6 +245,9 @@ func (s *ProviderAccountService) ReplaceCredentials(ctx context.Context, actor A
 		return ProviderAccount{}, err
 	}
 	s.clients.Invalidate(accountID)
+	if s.cache != nil {
+		s.cache.InvalidateAccount(accountID)
+	}
 	return updated, nil
 }
 

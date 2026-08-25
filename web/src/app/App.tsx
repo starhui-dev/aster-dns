@@ -4,11 +4,13 @@ import { ErrorBoundary } from "solid-js";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/ui/Button";
 import { Alert, PageHeader, Panel } from "../components/ui/Layout";
-import FoundationPage from "../pages/FoundationPage";
-import PlaceholderPage from "../pages/PlaceholderPage";
+import AuditPage from "../pages/AuditPage";
+import DashboardPage from "../pages/DashboardPage";
 import ProviderAccountsPage from "../pages/ProviderAccountsPage";
+import RecordsPage from "../pages/RecordsPage";
 import SettingsPage from "../pages/SettingsPage";
 import UsersPage from "../pages/UsersPage";
+import ZonesPage from "../pages/ZonesPage";
 import AppShell from "./AppShell";
 import { AuthProvider } from "./AuthContext";
 import AuthGate from "./AuthGate";
@@ -19,28 +21,12 @@ export default function App() {
       <AuthProvider>
         <AuthGate>
           <Router root={AppShell}>
-            <Route path="/" component={FoundationPage} />
-            <Route
-              path="/zones"
-              component={() => (
-                <PlaceholderPage
-                  title="Zones"
-                  phase="Future provider phase"
-                  description="The zone index route exists, but it will remain empty until real provider account sync is implemented."
-                />
-              )}
-            />
+            <Route path="/" component={DashboardPage} />
+            <Route path="/zones" component={ZonesPage} />
+            <Route path="/zones/:zoneId/records" component={RecordsPage} />
             <Route path="/accounts" component={ProviderAccountsPage} />
-            <Route
-              path="/audit"
-              component={() => (
-                <PlaceholderPage
-                  title="Audit"
-                  phase="Future audit query phase"
-                  description="Authentication events are append-only in PostgreSQL; the query UI is not implemented yet."
-                />
-              )}
-            />
+            <Route path="/accounts/:accountId" component={ProviderAccountsPage} />
+            <Route path="/audit" component={AuditPage} />
             <Route path="/settings" component={SettingsPage} />
             <Route path="/users" component={UsersPage} />
             <Route path="*404" component={NotFoundPage} />

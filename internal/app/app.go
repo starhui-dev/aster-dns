@@ -48,6 +48,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 	var authService *auth.Service
 	var providerAccountService *providerservice.ProviderAccountService
 	var zoneSyncService *providerservice.ZoneSyncService
+	var dnsService *providerservice.DNSService
 	if pool != nil {
 		envelope, err := secretcrypto.NewEnvelope(cfg.MasterKey)
 		if err != nil {
@@ -90,6 +91,11 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		if err != nil {
 			return err
 		}
+		dnsService, err = providerservice.NewDNSService(providerStore, clients)
+		if err != nil {
+			return err
+		}
+		providerAccountService.SetCacheInvalidator(dnsService)
 	}
 
 	if err := validateWebDirectory(cfg.WebDir); err != nil {
@@ -111,6 +117,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		Auth:             authService,
 		ProviderAccounts: providerAccountService,
 		ZoneSync:         zoneSyncService,
+		DNS:              dnsService,
 		HTTPS:            cfg.PublicURL.Scheme == "https",
 	})
 

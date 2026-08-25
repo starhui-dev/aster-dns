@@ -83,14 +83,14 @@ func (s *ProviderStore) CreateProviderAccount(ctx context.Context, account servi
 }
 
 func (s *ProviderStore) ListProviderAccounts(ctx context.Context) ([]service.ProviderAccount, error) {
-	rows, err := s.q.Query(ctx, providerAccountSelect+` ORDER BY lower(p.name), p.id`)
+	rows, err := s.q.Query(ctx, providerAccountListSelect+` ORDER BY lower(p.name), p.id`)
 	if err != nil {
 		return nil, mapProviderStoreError("list provider accounts", err)
 	}
 	defer rows.Close()
 	accounts := make([]service.ProviderAccount, 0)
 	for rows.Next() {
-		account, scanErr := scanProviderAccount(rows)
+		account, scanErr := scanProviderAccountWithZoneCount(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -103,7 +103,7 @@ func (s *ProviderStore) ListProviderAccounts(ctx context.Context) ([]service.Pro
 }
 
 func (s *ProviderStore) GetProviderAccount(ctx context.Context, accountID uuid.UUID) (service.ProviderAccount, error) {
-	return scanProviderAccount(s.q.QueryRow(ctx, providerAccountSelect+` WHERE p.id = $1`, accountID))
+	return scanProviderAccountWithZoneCount(s.q.QueryRow(ctx, providerAccountListSelect+` WHERE p.id = $1`, accountID))
 }
 
 func (s *ProviderStore) GetProviderAccountCredential(ctx context.Context, accountID uuid.UUID) (service.ProviderAccount, service.CredentialMaterial, error) {
@@ -242,8 +242,141 @@ func (s *ProviderStore) ReplaceZoneIndex(ctx context.Context, accountID uuid.UUI
 	return nil
 }
 
+func (s *ProviderStore) UpsertZoneIndex(ctx context.Context, accountID uuid.UUID, zone service.ZoneIndexEntry, fetchedAt time.Time) (service.ZoneIndexEntry, error) {
+	metadata := zone.Metadata
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
+	row := s.q.QueryRow(ctx, `
+		INSERT INTO zones (
+			id, provider_account_id, provider_zone_id, name, status, metadata,
+			fetched_at, last_seen_at, deleted_from_provider_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6::jsonb, $7, $7, NULL, $7, $7)
+		ON CONFLICT (provider_account_id, provider_zone_id) DO UPDATE SET
+			name = EXCLUDED.name,
+			status = EXCLUDED.status,
+			metadata = EXCLUDED.metadata,
+			fetched_at = EXCLUDED.fetched_at,
+			last_seen_at = EXCLUDED.last_seen_at,
+			deleted_from_provider_at = NULL,
+			updated_at = EXCLUDED.updated_at
+		RETURNING id, provider_account_id, provider_zone_id, name, COALESCE(status, ''), metadata, fetched_at, last_seen_at`,
+		zone.ID, accountID, zone.ProviderZoneID, zone.Name, zone.Status, []byte(metadata), fetchedAt,
+	)
+	var result service.ZoneIndexEntry
+	var rawMetadata []byte
+	if err := row.Scan(
+		&result.ID, &result.ProviderAccountID, &result.ProviderZoneID, &result.Name, &result.Status,
+		&rawMetadata, &result.FetchedAt, &result.LastSeenAt,
+	); err != nil {
+		return service.ZoneIndexEntry{}, mapZoneStoreError("upsert zone index", err)
+	}
+	result.Metadata = json.RawMessage(rawMetadata)
+	account, err := s.GetProviderAccount(ctx, accountID)
+	if err != nil {
+		return service.ZoneIndexEntry{}, err
+	}
+	result.ProviderType = account.ProviderType
+	result.AccountName = account.Name
+	result.AccountEnabled = account.Enabled
+	result.ValidationStatus = account.ValidationStatus
+	return result, nil
+}
+
+func (s *ProviderStore) ListZones(ctx context.Context, query service.ZoneQuery) (service.ZonePageData, error) {
+	rows, err := s.q.Query(ctx, `
+		SELECT z.id, z.provider_account_id, p.provider_type, z.provider_zone_id, p.name, p.enabled,
+			p.validation_status, z.name, COALESCE(z.status, ''), z.metadata, z.fetched_at, z.last_seen_at,
+			count(*) OVER()
+		FROM zones z
+		JOIN provider_accounts p ON p.id = z.provider_account_id
+		WHERE z.deleted_from_provider_at IS NULL
+			AND ($1 = '' OR z.name ILIKE '%' || $1 || '%')
+			AND ($2 = '' OR p.provider_type = $2)
+			AND ($3::uuid IS NULL OR p.id = $3)
+			AND ($4 = '' OR COALESCE(z.status, '') = $4)
+		ORDER BY lower(z.name), z.id
+		OFFSET $5 LIMIT $6`,
+		query.Search, query.ProviderType, query.ProviderAccountID, query.Status, query.Offset, query.Limit,
+	)
+	if err != nil {
+		return service.ZonePageData{}, mapProviderStoreError("list zones", err)
+	}
+	defer rows.Close()
+	page := service.ZonePageData{Items: make([]service.ZoneIndexEntry, 0)}
+	for rows.Next() {
+		zone, total, scanErr := scanZoneIndexEntry(rows, true)
+		if scanErr != nil {
+			return service.ZonePageData{}, scanErr
+		}
+		page.Items = append(page.Items, zone)
+		page.Total = total
+	}
+	if err = rows.Err(); err != nil {
+		return service.ZonePageData{}, mapProviderStoreError("list zones", err)
+	}
+	return page, nil
+}
+
+func (s *ProviderStore) GetZone(ctx context.Context, zoneID uuid.UUID) (service.ZoneIndexEntry, error) {
+	zone, _, err := scanZoneIndexEntry(s.q.QueryRow(ctx, `
+		SELECT z.id, z.provider_account_id, p.provider_type, z.provider_zone_id, p.name, p.enabled,
+			p.validation_status, z.name, COALESCE(z.status, ''), z.metadata, z.fetched_at, z.last_seen_at
+		FROM zones z
+		JOIN provider_accounts p ON p.id = z.provider_account_id
+		WHERE z.id = $1 AND z.deleted_from_provider_at IS NULL`, zoneID), false)
+	return zone, err
+}
+
 func (s *ProviderStore) InsertAuditEvent(ctx context.Context, event audit.Event) error {
 	return insertAuditEvent(ctx, s.q, event, mapProviderStoreError)
+}
+
+func (s *ProviderStore) ListAuditEvents(ctx context.Context, query service.AuditQuery) (service.AuditPageData, error) {
+	rows, err := s.q.Query(ctx, `
+		SELECT id, occurred_at, actor_user_id, COALESCE(actor_username_snapshot, ''), action, resource_type,
+			COALESCE(resource_id, ''), provider_account_id, zone_id, request_id, COALESCE(host(ip), ''),
+			COALESCE(user_agent, ''), result, COALESCE(error_code, ''), before_data, after_data, metadata,
+			count(*) OVER()
+		FROM audit_events
+		WHERE ($1 = '' OR COALESCE(actor_username_snapshot, '') ILIKE '%' || $1 || '%')
+			AND ($2 = '' OR action ILIKE '%' || $2 || '%')
+			AND ($3::uuid IS NULL OR provider_account_id = $3)
+			AND ($4::uuid IS NULL OR zone_id = $4)
+			AND ($5 = '' OR result = $5)
+			AND ($6::timestamptz IS NULL OR occurred_at >= $6)
+			AND ($7::timestamptz IS NULL OR occurred_at <= $7)
+		ORDER BY occurred_at DESC, id DESC
+		OFFSET $8 LIMIT $9`,
+		query.Actor, query.Action, query.ProviderAccountID, query.ZoneID, query.Result,
+		query.From, query.To, query.Offset, query.Limit,
+	)
+	if err != nil {
+		return service.AuditPageData{}, mapProviderStoreError("list audit events", err)
+	}
+	defer rows.Close()
+	page := service.AuditPageData{Items: make([]audit.Event, 0)}
+	for rows.Next() {
+		event, total, scanErr := scanAuditEvent(rows, true)
+		if scanErr != nil {
+			return service.AuditPageData{}, scanErr
+		}
+		page.Items = append(page.Items, event)
+		page.Total = total
+	}
+	if err = rows.Err(); err != nil {
+		return service.AuditPageData{}, mapProviderStoreError("list audit events", err)
+	}
+	return page, nil
+}
+
+func (s *ProviderStore) GetAuditEvent(ctx context.Context, eventID uuid.UUID) (audit.Event, error) {
+	event, _, err := scanAuditEvent(s.q.QueryRow(ctx, `
+		SELECT id, occurred_at, actor_user_id, COALESCE(actor_username_snapshot, ''), action, resource_type,
+			COALESCE(resource_id, ''), provider_account_id, zone_id, request_id, COALESCE(host(ip), ''),
+			COALESCE(user_agent, ''), result, COALESCE(error_code, ''), before_data, after_data, metadata
+		FROM audit_events WHERE id = $1`, eventID), false)
+	return event, err
 }
 
 const providerAccountColumns = `
@@ -252,6 +385,10 @@ const providerAccountColumns = `
 	COALESCE(last_validation_error_code, ''), last_zone_sync_at, created_at, updated_at`
 
 const providerAccountSelect = `SELECT ` + providerAccountColumns + ` FROM provider_accounts p`
+
+const providerAccountListSelect = `SELECT ` + providerAccountColumns + `,
+	(SELECT count(*) FROM zones z WHERE z.provider_account_id = p.id AND z.deleted_from_provider_at IS NULL)
+	FROM provider_accounts p`
 
 type providerRowScanner interface {
 	Scan(...any) error
@@ -267,6 +404,30 @@ func scanProviderAccount(row providerRowScanner) (service.ProviderAccount, error
 		&account.ID, &providerType, &account.Name, &account.Description, &account.Enabled, &options, &revision,
 		&account.CredentialConfigured, &validationStatus, &account.LastValidatedAt,
 		&account.LastValidationErrorCode, &account.LastZoneSyncAt, &account.CreatedAt, &account.UpdatedAt,
+	); err != nil {
+		return service.ProviderAccount{}, mapProviderStoreError("read provider account", err)
+	}
+	if revision < 0 {
+		return service.ProviderAccount{}, errors.New("provider credential revision is invalid")
+	}
+	account.ProviderType = provider.ProviderType(providerType)
+	account.Options = json.RawMessage(options)
+	account.CredentialRevision = uint64(revision)
+	account.ValidationStatus = service.ValidationStatus(validationStatus)
+	return account, nil
+}
+
+func scanProviderAccountWithZoneCount(row providerRowScanner) (service.ProviderAccount, error) {
+	var account service.ProviderAccount
+	var options []byte
+	var revision int64
+	var providerType string
+	var validationStatus string
+	if err := row.Scan(
+		&account.ID, &providerType, &account.Name, &account.Description, &account.Enabled, &options, &revision,
+		&account.CredentialConfigured, &validationStatus, &account.LastValidatedAt,
+		&account.LastValidationErrorCode, &account.LastZoneSyncAt, &account.CreatedAt, &account.UpdatedAt,
+		&account.ZoneCount,
 	); err != nil {
 		return service.ProviderAccount{}, mapProviderStoreError("read provider account", err)
 	}
@@ -304,6 +465,82 @@ func scanProviderAccountCredential(row providerRowScanner) (service.ProviderAcco
 	account.ValidationStatus = service.ValidationStatus(validationStatus)
 	material.Revision = uint64(revision)
 	return account, material, nil
+}
+
+func scanZoneIndexEntry(row providerRowScanner, withTotal bool) (service.ZoneIndexEntry, int, error) {
+	var zone service.ZoneIndexEntry
+	var providerType string
+	var validationStatus string
+	var metadata []byte
+	total := 0
+	destinations := []any{
+		&zone.ID, &zone.ProviderAccountID, &providerType, &zone.ProviderZoneID, &zone.AccountName,
+		&zone.AccountEnabled, &validationStatus, &zone.Name, &zone.Status, &metadata,
+		&zone.FetchedAt, &zone.LastSeenAt,
+	}
+	if withTotal {
+		destinations = append(destinations, &total)
+	}
+	if err := row.Scan(destinations...); err != nil {
+		return service.ZoneIndexEntry{}, 0, mapZoneStoreError("read zone", err)
+	}
+	zone.ProviderType = provider.ProviderType(providerType)
+	zone.ValidationStatus = service.ValidationStatus(validationStatus)
+	zone.Metadata = json.RawMessage(metadata)
+	return zone, total, nil
+}
+
+func scanAuditEvent(row providerRowScanner, withTotal bool) (audit.Event, int, error) {
+	var event audit.Event
+	var result string
+	var beforeData, afterData, metadata []byte
+	total := 0
+	destinations := []any{
+		&event.ID, &event.OccurredAt, &event.ActorUserID, &event.ActorUsernameSnapshot, &event.Action,
+		&event.ResourceType, &event.ResourceID, &event.ProviderAccountID, &event.ZoneID, &event.RequestID,
+		&event.IP, &event.UserAgent, &result, &event.ErrorCode, &beforeData, &afterData, &metadata,
+	}
+	if withTotal {
+		destinations = append(destinations, &total)
+	}
+	if err := row.Scan(destinations...); err != nil {
+		return audit.Event{}, 0, mapAuditStoreError("read audit event", err)
+	}
+	event.Result = audit.Result(result)
+	if err := decodeAuditMap(beforeData, &event.BeforeData); err != nil {
+		return audit.Event{}, 0, err
+	}
+	if err := decodeAuditMap(afterData, &event.AfterData); err != nil {
+		return audit.Event{}, 0, err
+	}
+	if err := decodeAuditMap(metadata, &event.Metadata); err != nil {
+		return audit.Event{}, 0, err
+	}
+	return event, total, nil
+}
+
+func decodeAuditMap(raw []byte, destination *map[string]any) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	if err := json.Unmarshal(raw, destination); err != nil {
+		return errors.New("decode audit event data")
+	}
+	return nil
+}
+
+func mapZoneStoreError(operation string, err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return service.ErrZoneNotFound
+	}
+	return mapProviderStoreError(operation, err)
+}
+
+func mapAuditStoreError(operation string, err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return service.ErrAuditEventNotFound
+	}
+	return mapProviderStoreError(operation, err)
 }
 
 func mapProviderStoreError(operation string, err error) error {

@@ -26,6 +26,7 @@ type Options struct {
 	Auth             *auth.Service
 	ProviderAccounts *providerservice.ProviderAccountService
 	ZoneSync         *providerservice.ZoneSyncService
+	DNS              *providerservice.DNSService
 	HTTPS            bool
 }
 
@@ -57,6 +58,9 @@ func NewRouter(options Options) http.Handler {
 		registerUserRoutes(router, options.Auth)
 		if options.ProviderAccounts != nil {
 			registerProviderRoutes(router, options.Auth, options.ProviderAccounts, options.ZoneSync)
+		}
+		if options.DNS != nil {
+			registerDNSRoutes(router, options.Auth, options.DNS)
 		}
 	} else {
 		router.HandleFunc("/api/v1/auth/*", func(w http.ResponseWriter, r *http.Request) {

@@ -42,6 +42,7 @@ type providerAccountResponse struct {
 	LastValidatedAt         *time.Time                       `json:"last_validated_at,omitempty"`
 	LastValidationErrorCode string                           `json:"last_validation_error_code,omitempty"`
 	LastZoneSyncAt          *time.Time                       `json:"last_zone_sync_at,omitempty"`
+	ZoneCount               int                              `json:"zone_count"`
 	CreatedAt               time.Time                        `json:"created_at"`
 	UpdatedAt               time.Time                        `json:"updated_at"`
 }
@@ -49,11 +50,12 @@ type providerAccountResponse struct {
 func registerProviderRoutes(router chi.Router, authService *auth.Service, accounts *providerservice.ProviderAccountService, zoneSync *providerservice.ZoneSyncService) {
 	handler := providerHandler{accounts: accounts, zoneSync: zoneSync}
 	protected := router.With(auth.NoStore, authService.Authentication)
-	protected.With(auth.RequirePermission(auth.PermissionReadDNS)).Get("/api/v1/provider-types", handler.listTypes)
+	read := protected.With(auth.RequirePermission(auth.PermissionReadDNS))
+	read.Get("/api/v1/provider-types", handler.listTypes)
+	read.Get("/api/v1/provider-accounts", handler.listAccounts)
+	read.Get("/api/v1/provider-accounts/{id}", handler.getAccount)
 
 	admin := protected.With(auth.RequirePermission(auth.PermissionManageProviders))
-	admin.Get("/api/v1/provider-accounts", handler.listAccounts)
-	admin.Get("/api/v1/provider-accounts/{id}", handler.getAccount)
 	mutations := admin.With(authService.OriginProtection, authService.CSRFProtection)
 	mutations.Post("/api/v1/provider-accounts", handler.createAccount)
 	mutations.Patch("/api/v1/provider-accounts/{id}", handler.updateAccount)
@@ -214,7 +216,7 @@ func providerAccountDTO(account providerservice.ProviderAccount) providerAccount
 		Enabled: account.Enabled, Options: options, CredentialConfigured: account.CredentialConfigured,
 		CredentialRevision: account.CredentialRevision, ValidationStatus: account.ValidationStatus,
 		LastValidatedAt: account.LastValidatedAt, LastValidationErrorCode: account.LastValidationErrorCode,
-		LastZoneSyncAt: account.LastZoneSyncAt, CreatedAt: account.CreatedAt, UpdatedAt: account.UpdatedAt,
+		LastZoneSyncAt: account.LastZoneSyncAt, ZoneCount: account.ZoneCount, CreatedAt: account.CreatedAt, UpdatedAt: account.UpdatedAt,
 	}
 }
 
@@ -246,11 +248,31 @@ func decodeProviderJSON(w http.ResponseWriter, r *http.Request, destination any)
 }
 
 func writeProviderError(w http.ResponseWriter, r *http.Request, err error) {
+	var conflict *providerservice.RecordConflictError
+	if errors.As(err, &conflict) {
+		details := make(map[string]any)
+		if conflict.Current != nil {
+			details["current"] = recordSetDTO(*conflict.Current)
+		}
+		if conflict.Pending != nil {
+			details["pending"] = conflict.Pending
+		}
+		httpx.WriteError(w, r, http.StatusConflict, "conflict", "The record set changed at the provider. Reload before applying changes.", details)
+		return
+	}
 	switch {
-	case errors.Is(err, providerservice.ErrInvalidProviderInput), errors.Is(err, providerservice.ErrProviderTypeUnavailable):
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "validation", "The provider account request is invalid.", nil)
+	case errors.Is(err, providerservice.ErrInvalidProviderInput), errors.Is(err, providerservice.ErrProviderTypeUnavailable), errors.Is(err, providerservice.ErrInvalidCursor):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "validation", "The request is invalid.", nil)
+	case errors.Is(err, providerservice.ErrBatchTooLarge):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "batch_too_large", "The record batch exceeds the safety limit.", nil)
+	case errors.Is(err, providerservice.ErrUnsafeBatchOperation):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "unsafe_batch_operation", "The requested batch operation is not safe.", nil)
 	case errors.Is(err, providerservice.ErrProviderAccountNotFound):
 		httpx.WriteError(w, r, http.StatusNotFound, "not_found", "The provider account was not found.", nil)
+	case errors.Is(err, providerservice.ErrZoneNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "not_found", "The zone was not found.", nil)
+	case errors.Is(err, providerservice.ErrAuditEventNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "not_found", "The audit event was not found.", nil)
 	case errors.Is(err, providerservice.ErrProviderAccountConflict):
 		httpx.WriteError(w, r, http.StatusConflict, "conflict", "The provider account state changed. Refresh and try again.", nil)
 	case errors.Is(err, providerservice.ErrProviderAccountDisabled):

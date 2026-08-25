@@ -1,12 +1,12 @@
 # Implementation Status
 
-Updated: 2026-08-25
+Updated: 2026-08-26
 
 ## Outcome
 
-The authentication and authorization foundation remains implemented end to end across PostgreSQL, Go services and middleware, REST handlers, audit events, and the SolidJS UI. Authentication is Passkey-first. There is no hard-coded or generated default administrator password.
+The authentication, authorization, Provider core, four production adapters, unified DNS application services/APIs, short-lived record cache, immutable audit queries, and SolidJS Web console are implemented end to end. Authentication is Passkey-first. There is no hard-coded or generated default administrator password.
 
-The Provider core layer is implemented across domain contracts, validation, credential encryption, provider-account persistence and APIs, client lifecycle, generic credential validation, Zone index synchronization, and shared conformance infrastructure. Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS are registered production adapters and have completed a cross-adapter consistency review. The frontend consumes the registered capability catalog and does not fabricate Provider data.
+Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS are registered production adapters using their official SDK/API surfaces. The Provider remains the DNS source of truth; PostgreSQL stores platform data, encrypted credentials, the Zone index, cache metadata, and audit history. The browser consumes capability descriptors and never receives stored Provider credential material.
 
 ## Provider core implemented
 
@@ -118,6 +118,35 @@ The Provider core layer is implemented across domain contracts, validation, cred
 - Official-SDK HTTP fixtures and shared conformance cover token-only auth, native/scoped local pagination, proxy true/false, runtime proxiable, automatic TTL, comment/tags, multi-entry sets, opaque IDs, CRUD, preconditions, taxonomy, request metadata, read retry, mutation no-retry, token canaries, and cancellation.
 - Unit tested: yes. Read integration tested: no; this environment had no `CLOUDFLARE_DNS_API_TOKEN`. Mutation integration tested: no; `DNS_INTEGRATION_MUTATE=1` and `CLOUDFLARE_DNS_TEST_ZONE_ID` were absent. No real Cloudflare success is claimed.
 
+## Unified DNS product implemented
+
+### Application services, cache, and mutation safety
+
+- `DNSService` connects the Zone index repository, Provider client manager, short-lived in-memory record cache, audit persistence, and request actor metadata. The database-backed Zone index is queried globally; RecordSet reads come from the Provider unless a fresh cache entry is available.
+- Record cache entries carry `fetched_at` and `stale`. `refresh=true` bypasses the cache. Provider read failure may return an explicitly stale cached snapshot with a safe warning and request ID; it is never presented as fresh Provider state.
+- Successful create/update/delete invalidates the affected Zone cache and re-fetches Provider final state where the adapter contract returns it. Provider records are not persisted as desired state or written back from cache.
+- Update/delete require the canonical expected fingerprint; optional opaque Provider versions are preserved. A mismatch returns HTTP 409 with safe current Provider state and pending changes instead of overwriting silently.
+- Batch delete and TTL update enforce size/TTL/fingerprint safety, require typed Zone-name confirmation for large destructive requests, and return per-item success/failure. Partial completion uses HTTP 207 and is never described as atomic.
+- DNS mutations and Zone refresh/sync write immutable audit events with safe before/after data, actor, Provider account, Zone, result, request ID, IP, and user-agent. Credential/token/TOTP material remains excluded.
+
+### REST API
+
+- Provider type discovery returns registered capabilities, credential descriptors, account-option descriptors, and typed extension descriptors.
+- Provider account CRUD, dedicated credential replacement, read-only validation, and Zone synchronization are wired under `/api/v1`; read DTOs expose no credential plaintext, ciphertext, nonce, or key metadata.
+- Global Zone list/search/filter/cursor pagination, one-Zone refresh, RecordSet list/get/create/update/delete/batch, and audit list/detail endpoints are implemented without adding a second API surface.
+- Every endpoint uses the stable safe error envelope and `X-Request-ID`. Read routes require the appropriate RBAC permission; all cookie-authenticated mutations also enforce trusted Origin and CSRF.
+- `spec/openapi.yaml` is the OpenAPI 3.1 contract for the implemented system/auth/user/Provider/Zone/Record/Audit routes and documents cookie authentication, CSRF, concurrency, cache freshness, write-only secrets, and HTTP 207 batch semantics.
+
+### SolidJS Web console
+
+- The responsive application shell provides Dashboard, Provider Accounts, Zones, Records, Audit, Authentication Settings, and admin Users navigation with light/dark themes and mobile navigation.
+- Dashboard renders Provider validation health, stale Zone syncs, indexed Zone totals, recent DNS mutations/failures, request IDs, and direct Zone entry points.
+- Provider Accounts supports admin add/edit/enable-disable/delete, dedicated credential replacement, validation, and Zone sync. Secret inputs are never filled from API responses and are cleared after successful submission. Operators/viewers see safe read-only account state without credential actions.
+- Zones searches and filters the cross-account database index, shows Provider/account/status/freshness, supports force refresh, and links to authoritative records.
+- Records provides filtering, RRSet entry expansion, capability-rendered Provider metadata, record-type-aware create/edit fields, fingerprint conflict comparison/reapply, full-summary single delete confirmation, typed large-batch confirmation, and per-item partial batch results.
+- Provider-specific fields are centralized in `ProviderFields.tsx` and driven only by descriptors/capabilities; page components do not branch on Provider names.
+- Audit supports actor/action/result/time filters, pagination, and safe detail inspection. Existing Settings and Users pages manage Passkeys, password fallback, TOTP, sessions, roles, disabled users, and one-time enrollment tokens.
+
 ## Authentication / authorization implemented
 
 ### Secure first-administrator bootstrap
@@ -199,11 +228,9 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 ### Frontend
 
 - Authentication gate handles bootstrap, Passkey-first login, optional password login, TOTP second step, and authenticated application rendering.
-- Settings manages multiple Passkeys, password fallback, TOTP, and active sessions.
-- Users provides admin-only creation, role changes, enable/disable actions, and one-time enrollment-token display.
-- The API client centrally attaches the in-memory CSRF cookie to mutations and preserves stable request-id errors.
-- Provider accounts now load the authenticated `/api/v1/provider-types` catalog and render registered factories, supported record types, RRSet granularity, TTL bounds, routing/status capabilities, credential field metadata, account options, and official documentation links without exposing credential values.
-- The Users navigation and page are hidden from non-admin roles, while the API remains authoritative.
+- Settings manages multiple Passkeys, password fallback, TOTP, and active sessions. Users provides admin-only creation, role changes, enable/disable actions, and one-time enrollment-token display.
+- The API client centrally attaches the CSRF cookie value to mutations and preserves stable safe request-id errors. It does not persist Provider secrets in localStorage or sessionStorage.
+- Provider, Zone, Record, conflict, batch-result, and Audit screens use the same `/api/v1` contracts described in the unified product section. Users and credential controls are hidden when the current role lacks permission, while the API remains authoritative.
 
 ### Database and configuration
 
@@ -218,7 +245,7 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 |---|---|
 | Focused backend security tests | Passed unauthenticated `401`, role matrix, CSRF/origin rejection, revoked/disabled session denial, Argon2id verify, opaque-token hashing, WebAuthn challenge replay and rpId/origin rejection, TOTP ciphertext tamper rejection, TOTP time-step replay rejection, and secret-canary scans. |
 | Backend authentication packages | `go test ./internal/auth ./internal/api ./internal/audit ./internal/crypto` passed. |
-| Full delivery gate | `make ci` passed Go format check, `go vet ./cmd/... ./internal/... ./migrations`, all backend tests, Go build, Prettier, zero-warning ESLint, strict TypeScript typecheck, 3 Vitest files / 5 tests, and the Vite production build (63 modules transformed). |
+| Full delivery gate | `make ci` passed Go format check, `go vet ./cmd/... ./internal/... ./migrations`, all backend tests, Go build, Prettier, zero-warning ESLint, strict TypeScript typecheck, 4 Vitest files / 6 tests, and the Vite production build (67 modules transformed). |
 | Four-adapter conformance | `go test ./internal/provider/huawei ./internal/provider/aliyun ./internal/provider/tencent ./internal/provider/cloudflare -run 'Conformance$' -count=1` passed all four shared conformance suites. |
 | Huawei adapter fixtures | `go test ./internal/provider/huawei -count=1` passed official-SDK transport signing, scoped Zone/RecordSet pagination, multi-value normalization, opaque IDs, line/weight/status/provider-status/default metadata, default mutation rejection, TXT/MX/SRV/CAA, optimistic preconditions, read retry/mutation no-retry, error/request metadata, secret redaction, cancellation, timeout, and shared conformance. |
 | Huawei real integration gate | `go test ./internal/provider/huawei -run 'TestHuaweiIntegration' -count=1 -v` passed with read-only skipped because AK/SK were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Huawei success is claimed. |
@@ -231,8 +258,11 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 | Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed every Provider package plus service/API client-cache and handler paths. |
 | Formatting and lint | `make backend-format-check` and the final `make ci` format/lint stages passed: gofmt clean, `go vet` clean, Prettier clean, and ESLint zero warnings. |
 | Backend tests and build | The final `make ci` run passed `go test ./cmd/... ./internal/... ./migrations` and `go build ./cmd/... ./internal/... ./migrations`. |
-| Frontend tests, typecheck, and build | The final `make ci` run passed 3 Vitest files / 5 tests, `tsc --noEmit`, and Vite v8.2.2 production build with 63 modules transformed. |
-| Browser Provider capability smoke | Chromium rendered the authenticated Provider accounts route with intercepted auth/catalog responses and displayed the Tencent Cloud DNSPod card with entry-native granularity, A/AAAA/CNAME/TXT/MX/NS/SRV/CAA, TTL 1–604800, routing/weight/status support, three secret credential fields, and the official documentation link; no credential value was present. |
+| Frontend tests, typecheck, and build | The final `make ci` run passed 4 Vitest files / 6 tests, `tsc --noEmit`, zero-warning ESLint, Prettier, and Vite v8.2.2 production build with 67 modules transformed. The Records integration test drives fake-Provider create, capability-field edit, TTL update, optimistic request data, refresh, and delete through the rendered UI. |
+| Unified browser UI smoke | Real Chromium rendered Dashboard, Provider Accounts, cross-account Zones, Records, and Audit against intercepted fake-Provider responses. Desktop Records showed RRSet values and Cloudflare capability metadata without document overflow; a 390×844 viewport had no document overflow, opened the modal mobile navigation, and rendered the Audit table with accessible labels. No credential value was present. |
+| DNS API and cache tests | `go test ./...` and the final `make ci` passed DNS service/API tests for cache hit/bypass/stale fallback/invalidation, Provider final state, conflict details, batch delete/TTL partial results, audit list/detail, RBAC, CSRF/Origin, safe errors, and request IDs. |
+| OpenAPI contract | `spec/openapi.yaml` parsed as OpenAPI 3.1 with 45 paths, 53 unique operation IDs, and 217 internal references; all internal references resolved. |
+| Real Provider credential gate | `go test ./internal/provider/huawei ./internal/provider/aliyun ./internal/provider/tencent ./internal/provider/cloudflare -run 'IntegrationReadOnly$' -count=1 -v` completed with all four tests skipped because no complete Huawei, Alibaba Cloud, Tencent Cloud, or Cloudflare read credential set was configured. No real-account success is claimed. |
 | PostgreSQL runtime smoke | A clean PostgreSQL 18 database migrated through authentication migration version 2. Runtime sessions stored 32-byte token/CSRF hashes and the admin password row used an Argon2id hash. |
 | Browser WebAuthn smoke | Chromium with virtual authenticators completed first-admin Passkey bootstrap, registered a second named Passkey, and rendered safe Passkey metadata. |
 | Browser password/TOTP smoke | The UI enabled Argon2id password fallback, completed password login, set up and confirmed TOTP, required the separate TOTP step on the next password login, and completed that login with a new time-step code. |
@@ -241,9 +271,7 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 
 ## Remaining project work
 
-These items remain outside the Provider core delivery:
+The requested unified DNS Web product is implemented. Environment/operations work still requiring deployment-specific inputs:
 
-1. Run Huawei, Alibaba Cloud, Tencent Cloud, and Cloudflare read-only integration with dedicated credentials and the explicitly gated mutation tests against dedicated test Zones.
-2. Implement production RecordSet read/create/update/delete/batch services and APIs, short-lived record caches, mutation invalidation, final-state re-fetch, per-item batch results, and DNS mutation audit orchestration.
-3. Add Zone index query APIs/UI, manual refresh UI, and scheduled background sync operation around the implemented sync service.
-4. Implement the audit query UI, full project OpenAPI document, trusted-proxy configuration, metrics, background maintenance, backup/restore procedures, and deployment-specific CSP/HSTS hardening.
+1. Run the four read-only integration suites with dedicated real credentials. Run mutation gates only with `DNS_INTEGRATION_MUTATE=1` and dedicated test Zones.
+2. Add scheduled background Zone synchronization policy, operational metrics/alerts, trusted-proxy policy, backup/restore procedures, and deployment-specific CSP/HSTS hardening.

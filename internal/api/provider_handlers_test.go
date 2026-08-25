@@ -101,8 +101,8 @@ func TestProviderAccountRoutesEnforceRBACAndExposeNoCredentialRead(t *testing.T)
 		status int
 	}{
 		{name: "admin", role: auth.RoleAdmin, status: http.StatusOK},
-		{name: "operator", role: auth.RoleOperator, status: http.StatusForbidden},
-		{name: "viewer", role: auth.RoleViewer, status: http.StatusForbidden},
+		{name: "operator", role: auth.RoleOperator, status: http.StatusOK},
+		{name: "viewer", role: auth.RoleViewer, status: http.StatusOK},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			authStore := &apiAuthStore{}

@@ -1,0 +1,1392 @@
+openapi: 3.1.0
+info:
+  title: Aster DNS API
+  version: 1.0.0
+  description: |
+    REST API for the self-hosted Aster DNS control plane. DNS Providers are the
+    authoritative source for zones and records. Cookie-authenticated mutations
+    require both a trusted Origin and the X-CSRF-Token header.
+servers:
+  - url: /
+tags:
+  - name: System
+  - name: Authentication
+  - name: Users
+  - name: Providers
+  - name: Zones
+  - name: Records
+  - name: Audit
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: Process health
+      operationId: health
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+  /readyz:
+    get:
+      tags: [System]
+      summary: Dependency readiness
+      operationId: readiness
+      responses:
+        '200': { $ref: '#/components/responses/Health' }
+        '503': { $ref: '#/components/responses/Error' }
+  /api/v1:
+    get:
+      tags: [System]
+      summary: API build and availability
+      operationId: apiOverview
+      responses:
+        '200':
+          description: API overview
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, api_version, version, commit, status]
+                properties:
+                  name: { type: string }
+                  api_version: { const: v1 }
+                  version: { type: string }
+                  commit: { type: string }
+                  status: { const: available }
+  /api/v1/auth/bootstrap:
+    get:
+      tags: [Authentication]
+      summary: Read first-administrator bootstrap status
+      operationId: getBootstrapStatus
+      responses:
+        '200':
+          description: Bootstrap status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BootstrapStatus' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/bootstrap/passkey/options:
+    post:
+      tags: [Authentication]
+      summary: Begin first-administrator Passkey registration
+      operationId: beginBootstrapPasskey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [bootstrap_token, username, display_name, passkey_name]
+              properties:
+                bootstrap_token: { type: string, writeOnly: true }
+                username: { type: string }
+                display_name: { type: string }
+                passkey_name: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/RegistrationOptions' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/bootstrap/passkey/verify:
+    post:
+      tags: [Authentication]
+      summary: Finish first-administrator Passkey registration
+      operationId: finishBootstrapPasskey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/CeremonyVerification'
+                - type: object
+                  required: [bootstrap_token]
+                  properties:
+                    bootstrap_token: { type: string, writeOnly: true }
+      responses:
+        '201': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/passkeys/login/options:
+    post:
+      tags: [Authentication]
+      summary: Begin Passkey login
+      operationId: beginPasskeyLogin
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200': { $ref: '#/components/responses/AuthenticationOptions' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/passkeys/login/verify:
+    post:
+      tags: [Authentication]
+      summary: Finish Passkey login
+      operationId: finishPasskeyLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CeremonyVerification' }
+      responses:
+        '200': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/passkeys/enroll/options:
+    post:
+      tags: [Authentication]
+      summary: Begin one-time-token Passkey enrollment
+      operationId: beginPasskeyEnrollment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enrollment_token, passkey_name]
+              properties:
+                enrollment_token: { type: string, writeOnly: true }
+                passkey_name: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/RegistrationOptions' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/passkeys/enroll/verify:
+    post:
+      tags: [Authentication]
+      summary: Finish one-time-token Passkey enrollment
+      operationId: finishPasskeyEnrollment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/CeremonyVerification'
+                - type: object
+                  required: [enrollment_token]
+                  properties:
+                    enrollment_token: { type: string, writeOnly: true }
+      responses:
+        '201': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/login/password:
+    post:
+      tags: [Authentication]
+      summary: Log in with password fallback
+      operationId: passwordLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password, writeOnly: true }
+      responses:
+        '200': { $ref: '#/components/responses/Login' }
+        '202':
+          description: Password verified; TOTP completion is required.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/login/totp:
+    post:
+      tags: [Authentication]
+      summary: Complete password login with TOTP
+      operationId: totpLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [totp_token, code]
+              properties:
+                totp_token: { type: string, writeOnly: true }
+                code: { type: string, pattern: '^[0-9]{6}$', writeOnly: true }
+      responses:
+        '200': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/session:
+    get:
+      tags: [Authentication]
+      summary: Read current session
+      operationId: getCurrentSession
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Session' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Log out current session
+      operationId: logout
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200': { $ref: '#/components/responses/Status' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/logout-all:
+    post:
+      tags: [Authentication]
+      summary: Revoke every user session
+      operationId: logoutAll
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200': { $ref: '#/components/responses/Status' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/passkeys:
+    get:
+      tags: [Authentication]
+      summary: List safe Passkey metadata
+      operationId: listPasskeys
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: Passkeys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [passkeys]
+                properties:
+                  passkeys:
+                    type: array
+                    items: { $ref: '#/components/schemas/Passkey' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/passkeys/register/options:
+    post:
+      tags: [Authentication]
+      summary: Begin registration of another Passkey
+      operationId: beginPasskeyRegistration
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/RegistrationOptions' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/passkeys/register/verify:
+    post:
+      tags: [Authentication]
+      summary: Finish registration of another Passkey
+      operationId: finishPasskeyRegistration
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CeremonyVerification' }
+      responses:
+        '201': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/passkeys/{id}:
+    delete:
+      tags: [Authentication]
+      summary: Delete a Passkey
+      operationId: deletePasskey
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/password:
+    put:
+      tags: [Authentication]
+      summary: Enable or replace password fallback
+      operationId: setPassword
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                password: { type: string, minLength: 12, maxLength: 1024, writeOnly: true }
+      responses:
+        '200': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Authentication]
+      summary: Disable password fallback
+      operationId: deletePassword
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      responses:
+        '200': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/totp/setup:
+    post:
+      tags: [Authentication]
+      summary: Create a pending TOTP enrollment
+      operationId: setupTOTP
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200':
+          description: One-time provisioning URI
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [provisioning_uri]
+                properties:
+                  provisioning_uri: { type: string, description: Returned once for the pending enrollment. }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/totp/confirm:
+    post:
+      tags: [Authentication]
+      summary: Confirm and enable TOTP
+      operationId: confirmTOTP
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code: { type: string, pattern: '^[0-9]{6}$', writeOnly: true }
+      responses:
+        '200': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/totp:
+    delete:
+      tags: [Authentication]
+      summary: Disable TOTP
+      operationId: deleteTOTP
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      responses:
+        '200': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/sessions:
+    get:
+      tags: [Authentication]
+      summary: List active server-side sessions
+      operationId: listSessions
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: Active sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: '#/components/schemas/SessionInfo' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/sessions/revoke-others:
+    post:
+      tags: [Authentication]
+      summary: Revoke all sessions except the current session
+      operationId: revokeOtherSessions
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200': { $ref: '#/components/responses/Status' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/sessions/{id}:
+    delete:
+      tags: [Authentication]
+      summary: Revoke another session
+      operationId: revokeSession
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200': { $ref: '#/components/responses/Status' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/users:
+    get:
+      tags: [Users]
+      summary: List users
+      description: Admin only.
+      operationId: listUsers
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: '#/components/schemas/User' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Users]
+      summary: Create a user and one-time enrollment token
+      description: Admin only. The enrollment token is shown once.
+      operationId: createUser
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUser' }
+      responses:
+        '201':
+          description: User and one-time enrollment token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user, enrollment_token, enrollment_expires_at]
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  enrollment_token: { type: string, description: Returned once. }
+                  enrollment_expires_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/users/{id}:
+    patch:
+      tags: [Users]
+      summary: Update a user
+      description: Admin only.
+      operationId: updateUser
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                display_name: { type: string }
+                role: { $ref: '#/components/schemas/Role' }
+                password: { type: string, writeOnly: true }
+                password_enabled: { type: boolean }
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/users/{id}/disable:
+    post:
+      tags: [Users]
+      summary: Disable a user
+      operationId: disableUser
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/users/{id}/enable:
+    post:
+      tags: [Users]
+      summary: Enable a user
+      operationId: enableUser
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/users/{id}/enrollment-token:
+    post:
+      tags: [Users]
+      summary: Issue a replacement one-time enrollment token
+      operationId: issueEnrollmentToken
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200':
+          description: One-time enrollment token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enrollment_token, enrollment_expires_at]
+                properties:
+                  enrollment_token: { type: string, description: Returned once. }
+                  enrollment_expires_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/provider-types:
+    get:
+      tags: [Providers]
+      summary: List registered Provider capabilities and input schemas
+      operationId: listProviderTypes
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: Provider type catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [provider_types]
+                properties:
+                  provider_types:
+                    type: array
+                    items: { $ref: '#/components/schemas/ProviderType' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/provider-accounts:
+    get:
+      tags: [Providers]
+      summary: List safe Provider account state
+      operationId: listProviderAccounts
+      security: [{ sessionCookie: [] }]
+      responses:
+        '200':
+          description: Provider accounts without credential material
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [provider_accounts]
+                properties:
+                  provider_accounts:
+                    type: array
+                    items: { $ref: '#/components/schemas/ProviderAccount' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Providers]
+      summary: Create a Provider account
+      description: Admin only. Credentials are write-only.
+      operationId: createProviderAccount
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProviderAccount' }
+      responses:
+        '201': { $ref: '#/components/responses/ProviderAccount' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/provider-accounts/{id}:
+    get:
+      tags: [Providers]
+      summary: Read safe Provider account state
+      operationId: getProviderAccount
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/ResourceID' }]
+      responses:
+        '200': { $ref: '#/components/responses/ProviderAccount' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Providers]
+      summary: Update Provider account metadata/options
+      description: Admin only. Credentials cannot be changed here.
+      operationId: updateProviderAccount
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string }
+                description: { type: string }
+                enabled: { type: boolean }
+                options: { type: object, additionalProperties: true }
+      responses:
+        '200': { $ref: '#/components/responses/ProviderAccount' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Providers]
+      summary: Delete a Provider account
+      description: Admin only. Does not delete the Provider zone.
+      operationId: deleteProviderAccount
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '204': { description: Deleted }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/provider-accounts/{id}/credentials:
+    post:
+      tags: [Providers]
+      summary: Replace Provider credentials
+      description: Admin only. Existing secret values are never readable.
+      operationId: replaceProviderCredentials
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [credentials]
+              properties:
+                credentials:
+                  type: object
+                  writeOnly: true
+                  additionalProperties: true
+      responses:
+        '200': { $ref: '#/components/responses/ProviderAccount' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/provider-accounts/{id}/validate:
+    post:
+      tags: [Providers]
+      summary: Validate an account using a minimal read-only Provider request
+      operationId: validateProviderAccount
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200': { $ref: '#/components/responses/ProviderAccount' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/provider-accounts/{id}/sync-zones:
+    post:
+      tags: [Providers]
+      summary: Synchronize the account Zone index
+      operationId: syncProviderZones
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ResourceID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200':
+          description: Synchronization result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, zone_count]
+                properties:
+                  status: { const: synchronized }
+                  zone_count: { type: integer, minimum: 0 }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/zones:
+    get:
+      tags: [Zones]
+      summary: Search the database-backed global Zone index
+      operationId: listZones
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: provider_type, in: query, schema: { type: string } }
+        - { name: provider_account_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Zone page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [zones, total]
+                properties:
+                  zones:
+                    type: array
+                    items: { $ref: '#/components/schemas/Zone' }
+                  next_cursor: { type: string }
+                  total: { type: integer, minimum: 0 }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/zones/{zone_id}:
+    get:
+      tags: [Zones]
+      summary: Read one indexed Zone
+      operationId: getZone
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/ZoneID' }]
+      responses:
+        '200': { $ref: '#/components/responses/Zone' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/zones/{zone_id}/refresh:
+    post:
+      tags: [Zones]
+      summary: Refresh one Zone from its Provider
+      operationId: refreshZone
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ZoneID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody: { $ref: '#/components/requestBodies/EmptyJSON' }
+      responses:
+        '200': { $ref: '#/components/responses/Zone' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/zones/{zone_id}/recordsets:
+    get:
+      tags: [Records]
+      summary: List authoritative Provider record sets
+      description: A short-lived read cache may be used unless refresh=true.
+      operationId: listRecordSets
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ZoneID'
+        - { name: q, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { $ref: '#/components/schemas/RecordType' } }
+        - { name: refresh, in: query, schema: { type: boolean, default: false } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Provider record-set page and cache freshness
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recordsets, total, fetched_at, stale]
+                properties:
+                  recordsets:
+                    type: array
+                    items: { $ref: '#/components/schemas/RecordSet' }
+                  next_cursor: { type: string }
+                  total: { type: integer, minimum: 0 }
+                  fetched_at: { type: string, format: date-time }
+                  stale: { type: boolean }
+                  warning: { $ref: '#/components/schemas/ItemError' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Records]
+      summary: Create a Provider record set
+      operationId: createRecordSet
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ZoneID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordSetInput' }
+      responses:
+        '201': { $ref: '#/components/responses/RecordSet' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/zones/{zone_id}/recordsets/batch:
+    post:
+      tags: [Records]
+      summary: Batch delete or safely update TTL
+      description: Results are per-item and are never represented as a cross-item transaction.
+      operationId: batchRecordSets
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ZoneID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BatchRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/BatchResult' }
+        '207': { $ref: '#/components/responses/BatchResult' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/zones/{zone_id}/recordsets/{recordset_id}:
+    get:
+      tags: [Records]
+      summary: Read one authoritative Provider record set
+      operationId: getRecordSet
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ZoneID'
+        - $ref: '#/components/parameters/RecordSetID'
+      responses:
+        '200': { $ref: '#/components/responses/RecordSet' }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [Records]
+      summary: Update a record set with optimistic concurrency
+      operationId: updateRecordSet
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ZoneID'
+        - $ref: '#/components/parameters/RecordSetID'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateRecordSetInput' }
+      responses:
+        '200': { $ref: '#/components/responses/RecordSet' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Records]
+      summary: Delete a record set with optimistic concurrency
+      operationId: deleteRecordSet
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ZoneID'
+        - $ref: '#/components/parameters/RecordSetID'
+        - $ref: '#/components/parameters/CSRFToken'
+        - name: If-Match
+          in: header
+          required: true
+          description: Expected canonical record-set fingerprint. Quotes are accepted.
+          schema: { type: string }
+      responses:
+        '204': { description: Deleted and related record cache invalidated }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/audit-events:
+    get:
+      tags: [Audit]
+      summary: Search immutable audit events
+      operationId: listAuditEvents
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - { name: actor, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string } }
+        - { name: provider_account_id, in: query, schema: { type: string, format: uuid } }
+        - { name: zone_id, in: query, schema: { type: string, format: uuid } }
+        - { name: result, in: query, schema: { type: string, enum: [succeeded, failed] } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Audit page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [audit_events, total]
+                properties:
+                  audit_events:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEvent' }
+                  next_cursor: { type: string }
+                  total: { type: integer, minimum: 0 }
+        default: { $ref: '#/components/responses/Error' }
+  /api/v1/audit-events/{id}:
+    get:
+      tags: [Audit]
+      summary: Read one immutable audit event
+      operationId: getAuditEvent
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/ResourceID' }]
+      responses:
+        '200':
+          description: Audit event
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [audit_event]
+                properties:
+                  audit_event: { $ref: '#/components/schemas/AuditEvent' }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-aster_session
+      description: Opaque session cookie. HTTP deployments use the non-Host-prefixed equivalent.
+  parameters:
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: { type: string }
+      description: Must match the readable CSRF cookie for the current server-side session.
+    ResourceID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ZoneID:
+      name: zone_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RecordSetID:
+      name: recordset_id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^rs_' }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+  requestBodies:
+    EmptyJSON:
+      required: false
+      content:
+        application/json:
+          schema: { type: object, maxProperties: 0 }
+  responses:
+    Error:
+      description: Stable safe error. Details never contain Provider secrets or raw upstream payloads.
+      headers:
+        X-Request-ID:
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Health:
+      description: Health state
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [status]
+            properties:
+              status: { type: string, enum: [ok, ready, unavailable] }
+    Status:
+      description: Operation status
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [status]
+            properties:
+              status: { type: string }
+    RegistrationOptions:
+      description: WebAuthn registration options and one-time ceremony token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CeremonyOptions' }
+    AuthenticationOptions:
+      description: WebAuthn authentication options and one-time ceremony token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CeremonyOptions' }
+    Login:
+      description: Authentication transition result
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/LoginResponse' }
+    Session:
+      description: Current authenticated session
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SessionResponse' }
+    User:
+      description: Safe user state
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [user]
+            properties:
+              user: { $ref: '#/components/schemas/User' }
+    ProviderAccount:
+      description: Safe Provider account state without credential material
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [provider_account]
+            properties:
+              provider_account: { $ref: '#/components/schemas/ProviderAccount' }
+    Zone:
+      description: Indexed Zone state
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [zone]
+            properties:
+              zone: { $ref: '#/components/schemas/Zone' }
+    RecordSet:
+      description: Authoritative Provider record-set state
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [recordset]
+            properties:
+              recordset: { $ref: '#/components/schemas/RecordSet' }
+    BatchResult:
+      description: Per-item batch result. HTTP 207 indicates at least one failed item.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/BatchResult' }
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error: { $ref: '#/components/schemas/ItemError' }
+    ItemError:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        request_id: { type: string }
+        details: { type: object, additionalProperties: true }
+    BootstrapStatus:
+      type: object
+      required: [required, configured, password_login_enabled]
+      properties:
+        required: { type: boolean }
+        configured: { type: boolean }
+        password_login_enabled: { type: boolean }
+    CeremonyOptions:
+      type: object
+      required: [ceremony_token, options]
+      properties:
+        ceremony_token: { type: string, description: Returned once and consumed by the matching verify endpoint. }
+        options: { type: object, additionalProperties: true }
+    CeremonyVerification:
+      type: object
+      additionalProperties: false
+      required: [ceremony_token, credential]
+      properties:
+        ceremony_token: { type: string, writeOnly: true }
+        credential: { type: object, additionalProperties: true }
+    Role:
+      type: string
+      enum: [admin, operator, viewer]
+    User:
+      type: object
+      required: [id, username, display_name, role, password_enabled, totp_required, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        password_enabled: { type: boolean }
+        totp_required: { type: boolean }
+        disabled_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateUser:
+      type: object
+      additionalProperties: false
+      required: [username, display_name, role]
+      properties:
+        username: { type: string }
+        display_name: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        initial_password: { type: string, minLength: 12, maxLength: 1024, writeOnly: true }
+    SessionResponse:
+      type: object
+      required: [authenticated, user, password_login_enabled]
+      properties:
+        authenticated: { const: true }
+        user: { $ref: '#/components/schemas/User' }
+        password_login_enabled: { type: boolean }
+    LoginResponse:
+      type: object
+      required: [authenticated, totp_required]
+      properties:
+        authenticated: { type: boolean }
+        user: { $ref: '#/components/schemas/User' }
+        totp_required: { type: boolean }
+        totp_token: { type: string, description: Short-lived token returned when password login requires TOTP. }
+    Passkey:
+      type: object
+      required: [id, name, transports, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        transports:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+    SessionInfo:
+      type: object
+      required: [id, ip, user_agent, auth_method, created_at, last_seen_at, idle_expires_at, absolute_expires_at, current]
+      properties:
+        id: { type: string, format: uuid }
+        ip: { type: string }
+        user_agent: { type: string }
+        auth_method: { type: string, enum: [passkey, password] }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        idle_expires_at: { type: string, format: date-time }
+        absolute_expires_at: { type: string, format: date-time }
+        current: { type: boolean }
+    DescriptorOption:
+      type: object
+      required: [value, label]
+      properties:
+        value: { type: string }
+        label: { type: string }
+    DescriptorCondition:
+      type: object
+      required: [field, values]
+      properties:
+        field: { type: string }
+        values:
+          type: array
+          items: { type: string }
+    DescriptorField:
+      type: object
+      required: [key, label, type, secret, required]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        type: { type: string, enum: [string, integer, boolean, enum, string_list] }
+        secret: { type: boolean }
+        required: { type: boolean }
+        placeholder: { type: string }
+        description: { type: string }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/DescriptorOption' }
+        minimum: { type: integer }
+        maximum: { type: integer }
+    ExtensionFieldDescriptor:
+      type: object
+      required: [namespace, scope, key, label, type, read_only, required]
+      properties:
+        namespace: { type: string }
+        scope: { type: string, enum: [zone, record_set, record_entry] }
+        key: { type: string }
+        label: { type: string }
+        type: { type: string, enum: [string, integer, boolean, enum, string_list] }
+        read_only: { type: boolean }
+        required: { type: boolean }
+        applicable_when:
+          type: array
+          items: { $ref: '#/components/schemas/DescriptorCondition' }
+        required_when:
+          type: array
+          items: { $ref: '#/components/schemas/DescriptorCondition' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/DescriptorOption' }
+        minimum: { type: integer }
+        maximum: { type: integer }
+    ProviderCapabilities:
+      type: object
+      required: [supported_record_types, native_record_granularity, supports_proxy, supports_routing_line, supports_weight, supports_record_status, supports_dnssec, supports_native_batch, supports_comments, extension_fields]
+      properties:
+        supported_record_types:
+          type: array
+          items: { $ref: '#/components/schemas/RecordType' }
+        min_ttl: { type: integer, minimum: 0 }
+        max_ttl: { type: integer, minimum: 1 }
+        native_record_granularity: { type: string, enum: [record_set, record_entry] }
+        supports_proxy: { type: boolean }
+        supports_routing_line: { type: boolean }
+        supports_weight: { type: boolean }
+        supports_record_status: { type: boolean }
+        supports_dnssec: { type: boolean }
+        supports_native_batch: { type: boolean }
+        supports_comments: { type: boolean }
+        extension_fields:
+          type: array
+          items: { $ref: '#/components/schemas/ExtensionFieldDescriptor' }
+    ProviderType:
+      type: object
+      required: [type, display_name, credential_fields, account_options, capabilities]
+      properties:
+        type: { type: string, enum: [huawei, aliyun, tencent, cloudflare] }
+        display_name: { type: string }
+        documentation_url: { type: string, format: uri }
+        credential_fields:
+          type: array
+          items: { $ref: '#/components/schemas/DescriptorField' }
+        account_options:
+          type: array
+          items: { $ref: '#/components/schemas/DescriptorField' }
+        capabilities: { $ref: '#/components/schemas/ProviderCapabilities' }
+    ValidationStatus:
+      type: string
+      enum: [unconfigured, pending, valid, invalid, error]
+    ProviderAccount:
+      type: object
+      description: Never contains plaintext credentials, ciphertext, nonce, or encryption key metadata.
+      required: [id, provider_type, name, description, enabled, options, credential_configured, credential_revision, validation_status, zone_count, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        provider_type: { type: string }
+        name: { type: string }
+        description: { type: string }
+        enabled: { type: boolean }
+        options: { type: object, additionalProperties: true }
+        credential_configured: { type: boolean }
+        credential_revision: { type: integer, minimum: 0 }
+        validation_status: { $ref: '#/components/schemas/ValidationStatus' }
+        last_validated_at: { type: string, format: date-time }
+        last_validation_error_code: { type: string }
+        last_zone_sync_at: { type: string, format: date-time }
+        zone_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateProviderAccount:
+      type: object
+      additionalProperties: false
+      required: [provider_type, name]
+      properties:
+        provider_type: { type: string }
+        name: { type: string }
+        description: { type: string }
+        enabled: { type: boolean }
+        options: { type: object, additionalProperties: true }
+        credentials: { type: object, writeOnly: true, additionalProperties: true }
+    Zone:
+      type: object
+      required: [id, provider_account_id, provider_type, provider_account_name, account_enabled, validation_status, name, metadata, fetched_at, stale]
+      properties:
+        id: { type: string, format: uuid }
+        provider_account_id: { type: string, format: uuid }
+        provider_type: { type: string }
+        provider_account_name: { type: string }
+        account_enabled: { type: boolean }
+        validation_status: { $ref: '#/components/schemas/ValidationStatus' }
+        name: { type: string }
+        status: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        fetched_at: { type: string, format: date-time }
+        stale: { type: boolean }
+    RecordType:
+      type: string
+      enum: [A, AAAA, CNAME, TXT, MX, NS, SRV, CAA]
+    ExtensionContainer:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: true
+    RecordEntry:
+      type: object
+      properties:
+        id: { type: string, readOnly: true }
+        value: { type: string }
+        priority: { type: integer, minimum: 0, maximum: 65535 }
+        weight: { type: integer, minimum: 0, maximum: 65535 }
+        port: { type: integer, minimum: 0, maximum: 65535 }
+        target: { type: string }
+        flags: { type: integer, minimum: 0, maximum: 255 }
+        tag: { type: string }
+        extensions: { $ref: '#/components/schemas/ExtensionContainer' }
+    RecordSetInput:
+      type: object
+      additionalProperties: false
+      required: [name, type, ttl, entries]
+      properties:
+        name: { type: string }
+        type: { $ref: '#/components/schemas/RecordType' }
+        ttl: { type: integer, minimum: 0, maximum: 4294967295 }
+        entries:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RecordEntry' }
+        extensions: { $ref: '#/components/schemas/ExtensionContainer' }
+    UpdateRecordSetInput:
+      allOf:
+        - $ref: '#/components/schemas/RecordSetInput'
+        - type: object
+          required: [expected_fingerprint]
+          properties:
+            expected_fingerprint: { type: string }
+            provider_version: { type: string }
+    RecordSet:
+      allOf:
+        - $ref: '#/components/schemas/RecordSetInput'
+        - type: object
+          required: [id, fingerprint]
+          properties:
+            id: { type: string, pattern: '^rs_' }
+            provider_version: { type: string }
+            fingerprint: { type: string }
+    BatchRequest:
+      type: object
+      additionalProperties: false
+      required: [operation, items]
+      properties:
+        operation: { type: string, enum: [delete, ttl_update] }
+        confirmation:
+          type: string
+          description: Required for large destructive batches and must match the Zone name.
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [recordset_id, expected_fingerprint]
+            properties:
+              recordset_id: { type: string, pattern: '^rs_' }
+              expected_fingerprint: { type: string }
+              provider_version: { type: string }
+              ttl: { type: integer, minimum: 0, maximum: 4294967295 }
+    BatchResult:
+      type: object
+      required: [total, succeeded, failed, items]
+      properties:
+        total: { type: integer, minimum: 0 }
+        succeeded: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, status]
+            properties:
+              id: { type: string }
+              status: { type: string, enum: [succeeded, failed] }
+              recordset: { $ref: '#/components/schemas/RecordSet' }
+              error: { $ref: '#/components/schemas/ItemError' }
+    AuditEvent:
+      type: object
+      required: [id, occurred_at, actor_username, action, resource_type, request_id, result, metadata]
+      properties:
+        id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        actor_user_id: { type: string, format: uuid }
+        actor_username: { type: string }
+        action: { type: string }
+        resource_type: { type: string }
+        resource_id: { type: string }
+        provider_account_id: { type: string, format: uuid }
+        zone_id: { type: string, format: uuid }
+        request_id: { type: string }
+        ip: { type: string }
+        user_agent: { type: string }
+        result: { type: string, enum: [succeeded, failed] }
+        error_code: { type: string }
+        before: { type: object, additionalProperties: true }
+        after: { type: object, additionalProperties: true }
+        metadata: { type: object, additionalProperties: true }

@@ -1,10 +1,10 @@
 import { Show, type JSX, type ParentProps } from "solid-js";
 
 export function PageHeader(props: {
-  eyebrow?: string;
+  eyebrow?: string | undefined;
   title: string;
-  description?: string;
-  actions?: JSX.Element;
+  description?: string | undefined;
+  actions?: JSX.Element | undefined;
 }) {
   return (
     <header class="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-end sm:justify-between">
@@ -25,7 +25,12 @@ export function PageHeader(props: {
 }
 
 export function Panel(
-  props: ParentProps<{ title?: string; description?: string; class?: string; compact?: boolean }>,
+  props: ParentProps<{
+    title?: string | undefined;
+    description?: string | undefined;
+    class?: string | undefined;
+    compact?: boolean | undefined;
+  }>,
 ) {
   return (
     <section
@@ -63,10 +68,10 @@ const alertClasses: Record<AlertVariant, string> = {
 
 export function Alert(
   props: ParentProps<{
-    variant?: AlertVariant;
-    title?: string;
-    class?: string;
-    role?: "alert" | "status";
+    variant?: AlertVariant | undefined;
+    title?: string | undefined;
+    class?: string | undefined;
+    role?: "alert" | "status" | undefined;
   }>,
 ) {
   const variant = () => props.variant ?? "info";
@@ -87,7 +92,12 @@ export function Alert(
 }
 
 export function Field(
-  props: ParentProps<{ label: string; for: string; hint?: string; class?: string }>,
+  props: ParentProps<{
+    label: string;
+    for: string;
+    hint?: string | undefined;
+    class?: string | undefined;
+  }>,
 ) {
   return (
     <div class={props.class}>
@@ -103,7 +113,9 @@ export function Field(
 }
 
 export function Badge(
-  props: ParentProps<{ tone?: "neutral" | "primary" | "success" | "warning" | "danger" }>,
+  props: ParentProps<{
+    tone?: "neutral" | "primary" | "success" | "warning" | "danger" | undefined;
+  }>,
 ) {
   const toneClasses = {
     neutral: "bg-muted text-muted-foreground",
