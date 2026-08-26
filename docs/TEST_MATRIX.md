@@ -1,6 +1,7 @@
 # Provider 测试矩阵
 
 以下结果只记录本次实际执行的命令。真实 Provider integration 默认受环境变量门禁保护，未配置专用凭据和测试 Zone 时不运行。
+本次 production release preparation 未执行真实 Provider integration 或 mutation；下表中的历史成功记录仅代表对应日期和专用测试 Zone 的既有证据，不替代当前目标环境验证。未配置凭据时不得将 fixture/conformance 结果升级为 real-account success。
 
 | Provider | Unit | Conformance | Read Integration | Mutation Integration | Last verified |
 |---|---|---|---|---|---|

@@ -23,7 +23,7 @@ services:
       context: .
     command: ["migrate", "up"]
     environment:
-      APP_DATABASE_URL: postgres://${POSTGRES_USER:-aster_dns}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-aster_dns}?sslmode=disable
+      APP_DATABASE_URL: postgres://${POSTGRES_USER:-aster_dns}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-aster_dns}?sslmode=${POSTGRES_SSLMODE:-disable}
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,11 +42,11 @@ services:
       APP_ENV: ${APP_ENV:-development}
       APP_LISTEN_ADDR: :8080
       APP_PUBLIC_URL: ${APP_COMPOSE_PUBLIC_URL:-http://localhost:8080}
-      APP_DATABASE_URL: postgres://${POSTGRES_USER:-aster_dns}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-aster_dns}?sslmode=disable
-      APP_MASTER_KEY: ${APP_MASTER_KEY:-}
+      APP_DATABASE_URL: postgres://${POSTGRES_USER:-aster_dns}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-aster_dns}?sslmode=${POSTGRES_SSLMODE:-disable}
+      APP_MASTER_KEY: ${APP_MASTER_KEY:?APP_MASTER_KEY must be set in .env}
       APP_MASTER_KEY_VERSION: ${APP_MASTER_KEY_VERSION:-1}
       APP_PREVIOUS_MASTER_KEYS: ${APP_PREVIOUS_MASTER_KEYS:-}
-      APP_BOOTSTRAP_TOKEN: ${APP_BOOTSTRAP_TOKEN:-}
+      APP_BOOTSTRAP_TOKEN: ${APP_BOOTSTRAP_TOKEN-}
       APP_PASSWORD_LOGIN_ENABLED: ${APP_PASSWORD_LOGIN_ENABLED:-false}
       APP_LOG_LEVEL: ${APP_LOG_LEVEL:-info}
       APP_DB_MAX_CONNS: ${APP_DB_MAX_CONNS:-10}
@@ -66,6 +66,13 @@ services:
       APP_AUTH_SESSION_REFRESH_INTERVAL: ${APP_AUTH_SESSION_REFRESH_INTERVAL:-1m}
       APP_AUTH_CHALLENGE_TTL: ${APP_AUTH_CHALLENGE_TTL:-5m}
       APP_AUTH_ENROLLMENT_TTL: ${APP_AUTH_ENROLLMENT_TTL:-24h}
+    healthcheck:
+      test: ["CMD", "/app/server", "healthcheck", "--url", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
     depends_on:
       migrate:
         condition: service_completed_successfully

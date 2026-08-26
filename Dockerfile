@@ -3,7 +3,7 @@
 FROM node:24-alpine AS web-build
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 COPY web/ ./
 RUN npm run build
 
@@ -16,7 +16,7 @@ COPY internal/ ./internal/
 COPY migrations/ ./migrations/
 ARG VERSION=dev
 ARG COMMIT=unknown
-RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false \
+RUN CGO_ENABLED=0 GOOS=linux go build -buildvcs=false -mod=readonly \
       -trimpath \
       -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
       -o /out/server ./cmd/server

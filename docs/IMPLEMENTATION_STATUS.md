@@ -275,7 +275,7 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 |---|---|
 | Focused backend security tests | Passed unauthenticated `401`, role matrix, CSRF/origin rejection, revoked/disabled session denial, Argon2id verify, opaque-token hashing, WebAuthn challenge replay and rpId/origin rejection, TOTP ciphertext tamper rejection, TOTP time-step replay rejection, and secret-canary scans. |
 | Backend authentication packages | `go test ./internal/auth ./internal/api ./internal/audit ./internal/crypto` passed. |
-| Acceptance delivery gate (2026-08-26) | `make ci` passed gofmt check, `go vet`, all Go tests, Prettier check, zero-warning ESLint, TypeScript strict typecheck, 4 Vitest files / 9 tests, backend build, and Vite production build; Vite v8.2.2 transformed 67 modules. |
+| Acceptance delivery gate (2026-08-26) | `make ci` previously passed the full local gate; the current release run separately passed format/lint/typecheck, all Go tests, 4 Vitest files / 12 tests, backend build, and Vite production build; Vite v8.2.2 transformed 67 modules. |
 | Four-adapter conformance | `go test ./internal/provider/huawei ./internal/provider/aliyun ./internal/provider/tencent ./internal/provider/cloudflare -run 'Conformance$' -count=1` passed all four shared conformance suites. |
 | Huawei adapter fixtures | `go test ./internal/provider/huawei -count=1` passed official-SDK transport signing, scoped Zone/RecordSet pagination, multi-value normalization, opaque IDs, line/weight/status/provider-status/default metadata, default mutation rejection, TXT/MX/SRV/CAA, optimistic preconditions, read retry/mutation no-retry, error/request metadata, secret redaction, cancellation, timeout, and shared conformance. |
 | Huawei real integration gate | `go test ./internal/provider/huawei -run 'TestHuaweiIntegration' -count=1 -v` passed with read-only skipped because AK/SK were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Huawei success is claimed. |
@@ -288,7 +288,7 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 | Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api ./internal/auth ./internal/audit ./internal/httpx` passed all Provider adapters plus service/API/auth/audit/HTTP hardening paths, including client single-flight, revision invalidation, and the eight-call per-account bound. |
 | Formatting and lint | `make backend-format-check backend-lint frontend-format-check frontend-lint` passed: gofmt clean, `go vet` clean, Prettier clean, and ESLint zero warnings. |
 | Backend tests and build | `make backend-test` passed `go test ./cmd/... ./internal/... ./migrations`; `go build ./cmd/... ./internal/... ./migrations` also passed. |
-| Frontend tests, typecheck, and build | `make ci` passed 4 Vitest files / 9 tests, TypeScript strict typecheck, zero-warning ESLint, Prettier, and the Vite production build. Tests cover capability-driven Provider forms, credential state cleanup/storage scans, API diagnostic redaction, cache/conflict/batch behavior, and focus recovery. |
+| Frontend tests, typecheck, and build | The current release run passed 4 Vitest files / 12 tests, TypeScript strict typecheck, zero-warning ESLint, Prettier, and the Vite production build. Tests cover capability-driven Provider forms, credential state cleanup/storage scans, API diagnostic redaction, cache/conflict/batch behavior, and focus recovery. |
 | Unified browser UI acceptance | Real Chromium followed the password + TOTP login, Provider Account create, post-save secret redaction, Validate, Sync Zones, four-account Zone inventory, Zone opening, force refresh, seven record-type creates (A/AAAA/CNAME/TXT/MX/SRV/CAA), multi-entry RRSet, edit/delete, optimistic conflict comparison/reapply, batch partial failure, audit detail, viewer RBAC, CSRF-bearing mutations, Passkey/TOTP/session management, light/dark theme, and keyboard/focus/error paths against a stateful intercepted fake Provider API. Cloudflare proxy, Huawei line/weight/status, DNSPod line/line-ID/weight/status/remark, and Alibaba line/weight/status/remark fields rendered only from descriptors. A 390×844 viewport had no document overflow and kept focus inside mobile navigation. No Provider secret appeared in response state, DOM, audit, localStorage, or sessionStorage. |
 | Acceptance defects fixed | Cross-account Zone links now target the registered `/zones/:zoneId/records` route instead of the 404 `/zones/:zoneId` path. Record create/update server errors now return focus to the still-open editor after the busy submit button is disabled. Both defects have frontend regression tests and were reverified in Chromium. |
 | DNS API and cache tests | `make backend-test` passed DNS service/API tests for cache hit/bypass/stale fallback/invalidation, Provider final state, conflict details, batch delete/TTL partial results, audit list/detail, RBAC, CSRF/Origin, safe errors, and request IDs. |
@@ -303,11 +303,34 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 | Container/Compose | `docker compose config --quiet` passed with explicit hardening environment variables. `make container-build` produced the distroless `nonroot` image after rebuilding the frontend and Go binary. |
 | Browser security/accessibility smoke | Real Chromium opened the native named Provider-account dialog, confirmed password input semantics, found no random credential canary in visible DOM/localStorage/sessionStorage, restored focus to `Add provider account` on close, cleared the secret input before reopen, and reported zero console errors/warnings. |
 
-## Remaining project work
+## Production release preparation
 
-The requested unified DNS Web product is implemented. Environment/operations work still requiring deployment-specific inputs:
-1. Run the four read-only integration suites with dedicated real credentials. Run mutation gates only with `DNS_INTEGRATION_MUTATE=1` and dedicated test Zones; fixture/conformance success is not a claim of real-account validation.
-2. Scheduled Zone sync de-duplicates only inside one process. Production deployment is intentionally single-replica until a database-backed scheduler lease/leader mechanism is designed; do not run multiple schedulers against the same database.
-3. Provider clients must retain credential material in Go/official-SDK memory while they are cached (maximum five minutes); Go cannot guarantee memory zeroization. Rotation is read-compatible but does not proactively re-encrypt old rows—replace a Provider credential or TOTP setup to write it with the active key before retiring the old key.
-4. In-memory auth rate limits are per process and reset on restart. A reverse proxy/WAF should add deployment-wide request limiting for Internet-exposed multi-instance deployments.
-5. Backup/restore drills, monitoring/alert thresholds, and real reverse-proxy CIDRs are deployment-specific. Configure only actual proxy networks in `APP_TRUSTED_PROXY_CIDRS`; an empty value intentionally ignores all forwarded client-IP headers.
+The release preparation assets are now explicit and production-oriented: the multi-stage Dockerfile builds the frontend and static Go binary separately, the distroless runtime is `nonroot:nonroot`, the root Compose example starts PostgreSQL plus a one-shot migration and app service, and `.dockerignore` excludes local environment files, secret directories, key files, and frontend build output. Vite output is served from the same-origin `/app/web` tree with immutable hashed asset caching and SPA fallback.
+
+`README.md` documents production configuration, HTTPS/public-origin and trusted-proxy requirements, WebAuthn origin behavior, one-time first-admin bootstrap, master-key generation and independent backup, migration/upgrade, health/readiness, shutdown, scheduler replica limits, logging/redaction, and recovery. `docs/OPERATIONS.md` covers Provider authentication failures, 429 handling, Zone sync failures, master-key errors, credential replacement, and PostgreSQL restore. `docs/RELEASE_CHECKLIST.md` separates completed local evidence from deployment-specific and external-integration gates.
+
+The current architecture has no `/metrics` endpoint or collector; this is documented rather than replaced with a large telemetry dependency. The in-process Zone sync scheduler is explicitly single-replica only. Security headers/CSP, HSTS behavior, trusted-proxy handling, and secret redaction remain centralized in the existing middleware and tests.
+
+## Release gate evidence (2026-08-26)
+
+| Check | Observed result |
+|---|---|
+| Format/lint/typecheck | `make backend-format-check backend-lint frontend-format-check frontend-lint frontend-typecheck` passed. |
+| Tests | `make test` passed all Go packages and 4 frontend test files / 12 tests. |
+| Selected race | `go test -race ./internal/provider/... ./internal/service ./internal/api ./internal/auth ./internal/audit ./internal/httpx` passed. |
+| Production builds | `make build` passed backend build and Vite production build; Vite transformed 67 modules. |
+| Image build and runtime identity | `docker build --tag aster-dns:release-candidate --build-arg VERSION=release-candidate --build-arg COMMIT=local .` passed; image user is `nonroot:nonroot`, entrypoint is `/app/server`, and exported runtime paths contain only the binary and built SPA assets plus distroless base files. Docker reported only the local daemon's legacy-builder warning. |
+| Compose config | `docker compose config --quiet` passed with explicit temporary smoke values; missing `POSTGRES_PASSWORD`/`APP_MASTER_KEY` fails closed. |
+| Clean DB and upgrade | Dedicated PostgreSQL 18 Compose smoke migrated cleanly; `TestMigrationsCleanIncrementalAndIdempotent` passed through version 3 upgrade, latest version, and idempotent rerun. |
+| Health/readiness | The clean app container was reported healthy; `/healthz` returned `{"status":"ok"}` and `/readyz` returned `{"status":"ready"}`. |
+| Graceful shutdown | Compose SIGTERM produced `server shutdown started` followed by `server shutdown complete`. |
+| Frontend smoke | Real Chromium loaded the built SPA title and first-admin bootstrap form; hashed JS/CSS/favicon assets returned 200 and there were no page errors. The expected unauthenticated session probe returned HTTP 401 and was the only browser network console error. |
+| Security and secret scan | Security-header and key/config tests passed; the production-config scan found no weak secret assignment, and the exported image contained no source tree, `.env`, secret directory, test fixture, or build-cache path. Test canaries remain only in test source and are covered by the redaction tests. |
+
+## Remaining deployment-specific work
+
+1. Supply real reverse-proxy CIDRs, external secret-manager injection, independent master-key/keyring backup, and perform a restore drill with a compatible image and database.
+2. Run the four read-only Provider integration suites only with dedicated credentials and test Zones. Run mutation gates only with `DNS_INTEGRATION_MUTATE=1` and dedicated test Zones; fixture/conformance success is not real-account validation.
+3. Keep exactly one application replica while the scheduler is in-process. Do not treat migration advisory locking as a multi-replica job lease.
+4. Provider clients may retain credential material in Go/official-SDK memory for the bounded cache lifetime; key rotation does not promise memory zeroization or proactively rewrite old ciphertext.
+5. In-memory auth rate limits are per process and reset on restart; Internet-exposed deployments should add reverse-proxy/WAF rate limiting.

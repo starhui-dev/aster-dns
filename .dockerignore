@@ -8,4 +8,9 @@ coverage
 web/node_modules
 web/dist
 web/coverage
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
 *.coverprofile
