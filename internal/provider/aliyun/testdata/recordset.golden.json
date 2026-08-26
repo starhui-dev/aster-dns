@@ -1,0 +1,43 @@
+{
+  "record_set": {
+    "entries": [
+      {
+        "id": "record-a-1",
+        "line": "default",
+        "remark": "",
+        "status": "Enable",
+        "value": "192.0.2.1"
+      },
+      {
+        "id": "record-a-2",
+        "line": "default",
+        "remark": "",
+        "status": "Enable",
+        "value": "192.0.2.2"
+      },
+      {
+        "id": "record-a-disabled",
+        "line": "default",
+        "remark": "",
+        "status": "Disable",
+        "value": "192.0.2.4"
+      }
+    ],
+    "id": "aliyun-recordset-v1:WyJyZWNvcmQtYS0xIiwicmVjb3JkLWEtMiIsInJlY29yZC1hLWRpc2FibGVkIl0",
+    "name": "a.example.com",
+    "provider_version": "104",
+    "status": "",
+    "ttl": 300,
+    "type": "A"
+  },
+  "zone": {
+    "group_id": "group-1",
+    "id": "domain-1",
+    "name": "example.com",
+    "nameservers": [
+      "ns1.alidns.com",
+      "ns2.alidns.com"
+    ],
+    "status": "active"
+  }
+}

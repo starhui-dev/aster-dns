@@ -8,10 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 )
 
 func integrationProvider(t *testing.T) *Provider {
+	if os.Getenv("DNS_INTEGRATION") != "1" {
+		t.Skip("DNS_INTEGRATION=1 is required for real Cloudflare DNS integration")
+	}
 	t.Helper()
 	token := os.Getenv("CLOUDFLARE_DNS_API_TOKEN")
 	if token == "" {
@@ -66,8 +70,8 @@ func TestCloudflareIntegrationReadOnly(t *testing.T) {
 }
 
 func TestCloudflareIntegrationMutation(t *testing.T) {
-	if os.Getenv("DNS_INTEGRATION_MUTATE") != "1" {
-		t.Skip("DNS_INTEGRATION_MUTATE=1 is required for real Cloudflare mutation")
+	if os.Getenv("DNS_INTEGRATION") != "1" || os.Getenv("DNS_INTEGRATION_MUTATE") != "1" {
+		t.Skip("DNS_INTEGRATION=1 and DNS_INTEGRATION_MUTATE=1 are required for real Cloudflare DNS mutation")
 	}
 	zoneID := os.Getenv("CLOUDFLARE_DNS_TEST_ZONE_ID")
 	if zoneID == "" {
@@ -80,7 +84,7 @@ func TestCloudflareIntegrationMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get dedicated test zone: %v", err)
 	}
-	name := fmt.Sprintf("aster-dns-%d.%s", time.Now().UnixNano(), zone.Name)
+	name := fmt.Sprintf("aster-dns-%s.%s", uuid.NewString(), zone.Name)
 	created, err := provider.CreateRecordSet(ctx, zone.ID, core.CreateRecordSetInput{
 		Name: name, Type: core.RecordTypeTXT, TTL: 60, Entries: []core.RecordEntry{{Value: "aster-dns integration create"}},
 	})
@@ -96,7 +100,7 @@ func TestCloudflareIntegrationMutation(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		if err := deleteIntegrationRecordSet(cleanupCtx, provider, zone.ID, cleanupID); err != nil {
-			t.Errorf("cleanup integration record set %s: %v", cleanupID, err)
+			t.Errorf("cleanup integration record set name=%s id=%s: %v", name, cleanupID, err)
 		}
 	})
 

@@ -1,0 +1,40 @@
+{
+  "record_set": {
+    "entries": [
+      {
+        "id": "101",
+        "line": "默认",
+        "line_id": "0",
+        "remark": "",
+        "status": "ENABLE",
+        "value": "192.0.2.1",
+        "weight": 20
+      },
+      {
+        "id": "102",
+        "line": "默认",
+        "line_id": "0",
+        "remark": "",
+        "status": "ENABLE",
+        "value": "192.0.2.2",
+        "weight": 80
+      }
+    ],
+    "id": "tencent-recordset-v1:WyIxMDEiLCIxMDIiXQ",
+    "name": "a.example.com",
+    "provider_version": "2026-08-25 01:00:02",
+    "status": "ENABLE",
+    "ttl": 300,
+    "type": "A"
+  },
+  "zone": {
+    "grade": "DP_FREE",
+    "id": "1",
+    "name": "example.com",
+    "nameservers": [
+      "f1g1ns1.dnspod.net",
+      "f1g1ns2.dnspod.net"
+    ],
+    "status": "enable"
+  }
+}

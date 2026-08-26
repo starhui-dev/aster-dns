@@ -9,9 +9,15 @@ import RecordsPage from "./RecordsPage";
 const zoneID = "01900000-0000-7000-8000-000000000201";
 let recordsets: RecordSet[];
 let createShouldFail: boolean;
+let updateShouldConflict: boolean;
+let listShouldFail: boolean;
+let lastUpdateBody: Record<string, unknown> | undefined;
 
 beforeEach(() => {
   createShouldFail = false;
+  updateShouldConflict = false;
+  listShouldFail = false;
+  lastUpdateBody = undefined;
   recordsets = [
     {
       id: "record-1",
@@ -22,6 +28,16 @@ beforeEach(() => {
       extensions: { cloudflare: { proxied: false } },
       provider_version: "v1",
       fingerprint: "fingerprint-1",
+    },
+    {
+      id: "record-3",
+      name: "batch.example.com",
+      type: "A",
+      ttl: 300,
+      entries: [{ value: "192.0.2.30" }],
+      extensions: { cloudflare: { proxied: false } },
+      provider_version: "v1",
+      fingerprint: "fingerprint-3",
     },
   ];
   window.history.replaceState({}, "", `/zones/${zoneID}/records`);
@@ -104,6 +120,81 @@ describe("RecordsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The record value is invalid.");
     await waitFor(() => expect(document.activeElement).toBe(name));
   });
+  it("shows a provider conflict and reapplies against refreshed state", async () => {
+    updateShouldConflict = true;
+    vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
+
+    render(() => (
+      <AuthProvider>
+        <Router>
+          <Route path="/zones/:zoneId/records" component={RecordsPage} />
+        </Router>
+      </AuthProvider>
+    ));
+
+    expect(await screen.findByRole("heading", { name: "example.com" })).toBeInTheDocument();
+    const row = screen.getByText("api.example.com").closest("tr");
+    expect(row).not.toBeNull();
+    fireEvent.click(within(row as HTMLTableRowElement).getByRole("button", { name: "Edit" }));
+    fireEvent.input(await screen.findByLabelText("TTL (seconds)"), { target: { value: "600" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save record set" }));
+
+    expect(await screen.findByText("Provider conflict")).toBeInTheDocument();
+    expect(screen.getByText((text) => text.includes("192.0.2.99"))).toBeInTheDocument();
+
+    updateShouldConflict = false;
+    fireEvent.click(screen.getByRole("button", { name: "Reapply against current" }));
+    expect(
+      await screen.findByText("Changes reapplied against the current provider state."),
+    ).toBeInTheDocument();
+    expect(lastUpdateBody?.expected_fingerprint).toBe("server-fingerprint");
+    expect(lastUpdateBody?.provider_version).toBe("server-version");
+  });
+
+  it("renders per-item partial batch results and request diagnostics", async () => {
+    vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
+
+    render(() => (
+      <AuthProvider>
+        <Router>
+          <Route path="/zones/:zoneId/records" component={RecordsPage} />
+        </Router>
+      </AuthProvider>
+    ));
+
+    expect(await screen.findByRole("heading", { name: "example.com" })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Select api.example.com A"));
+    fireEvent.click(screen.getByLabelText("Select batch.example.com A"));
+    fireEvent.click(screen.getByRole("button", { name: "Batch delete" }));
+    fireEvent.input(await screen.findByLabelText("Type example.com to confirm"), {
+      target: { value: "example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply to 2 items" }));
+
+    expect(await screen.findByText("Batch result")).toBeInTheDocument();
+    expect(screen.getByText("1 succeeded · 1 failed")).toBeInTheDocument();
+    expect(
+      screen.getByText((text) => text.includes("Provider changed before deletion.")),
+    ).toBeInTheDocument();
+    expect(screen.getByText((text) => text.includes("req_batch_conflict"))).toBeInTheDocument();
+  });
+
+  it("renders a safe Provider refresh error with its request ID", async () => {
+    listShouldFail = true;
+    vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
+
+    render(() => (
+      <AuthProvider>
+        <Router>
+          <Route path="/zones/:zoneId/records" component={RecordsPage} />
+        </Router>
+      </AuthProvider>
+    ));
+
+    expect(await screen.findByText("Provider unavailable.")).toBeInTheDocument();
+    expect(screen.getByText("Request req_record_list")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Cached data is marked stale.");
+  });
 });
 
 async function fakeProviderFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -132,12 +223,46 @@ async function fakeProviderFetch(input: RequestInfo | URL, init?: RequestInit): 
     return jsonResponse({ provider_types: [cloudflareDefinition] });
   }
   if (path.includes(`/zones/${zoneID}/recordsets?`)) {
+    if (listShouldFail) {
+      return jsonResponse(
+        {
+          error: {
+            code: "upstream",
+            message: "Provider unavailable.",
+            request_id: "req_record_list",
+          },
+        },
+        503,
+      );
+    }
     return jsonResponse({
       recordsets,
       total: recordsets.length,
       fetched_at: "2026-08-26T00:00:00Z",
       stale: false,
     });
+  }
+  if (path.endsWith(`/zones/${zoneID}/recordsets/batch`) && method === "POST") {
+    const body = JSON.parse(String(init?.body)) as { items: Array<{ recordset_id: string }> };
+    return jsonResponse(
+      {
+        succeeded: 1,
+        failed: 1,
+        items: [
+          { id: body.items[0]?.recordset_id ?? "record-1", status: "succeeded" },
+          {
+            id: body.items[1]?.recordset_id ?? "record-3",
+            status: "failed",
+            error: {
+              code: "conflict",
+              message: "Provider changed before deletion.",
+              request_id: "req_batch_conflict",
+            },
+          },
+        ],
+      },
+      207,
+    );
   }
   if (path.endsWith(`/zones/${zoneID}/recordsets`) && method === "POST") {
     if (createShouldFail) {
@@ -168,10 +293,35 @@ async function fakeProviderFetch(input: RequestInfo | URL, init?: RequestInit): 
     recordsets = [...recordsets, created];
     return jsonResponse({ recordset: created }, 201);
   }
-  if (path.endsWith(`/zones/${zoneID}/recordsets/record-2`) && method === "PATCH") {
-    const body = JSON.parse(String(init?.body)) as RecordSet;
+  if (path.includes(`/zones/${zoneID}/recordsets/`) && method === "PATCH") {
+    const body = JSON.parse(String(init?.body)) as RecordSet & {
+      expected_fingerprint?: string;
+      provider_version?: string;
+    };
+    lastUpdateBody = body as unknown as Record<string, unknown>;
+    const recordID = path.slice(path.lastIndexOf("/") + 1);
+    const existing = recordsets.find((record) => record.id === recordID) ?? recordsets[0];
+    if (updateShouldConflict && existing !== undefined) {
+      const current: RecordSet = {
+        ...existing,
+        entries: [{ ...existing.entries[0], value: "192.0.2.99" }],
+        provider_version: "server-version",
+        fingerprint: "server-fingerprint",
+      };
+      return jsonResponse(
+        {
+          error: {
+            code: "conflict",
+            message: "The Provider record changed.",
+            request_id: "req_conflict",
+            details: { current },
+          },
+        },
+        409,
+      );
+    }
     const updated: RecordSet = {
-      id: "record-2",
+      id: recordID,
       name: body.name,
       type: body.type,
       ttl: body.ttl,
@@ -183,8 +333,9 @@ async function fakeProviderFetch(input: RequestInfo | URL, init?: RequestInit): 
     recordsets = recordsets.map((record) => (record.id === updated.id ? updated : record));
     return jsonResponse({ recordset: updated });
   }
-  if (path.endsWith(`/zones/${zoneID}/recordsets/record-2`) && method === "DELETE") {
-    recordsets = recordsets.filter((record) => record.id !== "record-2");
+  if (path.includes(`/zones/${zoneID}/recordsets/`) && method === "DELETE") {
+    const recordID = path.slice(path.lastIndexOf("/") + 1);
+    recordsets = recordsets.filter((record) => record.id !== recordID);
     return new Response(null, { status: 204, headers: { "X-Request-ID": "req_delete" } });
   }
   throw new Error(`Unexpected request: ${method} ${path}`);

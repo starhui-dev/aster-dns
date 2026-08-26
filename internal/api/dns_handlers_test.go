@@ -136,6 +136,47 @@ func TestDNSAPIRBACCSRFCRUDConflictBatchAndAudit(t *testing.T) {
 	}
 }
 
+func TestDNSRolePermissionMatrix(t *testing.T) {
+	tests := []struct {
+		name         string
+		role         auth.Role
+		mutationCode int
+	}{
+		{name: "viewer", role: auth.RoleViewer, mutationCode: http.StatusForbidden},
+		{name: "operator", role: auth.RoleOperator, mutationCode: http.StatusCreated},
+		{name: "admin", role: auth.RoleAdmin, mutationCode: http.StatusCreated},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			fakeProvider := fake.NewProvider()
+			if err := fakeProvider.SetZones([]provider.Zone{{ID: "zone-api", Name: "example.com", Status: "active"}}); err != nil {
+				t.Fatalf("seed zone: %v", err)
+			}
+			fixture := newAPIDNSFixture(t, fakeProvider)
+			router, token, csrf := fixture.router(t, test.role)
+
+			response := serveDNSRequest(router, token, csrf, http.MethodGet,
+				"/api/v1/zones/"+fixture.repository.zone.ID.String()+"/recordsets?refresh=true", nil, false)
+			if response.Code != http.StatusOK && test.role != auth.RoleViewer {
+				t.Fatalf("refresh status=%d body=%s", response.Code, response.Body.String())
+			}
+			if response.Code != http.StatusForbidden && test.role == auth.RoleViewer {
+				t.Fatalf("viewer refresh status=%d body=%s", response.Code, response.Body.String())
+			}
+
+			response = serveDNSRequest(router, token, csrf, http.MethodPost,
+				"/api/v1/zones/"+fixture.repository.zone.ID.String()+"/recordsets", map[string]any{
+					"name": "matrix-" + test.name, "type": "A", "ttl": 300,
+					"entries": []map[string]any{{"value": "192.0.2.50"}},
+				}, true)
+			if response.Code != test.mutationCode {
+				t.Fatalf("record mutation status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestProviderCredentialMutationRemainsAdminOnly(t *testing.T) {
 	repository := &apiProviderRepository{}
 	registry, err := provider.NewRegistry(fake.NewFactory())

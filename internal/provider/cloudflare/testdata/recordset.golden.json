@@ -1,0 +1,37 @@
+{
+  "record_set": {
+    "automatic_ttl": false,
+    "comment": "origin pool",
+    "entries": [
+      {
+        "id": "record-a-1",
+        "value": "192.0.2.1"
+      },
+      {
+        "id": "record-a-2",
+        "value": "192.0.2.2"
+      }
+    ],
+    "id": "cloudflare-recordset-v1:WyJyZWNvcmQtYS0xIiwicmVjb3JkLWEtMiJd",
+    "name": "a.example.com",
+    "proxiable": true,
+    "proxied": false,
+    "provider_version": "2026-08-25T10:00:02Z",
+    "tags": [
+      "env:test",
+      "owner:dns"
+    ],
+    "ttl": 300,
+    "type": "A"
+  },
+  "zone": {
+    "id": "zone-1",
+    "name": "example.com",
+    "nameservers": [
+      "ada.ns.cloudflare.com",
+      "bob.ns.cloudflare.com"
+    ],
+    "paused": false,
+    "status": "active"
+  }
+}

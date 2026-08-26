@@ -8,10 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 )
 
 func integrationProvider(t *testing.T) *Provider {
+	if os.Getenv("DNS_INTEGRATION") != "1" {
+		t.Skip("DNS_INTEGRATION=1 is required for real Alibaba Cloud DNS integration")
+	}
 	t.Helper()
 	accessKeyID := os.Getenv("ALIYUN_DNS_ACCESS_KEY_ID")
 	accessKeySecret := os.Getenv("ALIYUN_DNS_ACCESS_KEY_SECRET")
@@ -69,8 +73,8 @@ func TestAliyunIntegrationReadOnly(t *testing.T) {
 }
 
 func TestAliyunIntegrationMutation(t *testing.T) {
-	if os.Getenv("DNS_INTEGRATION_MUTATE") != "1" {
-		t.Skip("DNS_INTEGRATION_MUTATE=1 is required for real Alibaba Cloud DNS mutation")
+	if os.Getenv("DNS_INTEGRATION") != "1" || os.Getenv("DNS_INTEGRATION_MUTATE") != "1" {
+		t.Skip("DNS_INTEGRATION=1 and DNS_INTEGRATION_MUTATE=1 are required for real Alibaba Cloud DNS mutation")
 	}
 	zoneID := os.Getenv("ALIYUN_DNS_TEST_ZONE_ID")
 	if zoneID == "" {
@@ -83,7 +87,7 @@ func TestAliyunIntegrationMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get dedicated test zone: %v", err)
 	}
-	name := fmt.Sprintf("aster-dns-%d.%s", time.Now().UnixNano(), zone.Name)
+	name := fmt.Sprintf("aster-dns-%s.%s", uuid.NewString(), zone.Name)
 	created, err := provider.CreateRecordSet(ctx, zone.ID, core.CreateRecordSetInput{
 		Name: name, Type: core.RecordTypeTXT, TTL: 600, Entries: []core.RecordEntry{{Value: "aster-dns integration create"}},
 	})
@@ -99,7 +103,7 @@ func TestAliyunIntegrationMutation(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		if err := deleteIntegrationRecordSet(cleanupCtx, provider, zone.ID, cleanupID); err != nil {
-			t.Errorf("cleanup integration record set %s: %v", cleanupID, err)
+			t.Errorf("cleanup integration record set name=%s id=%s: %v", name, cleanupID, err)
 		}
 	})
 

@@ -1,0 +1,36 @@
+{
+  "record_set": {
+    "default": false,
+    "entries": [
+      {
+        "id": "",
+        "line": "default_view",
+        "value": "192.0.2.1",
+        "weight": 10
+      },
+      {
+        "id": "",
+        "line": "default_view",
+        "value": "192.0.2.2",
+        "weight": 10
+      }
+    ],
+    "id": "record-a",
+    "name": "www.example.com",
+    "provider_status": "ACTIVE",
+    "provider_version": "2026-08-24T01:01:00.000",
+    "status": "ENABLE",
+    "ttl": 300,
+    "type": "A"
+  },
+  "zone": {
+    "id": "zone-1",
+    "name": "example.com",
+    "nameservers": [
+      "ns1.example.com",
+      "ns2.example.com"
+    ],
+    "status": "ACTIVE",
+    "zone_type": "public"
+  }
+}

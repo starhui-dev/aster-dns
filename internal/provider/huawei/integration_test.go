@@ -8,10 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 )
 
 func integrationProvider(t *testing.T) *Provider {
+	if os.Getenv("DNS_INTEGRATION") != "1" {
+		t.Skip("DNS_INTEGRATION=1 is required for real Huawei DNS integration")
+	}
 	t.Helper()
 	accessKey := os.Getenv("HUAWEI_DNS_ACCESS_KEY")
 	secretKey := os.Getenv("HUAWEI_DNS_SECRET_KEY")
@@ -75,8 +79,8 @@ func TestHuaweiIntegrationReadOnly(t *testing.T) {
 }
 
 func TestHuaweiIntegrationMutation(t *testing.T) {
-	if os.Getenv("DNS_INTEGRATION_MUTATE") != "1" {
-		t.Skip("DNS_INTEGRATION_MUTATE=1 is required for real Huawei DNS mutation")
+	if os.Getenv("DNS_INTEGRATION") != "1" || os.Getenv("DNS_INTEGRATION_MUTATE") != "1" {
+		t.Skip("DNS_INTEGRATION=1 and DNS_INTEGRATION_MUTATE=1 are required for real Huawei DNS mutation")
 	}
 	zoneID := os.Getenv("HUAWEI_DNS_TEST_ZONE_ID")
 	if zoneID == "" {
@@ -89,7 +93,7 @@ func TestHuaweiIntegrationMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get dedicated test zone: %v", err)
 	}
-	name := fmt.Sprintf("aster-dns-%d.%s", time.Now().UnixNano(), zone.Name)
+	name := fmt.Sprintf("aster-dns-%s.%s", uuid.NewString(), zone.Name)
 	created, err := provider.CreateRecordSet(ctx, zone.ID, core.CreateRecordSetInput{
 		Name: name, Type: core.RecordTypeTXT, TTL: 300, Entries: []core.RecordEntry{{Value: "aster-dns integration create"}},
 	})
@@ -104,7 +108,7 @@ func TestHuaweiIntegrationMutation(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		if err := deleteIntegrationRecordSet(cleanupCtx, provider, zone.ID, created.ID); err != nil {
-			t.Errorf("cleanup integration RRSet %s: %v", created.ID, err)
+			t.Errorf("cleanup integration RRSet name=%s id=%s: %v", name, created.ID, err)
 		}
 	})
 
