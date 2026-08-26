@@ -114,7 +114,15 @@ type ProviderDefinition struct {
 var descriptorKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func (d CredentialDescriptor) Validate() error {
-	return validateFieldDescriptors(d.Fields, false)
+	if err := validateFieldDescriptors(d.Fields, false); err != nil {
+		return err
+	}
+	for _, field := range d.Fields {
+		if field.Secret && field.Type != DescriptorFieldString {
+			return fmt.Errorf("secret descriptor field %q must use string type", field.Key)
+		}
+	}
+	return nil
 }
 
 func (d AccountOptionsDescriptor) Validate() error {

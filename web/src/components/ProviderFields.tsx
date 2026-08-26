@@ -1,6 +1,6 @@
-import { For, Match, Show, Switch } from "solid-js";
+import { For, Match, Show, Switch, createMemo } from "solid-js";
 
-import { Field } from "./ui/Layout";
+import { Alert, Field } from "./ui/Layout";
 import type {
   DescriptorField,
   ExtensionContainer,
@@ -150,87 +150,104 @@ function DescriptorInput(props: {
   disabled?: boolean | undefined;
   onChange: (value: ExtensionValue | undefined) => void;
 }) {
-  const hint = () => props.field.description;
+  const hint = createMemo(() => props.field.description);
+  const describedBy = createMemo(() => (hint() ? `${props.id}-hint` : undefined));
   return (
-    <Field label={props.field.label} for={props.id} hint={hint()}>
-      <Switch>
-        <Match when={props.field.type === "boolean"}>
-          <label class="flex min-h-10 items-center gap-3 rounded-md border border-input bg-surface px-3 text-sm">
-            <input
-              id={props.id}
-              type="checkbox"
-              checked={props.value === true}
-              disabled={props.disabled}
-              onChange={(event) => props.onChange(event.currentTarget.checked)}
-            />
-            <span>{props.value === true ? "Enabled" : "Disabled"}</span>
-          </label>
-        </Match>
-        <Match when={props.field.type === "enum"}>
-          <select
-            id={props.id}
-            class="text-input"
-            required={props.field.required}
-            disabled={props.disabled}
-            value={typeof props.value === "string" ? props.value : ""}
-            onChange={(event) => props.onChange(event.currentTarget.value || undefined)}
-          >
-            <option value="">Select…</option>
-            <For each={props.field.options ?? []}>
-              {(option) => <option value={option.value}>{option.label}</option>}
-            </For>
-          </select>
-        </Match>
-        <Match when={props.field.type === "string_list"}>
-          <textarea
-            id={props.id}
-            class="text-input min-h-24"
-            required={props.field.required}
-            disabled={props.disabled}
-            value={Array.isArray(props.value) ? props.value.join("\n") : ""}
-            placeholder="One value per line"
-            onInput={(event) =>
-              props.onChange(
-                event.currentTarget.value
-                  .split("\n")
-                  .map((value) => value.trim())
-                  .filter(Boolean),
-              )
-            }
-          />
-        </Match>
-        <Match when={props.field.type === "integer"}>
-          <input
-            id={props.id}
-            class="text-input"
-            type="number"
-            required={props.field.required}
-            disabled={props.disabled}
-            min={props.field.minimum}
-            max={props.field.maximum}
-            value={typeof props.value === "number" ? props.value : ""}
-            onInput={(event) =>
-              props.onChange(
-                event.currentTarget.value === "" ? undefined : Number(event.currentTarget.value),
-              )
-            }
-          />
-        </Match>
-        <Match when={true}>
-          <input
-            id={props.id}
-            class="text-input"
-            type={props.field.secret ? "password" : "text"}
-            required={props.field.required}
-            disabled={props.disabled}
-            autocomplete={props.field.secret ? "new-password" : undefined}
-            value={typeof props.value === "string" ? props.value : ""}
-            placeholder={props.field.placeholder}
-            onInput={(event) => props.onChange(event.currentTarget.value || undefined)}
-          />
-        </Match>
-      </Switch>
-    </Field>
+    <Show
+      when={props.field.secret && props.field.type !== "string"}
+      fallback={
+        <Field label={props.field.label} for={props.id} hint={hint()}>
+          <Switch>
+            <Match when={props.field.type === "boolean"}>
+              <label class="flex min-h-10 items-center gap-3 rounded-md border border-input bg-surface px-3 text-sm">
+                <input
+                  id={props.id}
+                  type="checkbox"
+                  aria-describedby={describedBy()}
+                  checked={props.value === true}
+                  disabled={props.disabled}
+                  onChange={(event) => props.onChange(event.currentTarget.checked)}
+                />
+                <span>{props.value === true ? "Enabled" : "Disabled"}</span>
+              </label>
+            </Match>
+            <Match when={props.field.type === "enum"}>
+              <select
+                id={props.id}
+                class="text-input"
+                aria-describedby={describedBy()}
+                required={props.field.required}
+                disabled={props.disabled}
+                value={typeof props.value === "string" ? props.value : ""}
+                onChange={(event) => props.onChange(event.currentTarget.value || undefined)}
+              >
+                <option value="">Select…</option>
+                <For each={props.field.options ?? []}>
+                  {(option) => <option value={option.value}>{option.label}</option>}
+                </For>
+              </select>
+            </Match>
+            <Match when={props.field.type === "string_list"}>
+              <textarea
+                id={props.id}
+                class="text-input min-h-24"
+                aria-describedby={describedBy()}
+                required={props.field.required}
+                disabled={props.disabled}
+                value={Array.isArray(props.value) ? props.value.join("\n") : ""}
+                placeholder="One value per line"
+                onInput={(event) =>
+                  props.onChange(
+                    event.currentTarget.value
+                      .split("\n")
+                      .map((value) => value.trim())
+                      .filter(Boolean),
+                  )
+                }
+              />
+            </Match>
+            <Match when={props.field.type === "integer"}>
+              <input
+                id={props.id}
+                class="text-input"
+                type="number"
+                aria-describedby={describedBy()}
+                required={props.field.required}
+                disabled={props.disabled}
+                min={props.field.minimum}
+                max={props.field.maximum}
+                value={typeof props.value === "number" ? props.value : ""}
+                onInput={(event) =>
+                  props.onChange(
+                    event.currentTarget.value === ""
+                      ? undefined
+                      : Number(event.currentTarget.value),
+                  )
+                }
+              />
+            </Match>
+            <Match when={true}>
+              <input
+                id={props.id}
+                class="text-input"
+                type={props.field.secret ? "password" : "text"}
+                aria-describedby={describedBy()}
+                required={props.field.required}
+                disabled={props.disabled}
+                autocomplete={props.field.secret ? "new-password" : undefined}
+                value={typeof props.value === "string" ? props.value : ""}
+                placeholder={props.field.placeholder}
+                onInput={(event) => props.onChange(event.currentTarget.value || undefined)}
+              />
+            </Match>
+          </Switch>
+        </Field>
+      }
+    >
+      <Alert variant="danger" role="alert">
+        Unsupported secret field schema for {props.field.label}. Contact an administrator.
+      </Alert>
+    </Show>
   );
 }
 

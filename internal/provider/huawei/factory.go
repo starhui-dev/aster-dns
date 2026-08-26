@@ -177,7 +177,6 @@ func (f *Factory) Build(ctx context.Context, config core.AccountConfig, credenti
 		endpoint:     f.endpoint,
 		roundTripper: f.roundTripper,
 		timeout:      timeout,
-		secretValues: []string{values.AccessKey, values.SecretKey, values.SecurityToken},
 	}, nil
 }
 

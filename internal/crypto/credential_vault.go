@@ -41,15 +41,16 @@ func (v *CredentialVault) Encrypt(plaintext []byte, credentialContext Credential
 	if v == nil || v.envelope == nil || len(plaintext) == 0 {
 		return EncryptedCredential{}, errors.New("provider credential plaintext is required")
 	}
-	aad, err := credentialAAD(credentialContext, KeyVersion)
+	keyVersion := v.envelope.ActiveKeyVersion()
+	aad, err := credentialAAD(credentialContext, keyVersion)
 	if err != nil {
 		return EncryptedCredential{}, err
 	}
-	ciphertext, nonce, keyVersion, err := v.envelope.Encrypt(plaintext, aad)
+	ciphertext, nonce, encryptedVersion, err := v.envelope.Encrypt(plaintext, aad)
 	if err != nil {
 		return EncryptedCredential{}, err
 	}
-	return EncryptedCredential{Ciphertext: ciphertext, Nonce: nonce, KeyVersion: keyVersion}, nil
+	return EncryptedCredential{Ciphertext: ciphertext, Nonce: nonce, KeyVersion: encryptedVersion}, nil
 }
 
 func (v *CredentialVault) Decrypt(encrypted EncryptedCredential, credentialContext CredentialContext) ([]byte, error) {

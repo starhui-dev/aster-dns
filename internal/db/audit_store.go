@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -12,6 +14,8 @@ import (
 type auditQuerier interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }
+
+const maximumAuditDocumentBytes = 256 << 10
 
 func (s *AuthStore) InsertAuditEvent(ctx context.Context, event audit.Event) error {
 	return insertAuditEvent(ctx, s.q, event, mapAuthStoreError)
@@ -30,9 +34,9 @@ func insertAuditEvent(ctx context.Context, querier auditQuerier, event audit.Eve
 	if safeMetadata == nil {
 		safeMetadata = map[string]any{}
 	}
-	metadata, err := json.Marshal(safeMetadata)
+	metadata, err := marshalBoundedAuditMap(safeMetadata)
 	if err != nil {
-		return errors.New("encode audit metadata")
+		return err
 	}
 	_, err = querier.Exec(ctx, `
 		INSERT INTO audit_events (
@@ -55,9 +59,25 @@ func marshalSafeAuditData(value map[string]any) (any, error) {
 	if len(value) == 0 {
 		return nil, nil
 	}
-	encoded, err := json.Marshal(audit.SanitizeMap(value))
+	return marshalBoundedAuditMap(audit.SanitizeMap(value))
+}
+
+func marshalBoundedAuditMap(value map[string]any) ([]byte, error) {
+	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, errors.New("encode audit data")
+	}
+	if len(encoded) <= maximumAuditDocumentBytes {
+		return encoded, nil
+	}
+	digest := sha256.Sum256(encoded)
+	encoded, err = json.Marshal(map[string]any{
+		"payload_omitted": true,
+		"payload_bytes":   len(encoded),
+		"payload_sha256":  hex.EncodeToString(digest[:]),
+	})
+	if err != nil {
+		return nil, errors.New("encode audit data summary")
 	}
 	return encoded, nil
 }

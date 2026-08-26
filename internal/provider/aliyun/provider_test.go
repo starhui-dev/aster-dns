@@ -816,7 +816,7 @@ func TestProviderErrorClassificationAndRetryAfter(t *testing.T) {
 		})
 	}
 
-	provider := &Provider{secretValues: []string{fixtureSecret}}
+	provider := &Provider{}
 	mapped := provider.mapError(&openapi.ThrottlingError{
 		StatusCode: dara.Int(400), Code: dara.String("Throttling.User"),
 		Message: dara.String("secret=" + fixtureSecret), RequestId: dara.String("request-rate"), RetryAfter: dara.Int64(2500),

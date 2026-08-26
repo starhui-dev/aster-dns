@@ -194,7 +194,7 @@ export default function ProviderAccountsPage() {
       <dialog
         ref={(element) => setDialog(element)}
         class="m-auto max-h-[92dvh] w-[min(48rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-border bg-surface p-0 text-foreground shadow-2xl backdrop:bg-foreground/35"
-        aria-label="Provider account editor"
+        aria-labelledby="provider-account-editor-title"
         onClose={() => setEditor(null)}
       >
         <Show when={editor()}>
@@ -312,13 +312,20 @@ function ProviderAccountEditor(props: {
   failed: (error: unknown) => void;
   setBusy: (busy: boolean) => void;
 }) {
-  const initial = untrack(() => ({
-    providerType: props.state.account?.provider_type ?? props.providers[0]?.type ?? "",
-    name: props.state.account?.name ?? "",
-    description: props.state.account?.description ?? "",
-    enabled: props.state.account?.enabled ?? true,
-    options: (props.state.account?.options as FieldValues | undefined) ?? {},
-  }));
+  const initial = untrack(() => {
+    const providerType = props.state.account?.provider_type ?? props.providers[0]?.type ?? "";
+    const definition = props.providers.find((provider) => provider.type === providerType);
+    return {
+      providerType,
+      name: props.state.account?.name ?? "",
+      description: props.state.account?.description ?? "",
+      enabled: props.state.account?.enabled ?? true,
+      options: allowlistedValues(
+        (props.state.account?.options as FieldValues | undefined) ?? {},
+        definition?.account_options.map((field) => field.key) ?? [],
+      ),
+    };
+  });
   const [providerType, setProviderType] = createSignal(initial.providerType);
   const [name, setName] = createSignal(initial.name);
   const [description, setDescription] = createSignal(initial.description);
@@ -333,6 +340,11 @@ function ProviderAccountEditor(props: {
       return `Replace credentials · ${props.state.account?.name}`;
     if (props.state.mode === "edit") return `Edit ${props.state.account?.name}`;
     return "Add provider account";
+  };
+  onCleanup(() => setCredentials({}));
+  const closeEditor = () => {
+    setCredentials({});
+    props.close();
   };
 
   const submit = (event: SubmitEvent) => {
@@ -380,9 +392,17 @@ function ProviderAccountEditor(props: {
       <header class="flex items-start justify-between gap-4 border-b border-border p-5 sm:p-6">
         <div>
           <p class="text-xs font-semibold text-primary">Provider configuration</p>
-          <h2 class="mt-1 text-xl font-semibold">{title()}</h2>
+          <h2 id="provider-account-editor-title" class="mt-1 text-xl font-semibold">
+            {title()}
+          </h2>
         </div>
-        <Button size="sm" variant="ghost" aria-label="Close provider editor" onClick={props.close}>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label="Close provider editor"
+          disabled={props.busy}
+          onClick={closeEditor}
+        >
           Close
         </Button>
       </header>
@@ -469,7 +489,7 @@ function ProviderAccountEditor(props: {
         </Show>
       </div>
       <footer class="flex flex-wrap justify-end gap-2 border-t border-border p-5 sm:p-6">
-        <Button disabled={props.busy} onClick={props.close}>
+        <Button disabled={props.busy} onClick={closeEditor}>
           Cancel
         </Button>
         <Button type="submit" variant="primary" disabled={props.busy}>
@@ -487,6 +507,15 @@ function Metric(props: { label: string; value: string }) {
       <dd class="mt-1 font-medium text-foreground">{props.value}</dd>
     </div>
   );
+}
+
+function allowlistedValues(values: FieldValues, allowedKeys: string[]): FieldValues {
+  const allowed = new Set(allowedKeys);
+  const result: FieldValues = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (allowed.has(key)) result[key] = value;
+  }
+  return result;
 }
 
 function compactValues(values: FieldValues): Record<string, unknown> {

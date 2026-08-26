@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/starhui-dev/aster-dns/internal/provider"
@@ -57,6 +59,50 @@ func TestZoneSyncTraversesAllPagesAndReplacesIndex(t *testing.T) {
 	}
 	if len(repository.zones[account.ID]) != 1 {
 		t.Fatalf("replacement zone count = %d", len(repository.zones[account.ID]))
+	}
+}
+
+func TestZoneSyncRejectsDisabledAccountAndSerializesPerAccount(t *testing.T) {
+	repository := newMemoryProviderRepository()
+	client := fake.NewProvider()
+	factory := fake.NewFactory()
+	factory.NewClient = func(context.Context, provider.AccountConfig, fake.Credentials) (provider.Provider, error) {
+		return client, nil
+	}
+	accounts, clients := newProviderServices(t, repository, factory)
+	zoneSync, err := NewZoneSyncService(repository, clients)
+	if err != nil {
+		t.Fatalf("new zone sync: %v", err)
+	}
+	actor := Actor{ID: mustUUIDv7(t), Username: "admin"}
+	metadata := RequestMetadata{RequestID: "req-zone-sync-hardening"}
+	account, err := accounts.CreateAccount(context.Background(), actor, CreateProviderAccountInput{
+		ProviderType: fake.Type, Name: "Sync safety", Credentials: json.RawMessage(`{"token":"zones-secret"}`),
+	}, metadata)
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	release, err := zoneSync.acquireAccount(context.Background(), account.ID)
+	if err != nil {
+		t.Fatalf("acquire first sync: %v", err)
+	}
+	waitContext, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err = zoneSync.acquireAccount(waitContext, account.ID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("duplicate sync wait error = %v", err)
+	}
+	release()
+
+	enabled := false
+	account, err = accounts.UpdateAccount(context.Background(), actor, account.ID, UpdateProviderAccountInput{
+		Enabled: &enabled,
+	}, metadata)
+	if err != nil {
+		t.Fatalf("disable account: %v", err)
+	}
+	if _, err = zoneSync.SyncAccount(context.Background(), actor, account.ID, metadata); !errors.Is(err, ErrProviderAccountDisabled) {
+		t.Fatalf("disabled account sync error = %v", err)
 	}
 }
 

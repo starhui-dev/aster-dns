@@ -62,6 +62,9 @@ func (s *Service) EnsureBootstrapReady(ctx context.Context) error {
 }
 
 func (s *Service) BeginBootstrap(ctx context.Context, input BootstrapBeginInput, metadata RequestMetadata) (RegistrationOptions, error) {
+	if !s.allowPublicAuth("bootstrap_begin", metadata) {
+		return RegistrationOptions{}, ErrRateLimited
+	}
 	if !s.validBootstrapToken(input.BootstrapToken) {
 		return RegistrationOptions{}, s.bootstrapFailure(ctx, metadata, "invalid_bootstrap_token")
 	}
@@ -123,6 +126,9 @@ func (s *Service) BeginBootstrap(ctx context.Context, input BootstrapBeginInput,
 }
 
 func (s *Service) FinishBootstrap(ctx context.Context, input BootstrapVerifyInput, metadata RequestMetadata) (IssuedSession, error) {
+	if !s.allowPublicAuth("bootstrap_finish", metadata) {
+		return IssuedSession{}, ErrRateLimited
+	}
 	if !s.validBootstrapToken(input.BootstrapToken) || !ValidOpaqueToken(input.CeremonyToken) {
 		return IssuedSession{}, s.bootstrapFailure(ctx, metadata, "invalid_bootstrap_token")
 	}

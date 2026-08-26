@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/sha256"
 	"sync"
 	"time"
 
@@ -30,9 +31,14 @@ func NewLoginLimiter(attempts int, window time.Duration, maximumEntries int) *Lo
 }
 
 func (l *LoginLimiter) Allow(key string, now time.Time) bool {
+	if l == nil || l.maximum <= 0 || l.burst <= 0 {
+		return false
+	}
+	hash := sha256.Sum256([]byte(key))
+	boundedKey := string(hash[:])
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	entry, ok := l.entries[key]
+	entry, ok := l.entries[boundedKey]
 	if !ok {
 		if len(l.entries) >= l.maximum {
 			l.removeOldest()
@@ -41,7 +47,7 @@ func (l *LoginLimiter) Allow(key string, now time.Time) bool {
 	}
 	entry.lastSeen = now
 	allowed := entry.limiter.AllowN(now, 1)
-	l.entries[key] = entry
+	l.entries[boundedKey] = entry
 	return allowed
 }
 

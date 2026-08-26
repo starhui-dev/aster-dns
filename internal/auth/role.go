@@ -1,5 +1,7 @@
 package auth
 
+import "strings"
+
 type Role string
 
 const (
@@ -33,8 +35,10 @@ func (r Role) Allows(permission Permission) bool {
 		return false
 	}
 	switch permission {
-	case PermissionReadDNS, PermissionReadAudit, PermissionManageOwnSecurity:
+	case PermissionReadDNS, PermissionManageOwnSecurity:
 		return true
+	case PermissionReadAudit:
+		return r == RoleAdmin || r == RoleOperator || r == RoleViewer
 	case PermissionMutateDNS:
 		return r == RoleAdmin || r == RoleOperator
 	case PermissionManageProviders, PermissionManageUsers:
@@ -42,4 +46,17 @@ func (r Role) Allows(permission Permission) bool {
 	default:
 		return false
 	}
+}
+
+// CanReadAuditEvent is intentionally an allowlist: non-admins can inspect
+// only DNS changes, never authentication, user, credential, or security data.
+func (r Role) CanReadAuditEvent(action, resourceType string) bool {
+	if r == RoleAdmin {
+		return true
+	}
+	if r != RoleOperator && r != RoleViewer {
+		return false
+	}
+	return (resourceType == "zone" || resourceType == "recordset") &&
+		(strings.HasPrefix(action, "zone.") || strings.HasPrefix(action, "recordset."))
 }

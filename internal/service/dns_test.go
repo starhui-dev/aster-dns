@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -132,8 +133,39 @@ func TestDNSConflictAndPartialBatchResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get current two: %v", err)
 	}
-	batch, err := fixture.dns.BatchRecordSets(context.Background(), fixture.actor, fixture.zone.ID, BatchRequest{
+	_, err = fixture.dns.BatchRecordSets(context.Background(), fixture.actor, fixture.zone.ID, BatchRequest{
 		Operation: BatchDelete,
+		Items:     []BatchItemInput{{RecordSetID: currentOne.ID, ExpectedFingerprint: currentOne.Fingerprint}},
+	}, fixture.metadata)
+	if !errors.Is(err, ErrUnsafeBatchOperation) {
+		t.Fatalf("delete without typed confirmation error = %v", err)
+	}
+	_, err = fixture.dns.BatchRecordSets(context.Background(), fixture.actor, fixture.zone.ID, BatchRequest{
+		Operation:    BatchDelete,
+		Confirmation: fixture.zone.Name,
+		Items: []BatchItemInput{
+			{RecordSetID: currentOne.ID, ExpectedFingerprint: currentOne.Fingerprint},
+			{RecordSetID: currentOne.ID, ExpectedFingerprint: currentOne.Fingerprint},
+		},
+	}, fixture.metadata)
+	if !errors.Is(err, ErrUnsafeBatchOperation) {
+		t.Fatalf("duplicate batch item error = %v", err)
+	}
+	oversized := make([]BatchItemInput, maximumBatchSize+1)
+	for index := range oversized {
+		oversized[index].RecordSetID = fmt.Sprintf("set-%d", index)
+	}
+	_, err = fixture.dns.BatchRecordSets(context.Background(), fixture.actor, fixture.zone.ID, BatchRequest{
+		Operation: BatchTTLUpdate,
+		Items:     oversized,
+	}, fixture.metadata)
+	if !errors.Is(err, ErrBatchTooLarge) {
+		t.Fatalf("oversized batch error = %v", err)
+	}
+
+	batch, err := fixture.dns.BatchRecordSets(context.Background(), fixture.actor, fixture.zone.ID, BatchRequest{
+		Operation:    BatchDelete,
+		Confirmation: fixture.zone.Name,
 		Items: []BatchItemInput{
 			{RecordSetID: currentOne.ID, ExpectedFingerprint: currentOne.Fingerprint, ProviderVersion: currentOne.ProviderVersion},
 			{RecordSetID: currentTwo.ID, ExpectedFingerprint: "fp1_invalid"},

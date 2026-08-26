@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	secretcrypto "github.com/starhui-dev/aster-dns/internal/crypto"
@@ -173,8 +175,9 @@ func TestCredentialReplacementCannotLeaveStaleClientCached(t *testing.T) {
 	if err = <-replaceDone; err != nil {
 		t.Fatalf("replace credentials: %v", err)
 	}
-	if _, cached := clients.cached(account.ID, account.CredentialRevision); cached {
-		t.Fatal("credential replacement left the old client revision cached")
+	// Clients are never retained; invalidation cancels the stale generation.
+	if clients.accountRuntime(account.ID).current(1) {
+		t.Fatal("credential replacement did not advance the account generation")
 	}
 	_, current, err := clients.Get(context.Background(), account.ID)
 	if err != nil {
@@ -182,6 +185,105 @@ func TestCredentialReplacementCannotLeaveStaleClientCached(t *testing.T) {
 	}
 	if current.CredentialRevision != account.CredentialRevision+1 || factory.BuildCount() != 2 {
 		t.Fatalf("replacement client revision=%d builds=%d", current.CredentialRevision, factory.BuildCount())
+	}
+}
+
+func TestProviderClientCacheBuildsOnceAndBoundsAccountConcurrency(t *testing.T) {
+	repository := newMemoryProviderRepository()
+	factory := fake.NewFactory()
+	probe := &providerConcurrencyProbe{
+		Provider: fake.NewProvider(),
+		entered:  make(chan struct{}, maximumAccountConcurrency+1),
+		release:  make(chan struct{}),
+	}
+	factory.NewClient = func(context.Context, provider.AccountConfig, fake.Credentials) (provider.Provider, error) {
+		return probe, nil
+	}
+	accounts, clients := newProviderServices(t, repository, factory)
+	account, err := accounts.CreateAccount(context.Background(), Actor{Username: "admin"}, CreateProviderAccountInput{
+		ProviderType: fake.Type,
+		Name:         "Concurrent account",
+		Credentials:  json.RawMessage(`{"token":"concurrency-secret"}`),
+	}, RequestMetadata{RequestID: "req-concurrency"})
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	const callers = maximumAccountConcurrency * 2
+	clientsForCalls := make([]provider.Provider, callers)
+	var builds sync.WaitGroup
+	start := make(chan struct{})
+	errorsByCall := make([]error, callers)
+	for index := range callers {
+		builds.Add(1)
+		go func() {
+			defer builds.Done()
+			<-start
+			clientsForCalls[index], _, errorsByCall[index] = clients.Get(context.Background(), account.ID)
+		}()
+	}
+	close(start)
+	builds.Wait()
+	for index, callErr := range errorsByCall {
+		if callErr != nil {
+			t.Fatalf("client %d: %v", index, callErr)
+		}
+	}
+	if factory.BuildCount() != 1 {
+		t.Fatalf("concurrent client build count = %d", factory.BuildCount())
+	}
+
+	var calls sync.WaitGroup
+	for _, client := range clientsForCalls {
+		calls.Add(1)
+		go func() {
+			defer calls.Done()
+			if callErr := client.ValidateCredentials(context.Background()); callErr != nil {
+				t.Errorf("validate credentials: %v", callErr)
+			}
+		}()
+	}
+	for range maximumAccountConcurrency {
+		select {
+		case <-probe.entered:
+		case <-time.After(time.Second):
+			t.Fatal("provider calls did not reach configured concurrency")
+		}
+	}
+	select {
+	case <-probe.entered:
+		t.Fatal("provider account concurrency exceeded its bound")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(probe.release)
+	calls.Wait()
+	if probe.maximum.Load() > maximumAccountConcurrency {
+		t.Fatalf("maximum provider concurrency = %d", probe.maximum.Load())
+	}
+}
+
+type providerConcurrencyProbe struct {
+	provider.Provider
+	active  atomic.Int32
+	maximum atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *providerConcurrencyProbe) ValidateCredentials(ctx context.Context) error {
+	active := p.active.Add(1)
+	defer p.active.Add(-1)
+	for maximum := p.maximum.Load(); active > maximum; maximum = p.maximum.Load() {
+		if p.maximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	p.entered <- struct{}{}
+	select {
+	case <-p.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

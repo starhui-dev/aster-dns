@@ -45,7 +45,8 @@ func (h *PasswordHasher) Hash(password string) (string, error) {
 }
 
 func (h *PasswordHasher) Verify(password, encodedHash string) (bool, error) {
-	if len(password) > maximumPasswordBytes || !utf8.ValidString(password) {
+	if !validPasswordVerificationInput(password) {
+		h.VerifyUnknown(password)
 		return false, nil
 	}
 	match, err := argon2id.ComparePasswordAndHash(password, encodedHash)
@@ -56,7 +57,14 @@ func (h *PasswordHasher) Verify(password, encodedHash string) (bool, error) {
 }
 
 func (h *PasswordHasher) VerifyUnknown(password string) {
+	if !validPasswordVerificationInput(password) {
+		password = "invalid-password-input"
+	}
 	_, _ = argon2id.ComparePasswordAndHash(password, h.dummyHash)
+}
+
+func validPasswordVerificationInput(password string) bool {
+	return len(password) <= maximumPasswordBytes && utf8.ValidString(password)
 }
 
 func ValidatePassword(password string) error {

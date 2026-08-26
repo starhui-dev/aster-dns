@@ -25,14 +25,25 @@ func (s *Service) PasswordLogin(ctx context.Context, input PasswordLoginInput, m
 		return LoginResult{}, ErrPasswordLoginDisabled
 	}
 	normalizedUsername := normalizeUsername(input.Username)
+	validUsername, usernameErr := validateUsername(normalizedUsername)
+	if usernameErr != nil {
+		validUsername = "invalid"
+	}
 	now := s.now()
-	if !s.limiter.Allow("password-ip|"+metadata.IP, now) || !s.limiter.Allow("password-user|"+normalizedUsername, now) {
+	if !s.limiter.Allow("password-ip|"+metadata.IP, now) || !s.limiter.Allow("password-user|"+validUsername, now) {
 		if err := s.recordLoginFailure(ctx, nil, metadata, "rate_limited"); err != nil {
 			return LoginResult{}, err
 		}
 		return LoginResult{}, ErrRateLimited
 	}
-	user, err := s.store.GetUserByUsername(ctx, normalizedUsername)
+	if usernameErr != nil {
+		s.passwords.VerifyUnknown(input.Password)
+		if err := s.recordLoginFailure(ctx, nil, metadata, "invalid_credentials"); err != nil {
+			return LoginResult{}, err
+		}
+		return LoginResult{}, ErrInvalidCredentials
+	}
+	user, err := s.store.GetUserByUsername(ctx, validUsername)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			s.passwords.VerifyUnknown(input.Password)
@@ -64,11 +75,15 @@ func (s *Service) PasswordLogin(ctx context.Context, input PasswordLoginInput, m
 }
 
 func (s *Service) CompleteTOTPLogin(ctx context.Context, rawToken, code string, metadata RequestMetadata) (IssuedSession, error) {
+	now := s.now()
+	if !s.limiter.Allow("totp-ip|"+metadata.IP, now) {
+		return IssuedSession{}, ErrRateLimited
+	}
 	if !ValidOpaqueToken(rawToken) || len(strings.TrimSpace(code)) != 6 {
 		return IssuedSession{}, ErrInvalidCredentials
 	}
 	tokenHash := HashToken(rawToken)
-	if !s.limiter.Allow("totp|"+metadata.IP+"|"+hex.EncodeToString(tokenHash[:8]), s.now()) {
+	if !s.limiter.Allow("totp-token|"+metadata.IP+"|"+hex.EncodeToString(tokenHash[:8]), now) {
 		return IssuedSession{}, ErrRateLimited
 	}
 	challenge, err := s.store.GetChallenge(ctx, tokenHash, ChallengePendingTOTP, s.now())

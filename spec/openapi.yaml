@@ -1338,7 +1338,7 @@ components:
         operation: { type: string, enum: [delete, ttl_update] }
         confirmation:
           type: string
-          description: Required for large destructive batches and must match the Zone name.
+          description: Required for every delete batch and must exactly match the canonical Zone name.
         items:
           type: array
           minItems: 1

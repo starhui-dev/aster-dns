@@ -155,7 +155,7 @@ func (h authHandler) bootstrapVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h authHandler) passkeyLoginOptions(w http.ResponseWriter, r *http.Request) {
-	options, err := h.service.BeginPasskeyLogin(r.Context())
+	options, err := h.service.BeginPasskeyLogin(r.Context(), auth.MetadataFromRequest(r))
 	if err != nil {
 		writeAuthError(w, r, err)
 		return
@@ -184,7 +184,7 @@ func (h authHandler) enrollmentOptions(w http.ResponseWriter, r *http.Request) {
 	if !decodeAuthJSON(w, r, &request) {
 		return
 	}
-	options, err := h.service.BeginEnrollment(r.Context(), auth.EnrollmentBeginInput(request))
+	options, err := h.service.BeginEnrollment(r.Context(), auth.EnrollmentBeginInput(request), auth.MetadataFromRequest(r))
 	if err != nil {
 		writeAuthError(w, r, err)
 		return

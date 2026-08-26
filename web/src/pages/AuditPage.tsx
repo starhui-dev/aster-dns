@@ -2,7 +2,7 @@ import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
-import { ApiError } from "../lib/api";
+import { ApiError, redactClientValue } from "../lib/api";
 import { getAuditEvent, listAuditEvents, type AuditEvent } from "../lib/dns";
 
 export default function AuditPage() {
@@ -185,20 +185,21 @@ export default function AuditPage() {
                     }
                   >
                     {(event) => (
-                      <tr
-                        class="cursor-pointer border-b border-border hover:bg-muted/50"
-                        tabIndex={0}
-                        onClick={() => openDetail(event)}
-                        onKeyDown={(keyboardEvent) => {
-                          if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ")
-                            openDetail(event);
-                        }}
-                      >
+                      <tr class="border-b border-border hover:bg-muted/50">
                         <td class="whitespace-nowrap px-3 py-4 text-xs">
                           {formatDate(event.occurred_at)}
                         </td>
                         <td class="px-3 py-4">{event.actor_username || "System"}</td>
-                        <td class="px-3 py-4 font-medium">{event.action}</td>
+                        <td class="px-3 py-4 font-medium">
+                          <button
+                            type="button"
+                            class="text-left text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                            aria-pressed={selected()?.id === event.id}
+                            onClick={() => openDetail(event)}
+                          >
+                            {event.action}
+                          </button>
+                        </td>
                         <td class="px-3 py-4">
                           <p>{event.resource_type}</p>
                           <p class="max-w-44 truncate text-xs text-muted-foreground">
@@ -235,6 +236,7 @@ export default function AuditPage() {
         <Panel
           title="Audit detail"
           description="Select an event to inspect its safe before/after data."
+          class="[&>div:last-child]:focus-visible:outline-2"
         >
           <Show
             when={selected()}
@@ -282,7 +284,7 @@ function SafeJSON(props: { title: string; value?: Record<string, unknown> | unde
           {props.title}
         </p>
         <pre class="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface-subtle p-3 text-xs">
-          {JSON.stringify(props.value, null, 2)}
+          {JSON.stringify(redactClientValue(props.value), null, 2)}
         </pre>
       </div>
     </Show>

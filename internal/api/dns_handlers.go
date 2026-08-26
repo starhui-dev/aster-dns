@@ -84,7 +84,7 @@ func registerDNSRoutes(router chi.Router, authService *auth.Service, dns *provid
 	readDNS.Get("/api/v1/zones/{zone_id}", handler.getZone)
 	readDNS.Get("/api/v1/zones/{zone_id}/recordsets", handler.listRecordSets)
 	readDNS.Get("/api/v1/zones/{zone_id}/recordsets/{recordset_id}", handler.getRecordSet)
-	readDNS.With(authService.OriginProtection, authService.CSRFProtection).
+	readDNS.With(auth.RequirePermission(auth.PermissionMutateDNS), authService.OriginProtection, authService.CSRFProtection).
 		Post("/api/v1/zones/{zone_id}/refresh", handler.refreshZone)
 
 	mutateDNS := protected.With(
@@ -171,6 +171,13 @@ func (h dnsHandler) listRecordSets(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeProviderError(w, r, providerservice.ErrInvalidProviderInput)
 			return
+		}
+		if refresh {
+			session, authenticated := auth.SessionFromContext(r.Context())
+			if !authenticated || !session.User.Role.Allows(auth.PermissionMutateDNS) {
+				httpx.WriteError(w, r, http.StatusForbidden, "forbidden", "You do not have permission to force a provider refresh.", nil)
+				return
+			}
 		}
 	}
 	page, err := h.dns.ListRecordSets(r.Context(), zoneID, providerservice.RecordSetListInput{
@@ -357,10 +364,14 @@ func (h dnsHandler) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	visibility := providerservice.AuditVisibilityDNS
+	if session, ok := auth.SessionFromContext(r.Context()); ok && session.User.Role == auth.RoleAdmin {
+		visibility = providerservice.AuditVisibilityAll
+	}
 	page, err := h.dns.ListAuditEvents(r.Context(), providerservice.AuditListInput{
 		Actor: r.URL.Query().Get("actor"), Action: r.URL.Query().Get("action"),
 		ProviderAccountID: accountID, ZoneID: zoneID, Result: audit.Result(r.URL.Query().Get("result")),
-		From: from, To: to, Cursor: r.URL.Query().Get("cursor"), Limit: limit,
+		From: from, To: to, Cursor: r.URL.Query().Get("cursor"), Limit: limit, Visibility: visibility,
 	})
 	if err != nil {
 		writeProviderError(w, r, err)
@@ -381,7 +392,11 @@ func (h dnsHandler) getAuditEvent(w http.ResponseWriter, r *http.Request) {
 		writeProviderError(w, r, providerservice.ErrInvalidProviderInput)
 		return
 	}
-	event, err := h.dns.GetAuditEvent(r.Context(), eventID)
+	visibility := providerservice.AuditVisibilityDNS
+	if session, ok := auth.SessionFromContext(r.Context()); ok && session.User.Role == auth.RoleAdmin {
+		visibility = providerservice.AuditVisibilityAll
+	}
+	event, err := h.dns.GetVisibleAuditEvent(r.Context(), eventID, visibility)
 	if err != nil {
 		writeProviderError(w, r, err)
 		return
@@ -415,8 +430,8 @@ func auditEventDTO(event audit.Event) auditEventResponse {
 		ID: event.ID.String(), OccurredAt: event.OccurredAt, ActorUsernameSnapshot: event.ActorUsernameSnapshot,
 		Action: event.Action, ResourceType: event.ResourceType, ResourceID: event.ResourceID,
 		RequestID: event.RequestID, IP: event.IP, UserAgent: event.UserAgent, Result: event.Result,
-		ErrorCode: event.ErrorCode, BeforeData: event.BeforeData, AfterData: event.AfterData,
-		Metadata: event.Metadata,
+		ErrorCode: event.ErrorCode, BeforeData: audit.SanitizeMap(event.BeforeData), AfterData: audit.SanitizeMap(event.AfterData),
+		Metadata: audit.SanitizeMap(event.Metadata),
 	}
 	if response.Metadata == nil {
 		response.Metadata = map[string]any{}

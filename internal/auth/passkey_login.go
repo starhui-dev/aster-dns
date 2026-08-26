@@ -14,7 +14,10 @@ type PasskeyLoginVerifyInput struct {
 	Credential    json.RawMessage
 }
 
-func (s *Service) BeginPasskeyLogin(ctx context.Context) (LoginOptions, error) {
+func (s *Service) BeginPasskeyLogin(ctx context.Context, metadata RequestMetadata) (LoginOptions, error) {
+	if !s.allowPublicAuth("passkey_begin", metadata) {
+		return LoginOptions{}, ErrRateLimited
+	}
 	assertion, session, err := s.webauthn.BeginDiscoverableLogin()
 	if err != nil {
 		return LoginOptions{}, errors.New("begin passkey login")
@@ -32,6 +35,9 @@ func (s *Service) BeginPasskeyLogin(ctx context.Context) (LoginOptions, error) {
 }
 
 func (s *Service) FinishPasskeyLogin(ctx context.Context, input PasskeyLoginVerifyInput, metadata RequestMetadata) (LoginResult, error) {
+	if !s.allowPublicAuth("passkey_finish", metadata) {
+		return LoginResult{}, ErrRateLimited
+	}
 	if !ValidOpaqueToken(input.CeremonyToken) {
 		return LoginResult{}, ErrInvalidCredentials
 	}

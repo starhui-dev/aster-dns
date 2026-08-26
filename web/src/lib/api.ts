@@ -98,3 +98,23 @@ function readCookie(name: string): string | null {
   }
   return null;
 }
+
+const clientSensitiveKey =
+  /authorization|cookie|password|secret|token|credential|accesskey|apikey|ciphertext|nonce|privatekey/i;
+const clientSensitiveValue =
+  /((?:authorization|cookie|password|secret|token|credential|signature|access[_-]?key|api[_-]?key)[^:=\r\n]{0,24}[:=][ \t]*)(?:bearer[ \t]+|basic[ \t]+)?(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
+
+export function redactClientValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactClientValue);
+  if (value !== null && typeof value === "object") {
+    const safe: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) {
+      if (!clientSensitiveKey.test(key.replace(/[^a-z0-9]/gi, ""))) {
+        safe[key] = redactClientValue(nested);
+      }
+    }
+    return safe;
+  }
+  if (typeof value === "string") return value.replace(clientSensitiveValue, "$1[REDACTED]");
+  return value;
+}

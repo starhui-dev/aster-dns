@@ -39,10 +39,9 @@ const (
 )
 
 type Provider struct {
-	zones        *zones.ZoneService
-	records      *dns.RecordService
-	timeout      time.Duration
-	secretValues []string
+	zones   *zones.ZoneService
+	records *dns.RecordService
+	timeout time.Duration
 }
 
 func (p *Provider) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -75,12 +74,9 @@ func readCall[T any](p *Provider, ctx context.Context, operation string, call fu
 		if !errors.As(mappedError, &mapped) || attempt == readAttempts-1 || !retryableReadError(mapped) {
 			return nil, mappedError
 		}
-		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
-		if mapped.RetryAfter > delay {
-			if mapped.RetryAfter > maximumReadRetryDelay {
-				return nil, mappedError
-			}
-			delay = mapped.RetryAfter
+		delay, retry := core.ReadRetryDelay(time.Duration(1<<attempt)*100*time.Millisecond, mapped.RetryAfter, maximumReadRetryDelay)
+		if !retry {
+			return nil, mappedError
 		}
 		if err = waitContext(ctx, delay); err != nil {
 			return nil, core.NewError(core.ErrTimeout, operation, "", 0, p.redactedError(err))

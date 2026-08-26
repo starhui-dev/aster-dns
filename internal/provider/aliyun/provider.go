@@ -44,9 +44,8 @@ type offsetCursorPayload struct {
 }
 
 type Provider struct {
-	client       *alidns.Client
-	timeout      time.Duration
-	secretValues []string
+	client  *alidns.Client
+	timeout time.Duration
 }
 
 var newSDKClient = alidns.NewClient
@@ -307,12 +306,9 @@ func readCall[T any](p *Provider, ctx context.Context, operation string, call fu
 		if attempt == readAttempts-1 || !retryableReadError(mapped) {
 			return nil, mapped
 		}
-		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
-		if mapped.RetryAfter > delay {
-			if mapped.RetryAfter > maximumReadRetryDelay {
-				return nil, mapped
-			}
-			delay = mapped.RetryAfter
+		delay, retry := core.ReadRetryDelay(time.Duration(1<<attempt)*100*time.Millisecond, mapped.RetryAfter, maximumReadRetryDelay)
+		if !retry {
+			return nil, mapped
 		}
 		if err = waitContext(ctx, delay); err != nil {
 			return nil, core.NewError(core.ErrTimeout, operation, "", 0, err)

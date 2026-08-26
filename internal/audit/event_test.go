@@ -1,6 +1,10 @@
 package audit
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestSanitizeMapDropsSecretBearingFields(t *testing.T) {
 	output := SanitizeMap(map[string]any{
@@ -32,5 +36,33 @@ func TestSanitizeMapDropsSecretBearingFields(t *testing.T) {
 	nested := output["safe_nested"].(map[string]any)
 	if _, ok := nested["session_token"]; ok || nested["result"] != "ok" {
 		t.Fatalf("nested sanitization failed: %#v", nested)
+	}
+}
+
+func TestSanitizeMapHandlesTypedAndCamelCasePayloads(t *testing.T) {
+	const canary = "audit-canary-secret-random-long-cc384e41"
+	type payload struct {
+		CredentialRevision int               `json:"credential_revision"`
+		APIToken           string            `json:"apiToken"`
+		Safe               map[string]string `json:"safe"`
+		Binary             []byte            `json:"binary"`
+	}
+	output := SanitizeMap(map[string]any{
+		"typed": payload{
+			CredentialRevision: 9,
+			APIToken:           canary,
+			Safe:               map[string]string{"message": "authorization=Bearer " + canary, "result": "ok"},
+			Binary:             []byte(canary),
+		},
+	})
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("marshal sanitized payload: %v", err)
+	}
+	if strings.Contains(string(encoded), canary) || strings.Contains(string(encoded), "apiToken") {
+		t.Fatalf("typed payload leaked canary: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "credential_revision") || !strings.Contains(string(encoded), "[REDACTED]") {
+		t.Fatalf("typed payload lost safe fields or redaction marker: %s", encoded)
 	}
 }

@@ -8,13 +8,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/starhui-dev/aster-dns/internal/api"
 	"github.com/starhui-dev/aster-dns/internal/auth"
 	"github.com/starhui-dev/aster-dns/internal/config"
 	secretcrypto "github.com/starhui-dev/aster-dns/internal/crypto"
 	"github.com/starhui-dev/aster-dns/internal/db"
+	"github.com/starhui-dev/aster-dns/internal/httpx"
 	"github.com/starhui-dev/aster-dns/internal/provider"
 	"github.com/starhui-dev/aster-dns/internal/provider/aliyun"
 	"github.com/starhui-dev/aster-dns/internal/provider/cloudflare"
@@ -49,10 +53,30 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 	var providerAccountService *providerservice.ProviderAccountService
 	var zoneSyncService *providerservice.ZoneSyncService
 	var dnsService *providerservice.DNSService
+	var encryptionEnvelope *secretcrypto.Envelope
 	if pool != nil {
-		envelope, err := secretcrypto.NewEnvelope(cfg.MasterKey)
+		masterKeys := make(map[int][]byte, len(cfg.PreviousMasterKeys)+1)
+		for version, key := range cfg.PreviousMasterKeys {
+			masterKeys[version] = key
+		}
+		masterKeys[cfg.MasterKeyVersion] = cfg.MasterKey
+		envelope, err := secretcrypto.NewKeyringEnvelope(cfg.MasterKeyVersion, masterKeys)
+		encryptionEnvelope = envelope
+		for _, key := range masterKeys {
+			clear(key)
+		}
+		clear(cfg.MasterKey)
 		if err != nil {
 			return err
+		}
+		versions, err := db.ReadEncryptionKeyVersions(ctx, pool)
+		if err != nil {
+			return err
+		}
+		for _, version := range versions {
+			if !envelope.SupportsKeyVersion(version) {
+				return fmt.Errorf("encrypted data requires unavailable master key version %d", version)
+			}
 		}
 		authService, err = auth.NewService(db.NewAuthStore(pool), envelope, auth.Config{
 			PublicURL:              cfg.PublicURL,
@@ -97,13 +121,38 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		}
 		providerAccountService.SetCacheInvalidator(dnsService)
 	}
+	workerContext, stopWorkers := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	if providerAccountService != nil && zoneSyncService != nil {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			runZoneSyncScheduler(workerContext, cfg.ZoneSyncInterval, providerAccountService, zoneSyncService, logger)
+		}()
+	}
+	defer func() {
+		stopWorkers()
+		workers.Wait()
+	}()
 
 	if err := validateWebDirectory(cfg.WebDir); err != nil {
 		return err
 	}
 
 	readyCheck := func(readyContext context.Context) error {
-		return db.CheckReady(readyContext, pool)
+		if err := db.CheckReady(readyContext, pool); err != nil {
+			return err
+		}
+		versions, err := db.ReadEncryptionKeyVersions(readyContext, pool)
+		if err != nil {
+			return err
+		}
+		for _, version := range versions {
+			if encryptionEnvelope == nil || !encryptionEnvelope.SupportsKeyVersion(version) {
+				return errors.New("encrypted data requires an unavailable master key version")
+			}
+		}
+		return nil
 	}
 	handler := api.NewRouter(api.Options{
 		Logger: logger,
@@ -111,14 +160,15 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 			Version: build.Version,
 			Commit:  build.Commit,
 		},
-		ReadyCheck:       readyCheck,
-		ReadyTimeout:     cfg.HTTP.ReadyTimeout,
-		WebDir:           cfg.WebDir,
-		Auth:             authService,
-		ProviderAccounts: providerAccountService,
-		ZoneSync:         zoneSyncService,
-		DNS:              dnsService,
-		HTTPS:            cfg.PublicURL.Scheme == "https",
+		ReadyCheck:        readyCheck,
+		ReadyTimeout:      cfg.HTTP.ReadyTimeout,
+		WebDir:            cfg.WebDir,
+		Auth:              authService,
+		ProviderAccounts:  providerAccountService,
+		ZoneSync:          zoneSyncService,
+		DNS:               dnsService,
+		HTTPS:             cfg.PublicURL.Scheme == "https",
+		TrustedProxyCIDRs: cfg.HTTP.TrustedProxyCIDRs,
 	})
 
 	server := &http.Server{
@@ -163,6 +213,42 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		}
 		logger.Info("server shutdown complete")
 		return nil
+	}
+}
+
+func runZoneSyncScheduler(ctx context.Context, interval time.Duration, accounts *providerservice.ProviderAccountService, syncService *providerservice.ZoneSyncService, logger *slog.Logger) {
+	if interval <= 0 || accounts == nil || syncService == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runScheduledZoneSync(ctx, accounts, syncService, logger)
+		}
+	}
+}
+
+func runScheduledZoneSync(ctx context.Context, accounts *providerservice.ProviderAccountService, syncService *providerservice.ZoneSyncService, logger *slog.Logger) {
+	listContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	providerAccounts, err := accounts.ListAccounts(listContext)
+	cancel()
+	if err != nil {
+		logger.Warn("scheduled zone sync account list failed", slog.String("error", httpx.Redact(err.Error())))
+		return
+	}
+	for _, account := range providerAccounts {
+		if !account.Enabled {
+			continue
+		}
+		requestID := "sync_" + uuid.NewString()
+		_, syncErr := syncService.SyncAccount(ctx, providerservice.Actor{Username: "system"}, account.ID, providerservice.RequestMetadata{RequestID: requestID})
+		if syncErr != nil && ctx.Err() == nil {
+			logger.Warn("scheduled zone sync failed", slog.String("provider_account_id", account.ID.String()), slog.String("error", httpx.Redact(syncErr.Error())))
+		}
 	}
 }
 

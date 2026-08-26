@@ -89,7 +89,7 @@ func (p *Provider) redactedError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return errors.New(core.Redact(err.Error(), p.secretValues...))
+	return errors.New(core.Redact(err.Error()))
 }
 
 func responseRequestID(response *http.Response) string {
@@ -107,9 +107,13 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	if value == "" {
 		return 0
 	}
+	const maximumRetryAfter = 24 * time.Hour
 	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
 		if seconds <= 0 {
 			return 0
+		}
+		if seconds > int64(maximumRetryAfter/time.Second) {
+			return maximumRetryAfter
 		}
 		return time.Duration(seconds) * time.Second
 	}
@@ -117,7 +121,11 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	if err != nil || !when.After(now) {
 		return 0
 	}
-	return when.Sub(now)
+	delay := when.Sub(now)
+	if delay > maximumRetryAfter {
+		return maximumRetryAfter
+	}
+	return delay
 }
 
 func reoperation(err error, operation string) error {

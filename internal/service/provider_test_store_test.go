@@ -132,12 +132,15 @@ func (r *memoryProviderRepository) ReplaceProviderAccountCredential(_ context.Co
 	return cloneProviderAccount(account), nil
 }
 
-func (r *memoryProviderRepository) SetProviderAccountValidation(_ context.Context, accountID uuid.UUID, status ValidationStatus, validatedAt time.Time, errorCode string) (ProviderAccount, error) {
+func (r *memoryProviderRepository) SetProviderAccountValidation(_ context.Context, accountID uuid.UUID, expectedRevision uint64, expectedUpdatedAt time.Time, status ValidationStatus, validatedAt time.Time, errorCode string) (ProviderAccount, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	account, exists := r.accounts[accountID]
 	if !exists {
 		return ProviderAccount{}, ErrProviderAccountNotFound
+	}
+	if account.CredentialRevision != expectedRevision || !account.UpdatedAt.Equal(expectedUpdatedAt) {
+		return ProviderAccount{}, ErrProviderAccountConflict
 	}
 	account.ValidationStatus = status
 	account.LastValidatedAt = new(validatedAt)
@@ -160,14 +163,18 @@ func (r *memoryProviderRepository) DeleteProviderAccount(_ context.Context, acco
 	return cloneProviderAccount(account), nil
 }
 
-func (r *memoryProviderRepository) ReplaceZoneIndex(_ context.Context, accountID uuid.UUID, zones []ZoneIndexEntry, fetchedAt time.Time) error {
+func (r *memoryProviderRepository) ReplaceZoneIndex(_ context.Context, accountID uuid.UUID, expectedRevision uint64, expectedUpdatedAt time.Time, zones []ZoneIndexEntry, fetchedAt time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	account, exists := r.accounts[accountID]
 	if !exists {
 		return ErrProviderAccountNotFound
 	}
+	if account.CredentialRevision != expectedRevision || !account.UpdatedAt.Equal(expectedUpdatedAt) {
+		return ErrProviderAccountConflict
+	}
 	account.LastZoneSyncAt = new(fetchedAt)
+	account.UpdatedAt = fetchedAt
 	r.accounts[accountID] = account
 	cloned := make([]ZoneIndexEntry, len(zones))
 	for index, zone := range zones {
@@ -182,6 +189,19 @@ func (r *memoryProviderRepository) ReplaceZoneIndex(_ context.Context, accountID
 		cloned[index] = zone
 	}
 	r.zones[accountID] = cloned
+	return nil
+}
+
+func (r *memoryProviderRepository) InvalidateZoneIndex(_ context.Context, accountID uuid.UUID, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	account, exists := r.accounts[accountID]
+	if !exists {
+		return ErrProviderAccountNotFound
+	}
+	account.LastZoneSyncAt = nil
+	r.accounts[accountID] = account
+	delete(r.zones, accountID)
 	return nil
 }
 

@@ -66,6 +66,11 @@ func TestCredentialAndAccountOptionDescriptorsValidatePayloads(t *testing.T) {
 	if _, err = ValidateCredentialPayload(json.RawMessage(`{"access_key_id":"id","unexpected":"value"}`), credentials); err == nil {
 		t.Fatal("unknown credential field passed")
 	}
+	credentials.Fields = append(credentials.Fields, FieldDescriptor{Key: "unsafe_secret", Label: "Unsafe secret", Type: DescriptorFieldInteger, Secret: true})
+	if err = credentials.Validate(); err == nil {
+		t.Fatal("non-string secret descriptor passed")
+	}
+	credentials.Fields = credentials.Fields[:2]
 
 	options := AccountOptionsDescriptor{Fields: []FieldDescriptor{{Key: "region", Label: "Region", Type: DescriptorFieldEnum, Options: []DescriptorOption{{Value: "global", Label: "Global"}}}}}
 	if _, err = ValidateAccountOptionsPayload(json.RawMessage(`{"region":"global"}`), options); err != nil {

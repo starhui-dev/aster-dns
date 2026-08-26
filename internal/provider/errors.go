@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"net"
 	"regexp"
 	"time"
@@ -96,6 +97,24 @@ func MapError(err error, operation string) *ProviderError {
 		return NewError(ErrTimeout, operation, "", 0, err)
 	}
 	return NewError(ErrUpstream, operation, "", 0, err)
+}
+
+func ReadRetryDelay(base, retryAfter, maximum time.Duration) (time.Duration, bool) {
+	if base <= 0 || maximum <= 0 || retryAfter < 0 || retryAfter > maximum {
+		return 0, false
+	}
+	if base > maximum {
+		base = maximum
+	}
+	half := base / 2
+	jittered := half
+	if span := base - half; span > 0 {
+		jittered += time.Duration(rand.Uint64N(uint64(span) + 1))
+	}
+	if retryAfter > jittered {
+		jittered = retryAfter
+	}
+	return jittered, true
 }
 
 func SafeError(err error) PublicError {

@@ -36,9 +36,12 @@ func (s *TOTPService) Setup(user User, revision int64, now time.Time) (TOTPCrede
 	if err != nil {
 		return TOTPCredential{}, "", errors.New("generate TOTP credential")
 	}
-	ciphertext, nonce, keyVersion, err := s.envelope.Encrypt(
-		[]byte(key.Secret()),
-		totpAAD(user.ID, revision, secretcrypto.KeyVersion),
+	secret := []byte(key.Secret())
+	defer clear(secret)
+	keyVersion := s.envelope.ActiveKeyVersion()
+	ciphertext, nonce, encryptedVersion, err := s.envelope.Encrypt(
+		secret,
+		totpAAD(user.ID, revision, keyVersion),
 	)
 	if err != nil {
 		return TOTPCredential{}, "", err
@@ -47,7 +50,7 @@ func (s *TOTPService) Setup(user User, revision int64, now time.Time) (TOTPCrede
 		UserID:             user.ID,
 		SecretCiphertext:   ciphertext,
 		SecretNonce:        nonce,
-		KeyVersion:         keyVersion,
+		KeyVersion:         encryptedVersion,
 		CredentialRevision: revision,
 		CreatedAt:          now,
 		UpdatedAt:          now,
@@ -64,6 +67,7 @@ func (s *TOTPService) Verify(credential TOTPCredential, code string, now time.Ti
 	if err != nil {
 		return 0, ErrSecretTampered
 	}
+	defer clear(secret)
 	options := totp.ValidateOpts{
 		Period:    totpPeriod,
 		Skew:      0,

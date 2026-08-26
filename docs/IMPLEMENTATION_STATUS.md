@@ -35,18 +35,19 @@ Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS ar
 
 ### Credential Vault and Provider accounts
 
-- Provider credential JSON is encrypted with the existing AES-256-GCM envelope, a random nonce, and stable AAD binding Provider account UUID, Provider type, credential revision, and key version.
-- Master keys must contain exactly 32 bytes. Ciphertext tampering, wrong AAD, wrong credential revision/type/account, wrong key, nonce mismatch, and unsupported key version fail authenticated decryption.
-- Provider account create/update/enable-disable/delete, dedicated credential replacement, validation state, credential revision, audit events, and PostgreSQL persistence are implemented.
+- Provider credential JSON is encrypted with AES-256-GCM, a random nonce, and stable AAD binding Provider account UUID, Provider type, credential revision, and key version. TOTP seeds use the same versioned envelope with user/revision AAD.
+- `APP_MASTER_KEY` or `APP_MASTER_KEY_FILE` must decode to exactly 32 bytes. `APP_MASTER_KEY_VERSION` selects the active write key; `APP_PREVIOUS_MASTER_KEYS` supplies a version-to-base64 read keyring. Startup and readiness scan persisted Provider/TOTP key versions and fail closed when any required version is unavailable.
+- Ciphertext tampering, wrong AAD, wrong credential revision/type/account, wrong key, nonce mismatch, and unavailable key version fail authenticated decryption. Key bytes and decrypted credential buffers receive best-effort clearing where Go permits it; no false memory-zeroization guarantee is made.
 - Read DTOs expose only `credential_configured` and `credential_revision`; plaintext, ciphertext, nonce, and key version have no Provider-account read fields or credential read endpoint.
 - Provider-account mutation routes are admin-only and reuse centralized session authentication, Origin checks, and CSRF protection.
 
 ### Client lifecycle, validation, and Zone index sync
 
-- Provider clients are cached by account UUID and credential revision. Credential replacement first persists the new encrypted revision, then invalidates the account cache; account disable/options update and deletion also invalidate it. Regression tests retain the old client and verify that the next lookup builds and returns a distinct client.
-- Decrypted credential JSON exists only for factory construction and is cleared immediately afterward on a best-effort basis; factories and cached clients do not retain the one-shot `Credential` plaintext/backing bytes.
-- Generic account validation builds the account client and calls the Provider's minimal read-only `ValidateCredentials` contract, persists safe validation state, and audits success/failure.
-- Zone sync walks all Provider pages with page and cursor safety bounds, canonicalizes zones, persists the complete index atomically, revives reappearing zones, soft-marks missing zones, updates freshness, serializes syncs per account, and audits the result.
+- Provider clients are cached by account UUID, credential revision, account `updated_at`, and options. Credential replacement first persists the new encrypted revision, then invalidates both Provider clients and record cache; account option/enable changes and deletion do the same. Invalidation cancels in-flight calls from the obsolete client generation.
+- Client construction is single-flight per account and re-checks persisted revision/options before publishing the client. Cached clients expire after five minutes. Provider calls are limited to eight concurrent calls per account and a 30-second total call deadline.
+- Decrypted credential JSON exists only for factory construction and is cleared immediately afterward on a best-effort basis; factories do not retain the one-shot credential backing bytes. Official SDK clients necessarily retain their configured credential representation for authenticated calls.
+- Generic account validation calls only the Provider's minimal read-only `ValidateCredentials` contract, persists safe validation state, and audits success/failure. Official adapters apply at most three read attempts with bounded exponential jitter; a long `Retry-After` is surfaced rather than slept through inside a request.
+- Zone sync walks all Provider pages with page/cursor/time safety bounds, persists the complete index atomically, revives reappearing zones, soft-marks missing zones, skips disabled accounts, serializes syncs per account, and audits the result.
 
 ### Shared Provider testing infrastructure
 
@@ -126,8 +127,8 @@ Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS ar
 - Record cache entries carry `fetched_at` and `stale`. `refresh=true` bypasses the cache. Provider read failure may return an explicitly stale cached snapshot with a safe warning and request ID; it is never presented as fresh Provider state.
 - Successful create/update/delete invalidates the affected Zone cache and re-fetches Provider final state where the adapter contract returns it. Provider records are not persisted as desired state or written back from cache.
 - Update/delete require the canonical expected fingerprint; optional opaque Provider versions are preserved. A mismatch returns HTTP 409 with safe current Provider state and pending changes instead of overwriting silently.
-- Batch delete and TTL update enforce size/TTL/fingerprint safety, require typed Zone-name confirmation for large destructive requests, and return per-item success/failure. Partial completion uses HTTP 207 and is never described as atomic.
-- DNS mutations and Zone refresh/sync write immutable audit events with safe before/after data, actor, Provider account, Zone, result, request ID, IP, and user-agent. Credential/token/TOTP material remains excluded.
+- Batch delete and TTL update cap requests at 100 unique RRSet IDs and return per-item results. Every delete batch requires an exact typed canonical Zone-name confirmation; TTL changes reject zero TTL, SOA, automatic-TTL records, and stale fingerprints. Partial completion uses HTTP 207 and is never described as atomic.
+- DNS mutations and Zone refresh/sync write audit events with safe before/after data, actor, Provider account, Zone, result, request ID, IP, and user-agent. Every executed batch item writes its own event under the shared request/correlation ID.
 
 ### REST API
 
@@ -239,13 +240,42 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 - `APP_MASTER_KEY` is required whenever a database is configured.
 - Native development uses `APP_PUBLIC_URL=http://localhost:5173`; Compose maps `APP_COMPOSE_PUBLIC_URL` to the container runtime public URL so WebAuthn and Origin checks match the actual browser origin.
 
+## Production hardening completed
+
+### Secret, key, and client lifecycle
+
+- Credential ciphertext/nonce/key version remain database-only; no GET DTO, frontend state model, log field, panic response, or audit DTO exposes them. Central audit and client-side diagnostic sanitizers recursively handle maps, arrays, typed structs, camelCase/snake_case sensitive keys, Authorization values, and binary material.
+- Configuration failure paths clear decoded key buffers best-effort. Startup rejects missing/invalid active keys, duplicate active/previous versions, malformed previous-key JSON, and persisted ciphertext requiring an unavailable key version.
+- Provider client publication is protected against credential-replacement races. Revision/options changes invalidate the old generation, cancel its calls, expire its record cache, and force a freshly decrypted/rebuilt client.
+
+### Provider execution and DNS mutation safety
+
+- Per-account concurrency is bounded at eight and client publication is single-flight. Every Provider contract call has a 30-second total deadline; complete record reads and Zone sync also retain their higher-level page/time bounds.
+- Read retry is adapter-local, context-aware, jittered, and limited to retryable `rate_limited`, `timeout`, and `upstream` results. `Retry-After` is retained in the public safe error. Create/update/delete are never wrapped in a blind retry.
+- Record cache responses expose `fetched_at`, `stale`, and safe warning metadata. `refresh=true` bypasses stale fallback; successful mutation and account credential/options/enable changes invalidate the relevant cache generation.
+- Optimistic concurrency compares the canonical RRSet fingerprint and optional Provider version after a Provider re-fetch. Entry-native adapters protect the complete logical RRSet membership before their non-atomic read-modify-write sequence.
+- Provider errors preserve only the common taxonomy, sanitized request ID, and bounded retry metadata. Raw SDK/API causes are collapsed or redacted before logs, audit, or HTTP serialization.
+- Custom Provider endpoints are not an application option. Private endpoint/base-URL hooks exist only in adapter transport fixtures, so the production account API adds no SSRF surface.
+
+### HTTP, authentication, audit, jobs, and deployment
+
+- JSON requests are limited to 1 MiB, reject unknown fields/trailing values, and return stable opaque errors. API panic recovery buffers the response, discards partial output, emits an opaque 500 with request ID, and logs a redacted stack without the panic value.
+- Default security headers include CSP, frame denial, nosniff, referrer/permissions/cross-origin policies, and DNS-prefetch denial; production HTTPS also emits HSTS. Auth/credential surfaces use `no-store`.
+- Forwarding headers are ignored unless the immediate peer is inside `APP_TRUSTED_PROXY_CIDRS`. Trusted chains are evaluated from the nearest hop outward, conflicting `Forwarded` input cannot override an available `X-Forwarded-For` chain, and untrusted left-prefix spoofing is rejected.
+- Cookie mutations require exact public Origin/Host and CSRF cookie/header/session-hash agreement. HTTPS uses Secure, HttpOnly session cookies with the `__Host-` prefix and SameSite=Strict; the readable CSRF cookie contains only the independent CSRF token.
+- Password/TOTP and public authentication ceremonies use bounded per-IP/per-identity in-memory token buckets with bounded key cardinality. Uniform password failures retain username-enumeration resistance.
+- Audit data is sanitized again at the PostgreSQL write boundary. Each JSON document is capped at 256 KiB; oversized safe data becomes an explicit byte-count/SHA-256 omission summary. Migration 4 rejects audit UPDATE, DELETE, and TRUNCATE at the database layer.
+- Scheduled Zone sync skips disabled accounts, serializes same-account work, bounds list/sync time, and stops from the root shutdown context. HTTP shutdown drains in-flight requests within `APP_SHUTDOWN_TIMEOUT`, cancels workers, and closes the PostgreSQL pool.
+- Migration 3 adds credential/nonce/options/Zone/audit size and state constraints plus request/resource/Zone lookup indexes. Migration 4 adds database-enforced audit append-only triggers. `serve` never performs a silent schema rebuild or migration.
+- Native dialogs have accessible names/descriptions, credential fields retain password semantics, destructive batch copy describes real Provider effects, unsupported secret descriptor types fail closed, and dialog close restores focus while clearing credential signal state.
+
 ## Verification evidence
 
 | Check | Observed result |
 |---|---|
 | Focused backend security tests | Passed unauthenticated `401`, role matrix, CSRF/origin rejection, revoked/disabled session denial, Argon2id verify, opaque-token hashing, WebAuthn challenge replay and rpId/origin rejection, TOTP ciphertext tamper rejection, TOTP time-step replay rejection, and secret-canary scans. |
 | Backend authentication packages | `go test ./internal/auth ./internal/api ./internal/audit ./internal/crypto` passed. |
-| Acceptance delivery gate (2026-08-26) | `make backend-test`, `make frontend-test`, `make frontend-typecheck`, `make backend-format-check backend-lint frontend-format-check frontend-lint`, backend/frontend builds, and the explicit OpenAPI consistency test all passed. The frontend suite now contains 4 Vitest files / 8 tests; Vite v8.2.2 transformed 67 modules. |
+| Acceptance delivery gate (2026-08-26) | `make ci` passed gofmt check, `go vet`, all Go tests, Prettier check, zero-warning ESLint, TypeScript strict typecheck, 4 Vitest files / 9 tests, backend build, and Vite production build; Vite v8.2.2 transformed 67 modules. |
 | Four-adapter conformance | `go test ./internal/provider/huawei ./internal/provider/aliyun ./internal/provider/tencent ./internal/provider/cloudflare -run 'Conformance$' -count=1` passed all four shared conformance suites. |
 | Huawei adapter fixtures | `go test ./internal/provider/huawei -count=1` passed official-SDK transport signing, scoped Zone/RecordSet pagination, multi-value normalization, opaque IDs, line/weight/status/provider-status/default metadata, default mutation rejection, TXT/MX/SRV/CAA, optimistic preconditions, read retry/mutation no-retry, error/request metadata, secret redaction, cancellation, timeout, and shared conformance. |
 | Huawei real integration gate | `go test ./internal/provider/huawei -run 'TestHuaweiIntegration' -count=1 -v` passed with read-only skipped because AK/SK were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Huawei success is claimed. |
@@ -255,24 +285,29 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 | Tencent real integration gate | `go test ./internal/provider/tencent -run 'TestTencentIntegration' -count=1 -v` passed with read-only skipped because SecretId/SecretKey variables were absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Tencent Cloud success is claimed. |
 | Cloudflare adapter fixtures | `go test ./internal/provider/cloudflare -count=1` passed official-SDK HTTP serialization, API Token-only auth, native/scoped local pagination, logical multi-entry grouping, opaque IDs, proxy/proxiable/automatic-TTL/comment/tags, CRUD mapping, optimistic preconditions, taxonomy/request ID/retry-after mapping, read retry/mutation no-retry, token redaction, cancellation, and shared conformance. |
 | Cloudflare real integration gate | `go test ./internal/provider/cloudflare -run 'TestCloudflareIntegration' -count=1 -v` passed with read-only skipped because `CLOUDFLARE_DNS_API_TOKEN` was absent and mutation skipped because `DNS_INTEGRATION_MUTATE=1` was absent. No real Cloudflare success is claimed. |
-| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api` passed every Provider package plus service/API client-cache and handler paths. |
+| Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api ./internal/auth ./internal/audit ./internal/httpx` passed all Provider adapters plus service/API/auth/audit/HTTP hardening paths, including client single-flight, revision invalidation, and the eight-call per-account bound. |
 | Formatting and lint | `make backend-format-check backend-lint frontend-format-check frontend-lint` passed: gofmt clean, `go vet` clean, Prettier clean, and ESLint zero warnings. |
 | Backend tests and build | `make backend-test` passed `go test ./cmd/... ./internal/... ./migrations`; `go build ./cmd/... ./internal/... ./migrations` also passed. |
-| Frontend tests, typecheck, and build | `make frontend-test` passed 4 Vitest files / 8 tests. `make frontend-typecheck`, zero-warning ESLint, Prettier, and the Vite production build passed. The repeatable fake-Provider UI integration drives create/update/delete, force refresh, capability fields, optimistic request data, safe server errors, and focus recovery through the rendered Records UI. |
+| Frontend tests, typecheck, and build | `make ci` passed 4 Vitest files / 9 tests, TypeScript strict typecheck, zero-warning ESLint, Prettier, and the Vite production build. Tests cover capability-driven Provider forms, credential state cleanup/storage scans, API diagnostic redaction, cache/conflict/batch behavior, and focus recovery. |
 | Unified browser UI acceptance | Real Chromium followed the password + TOTP login, Provider Account create, post-save secret redaction, Validate, Sync Zones, four-account Zone inventory, Zone opening, force refresh, seven record-type creates (A/AAAA/CNAME/TXT/MX/SRV/CAA), multi-entry RRSet, edit/delete, optimistic conflict comparison/reapply, batch partial failure, audit detail, viewer RBAC, CSRF-bearing mutations, Passkey/TOTP/session management, light/dark theme, and keyboard/focus/error paths against a stateful intercepted fake Provider API. Cloudflare proxy, Huawei line/weight/status, DNSPod line/line-ID/weight/status/remark, and Alibaba line/weight/status/remark fields rendered only from descriptors. A 390×844 viewport had no document overflow and kept focus inside mobile navigation. No Provider secret appeared in response state, DOM, audit, localStorage, or sessionStorage. |
 | Acceptance defects fixed | Cross-account Zone links now target the registered `/zones/:zoneId/records` route instead of the 404 `/zones/:zoneId` path. Record create/update server errors now return focus to the still-open editor after the busy submit button is disabled. Both defects have frontend regression tests and were reverified in Chromium. |
 | DNS API and cache tests | `make backend-test` passed DNS service/API tests for cache hit/bypass/stale fallback/invalidation, Provider final state, conflict details, batch delete/TTL partial results, audit list/detail, RBAC, CSRF/Origin, safe errors, and request IDs. |
 | OpenAPI contract | `go test ./internal/api -run TestOpenAPIMatchesRegisteredRoutes -count=1 -v` passed. The test parses OpenAPI 3.1, compares every documented HTTP method/path with the registered chi router, requires unique non-empty operation IDs, and resolves every internal `$ref`. |
 | Real Provider credential gate | `go test ./internal/provider/huawei ./internal/provider/aliyun ./internal/provider/tencent ./internal/provider/cloudflare -run 'IntegrationReadOnly$' -count=1 -v` completed with all four tests skipped because no complete Huawei, Alibaba Cloud, Tencent Cloud, or Cloudflare read credential set was configured. No real-account success is claimed. |
-| PostgreSQL runtime smoke | A clean PostgreSQL 18 database migrated through authentication migration version 2. Runtime sessions stored 32-byte token/CSRF hashes and the admin password row used an Argon2id hash. |
+| PostgreSQL hardening smoke | A clean PostgreSQL 18 database migrated to version 4 (`dirty=false`); 9 hardening constraints, 3 added lookup indexes, and 2 append-only triggers were present. Both `UPDATE audit_events` and `TRUNCATE audit_events` failed with `audit_events are append-only`; an explicit version-3 state upgraded successfully to version 4. |
 | Browser WebAuthn smoke | Chromium with virtual authenticators completed first-admin Passkey bootstrap, registered a second named Passkey, and rendered safe Passkey metadata. |
 | Browser password/TOTP smoke | The UI enabled Argon2id password fallback, completed password login, set up and confirmed TOTP, required the separate TOTP step on the next password login, and completed that login with a new time-step code. |
 | Browser user-management smoke | An administrator created a viewer user and received a one-time enrollment token; the user appeared with viewer role controls. |
-| Secret scan | Runtime audit rows contained zero matches for password/TOTP/URI canaries; TOTP ciphertext contained no plaintext seed; service logs contained no password, TOTP seed, or provisioning URI matches. |
+| Secret scan | Random long canaries are automatically scanned across HTTP responses, captured access/panic logs, audit payloads, Provider error formatting/JSON, ciphertext, DOM text, frontend diagnostic serialization, localStorage, and sessionStorage. The tested surfaces contained no canary; encrypted ciphertext contained no plaintext. |
+| Production runtime smoke | A production-configured server rejected persisted key version 1 when only active key 2 was supplied, then started and reported `/readyz` ready when version 1 was supplied through the previous-key ring. `/healthz` emitted CSP/HSTS and the full security-header set. SIGTERM logged `server shutdown started` and `server shutdown complete`. |
+| Container/Compose | `docker compose config --quiet` passed with explicit hardening environment variables. `make container-build` produced the distroless `nonroot` image after rebuilding the frontend and Go binary. |
+| Browser security/accessibility smoke | Real Chromium opened the native named Provider-account dialog, confirmed password input semantics, found no random credential canary in visible DOM/localStorage/sessionStorage, restored focus to `Add provider account` on close, cleared the secret input before reopen, and reported zero console errors/warnings. |
 
 ## Remaining project work
 
 The requested unified DNS Web product is implemented. Environment/operations work still requiring deployment-specific inputs:
-
-1. Run the four read-only integration suites with dedicated real credentials. Run mutation gates only with `DNS_INTEGRATION_MUTATE=1` and dedicated test Zones.
-2. Add scheduled background Zone synchronization policy, operational metrics/alerts, trusted-proxy policy, backup/restore procedures, and deployment-specific CSP/HSTS hardening.
+1. Run the four read-only integration suites with dedicated real credentials. Run mutation gates only with `DNS_INTEGRATION_MUTATE=1` and dedicated test Zones; fixture/conformance success is not a claim of real-account validation.
+2. Scheduled Zone sync de-duplicates only inside one process. Production deployment is intentionally single-replica until a database-backed scheduler lease/leader mechanism is designed; do not run multiple schedulers against the same database.
+3. Provider clients must retain credential material in Go/official-SDK memory while they are cached (maximum five minutes); Go cannot guarantee memory zeroization. Rotation is read-compatible but does not proactively re-encrypt old rows—replace a Provider credential or TOTP setup to write it with the active key before retiring the old key.
+4. In-memory auth rate limits are per process and reset on restart. A reverse proxy/WAF should add deployment-wide request limiting for Internet-exposed multi-instance deployments.
+5. Backup/restore drills, monitoring/alert thresholds, and real reverse-proxy CIDRs are deployment-specific. Configure only actual proxy networks in `APP_TRUSTED_PROXY_CIDRS`; an empty value intentionally ignores all forwarded client-IP headers.

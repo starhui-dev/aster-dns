@@ -3,8 +3,10 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/url"
@@ -26,15 +28,18 @@ const (
 )
 
 type Config struct {
-	Environment Environment
-	ListenAddr  string
-	PublicURL   *url.URL
-	Database    DatabaseConfig
-	MasterKey   []byte
-	LogLevel    slog.Level
-	WebDir      string
-	HTTP        HTTPConfig
-	Auth        AuthConfig
+	Environment        Environment
+	ListenAddr         string
+	PublicURL          *url.URL
+	Database           DatabaseConfig
+	MasterKey          []byte
+	MasterKeyVersion   int
+	PreviousMasterKeys map[int][]byte
+	LogLevel           slog.Level
+	WebDir             string
+	HTTP               HTTPConfig
+	Auth               AuthConfig
+	ZoneSyncInterval   time.Duration
 }
 
 type DatabaseConfig struct {
@@ -64,6 +69,7 @@ type HTTPConfig struct {
 	ShutdownTimeout   time.Duration
 	ReadyTimeout      time.Duration
 	MaxHeaderBytes    int
+	TrustedProxyCIDRs []*net.IPNet
 }
 
 type lookupEnv func(string) (string, bool)
@@ -85,9 +91,11 @@ func LoadDatabaseURL() (string, error) {
 
 func load(lookup lookupEnv) (Config, error) {
 	cfg := Config{
-		Environment: EnvironmentDevelopment,
-		ListenAddr:  ":8080",
-		LogLevel:    slog.LevelInfo,
+		Environment:        EnvironmentDevelopment,
+		ListenAddr:         ":8080",
+		MasterKeyVersion:   1,
+		PreviousMasterKeys: make(map[int][]byte),
+		LogLevel:           slog.LevelInfo,
 		HTTP: HTTPConfig{
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       15 * time.Second,
@@ -112,6 +120,7 @@ func load(lookup lookupEnv) (Config, error) {
 			ChallengeTTL:           5 * time.Minute,
 			EnrollmentTTL:          24 * time.Hour,
 		},
+		ZoneSyncInterval: 15 * time.Minute,
 	}
 
 	var validationErrors []error
@@ -155,29 +164,42 @@ func load(lookup lookupEnv) (Config, error) {
 	} else if err := validateDatabaseURL(cfg.Database.URL); err != nil {
 		validationErrors = append(validationErrors, err)
 	}
-
+	parseInt(lookup, "APP_MASTER_KEY_VERSION", &cfg.MasterKeyVersion, 1, 1<<30, &validationErrors)
 	masterKeyRaw := value(lookup, "APP_MASTER_KEY")
-	if masterKeyRaw == "" {
-		if cfg.Environment == EnvironmentProduction || cfg.Database.URL != "" {
-			validationErrors = append(validationErrors, errors.New("APP_MASTER_KEY is required when the database is configured"))
-		}
-	} else {
-		key, err := base64.StdEncoding.DecodeString(masterKeyRaw)
-		if err != nil || len(key) != masterKeyBytes {
-			validationErrors = append(validationErrors, errors.New("APP_MASTER_KEY must be standard base64 encoding of exactly 32 bytes"))
+	masterKeyFile := value(lookup, "APP_MASTER_KEY_FILE")
+	if masterKeyRaw != "" && masterKeyFile != "" {
+		validationErrors = append(validationErrors, errors.New("set only one of APP_MASTER_KEY or APP_MASTER_KEY_FILE"))
+	}
+	if masterKeyRaw == "" && masterKeyFile != "" {
+		contents, err := readSmallSecretFile(masterKeyFile)
+		if err != nil {
+			validationErrors = append(validationErrors, errors.New("APP_MASTER_KEY_FILE cannot be read"))
 		} else {
-			cfg.MasterKey = key
+			masterKeyRaw = strings.TrimSpace(string(contents))
+			clear(contents)
 		}
 	}
+	if masterKeyRaw == "" {
+		if cfg.Environment == EnvironmentProduction || cfg.Database.URL != "" {
+			validationErrors = append(validationErrors, errors.New("APP_MASTER_KEY or APP_MASTER_KEY_FILE is required when the database is configured"))
+		}
+	} else if key, err := decodeMasterKey(masterKeyRaw); err != nil {
+		validationErrors = append(validationErrors, errors.New("APP_MASTER_KEY must be standard base64 encoding of exactly 32 bytes"))
+	} else {
+		cfg.MasterKey = key
+	}
+	parsePreviousMasterKeys(lookup, cfg.MasterKeyVersion, &cfg.PreviousMasterKeys, &validationErrors)
 
 	bootstrapTokenRaw := value(lookup, "APP_BOOTSTRAP_TOKEN")
 	if bootstrapTokenRaw != "" {
 		decoded, err := base64.RawURLEncoding.DecodeString(bootstrapTokenRaw)
 		if err != nil || len(decoded) != 32 {
+			clear(decoded)
 			validationErrors = append(validationErrors, errors.New("APP_BOOTSTRAP_TOKEN must be unpadded base64url encoding of exactly 32 bytes"))
 		} else {
 			hash := sha256.Sum256([]byte(bootstrapTokenRaw))
 			cfg.Auth.BootstrapTokenHash = hash[:]
+			clear(decoded)
 		}
 	}
 	parseBool(lookup, "APP_PASSWORD_LOGIN_ENABLED", &cfg.Auth.PasswordLoginEnabled, &validationErrors)
@@ -221,6 +243,7 @@ func load(lookup lookupEnv) (Config, error) {
 	parseDuration(lookup, "APP_AUTH_SESSION_REFRESH_INTERVAL", &cfg.Auth.SessionRefreshInterval, &validationErrors)
 	parseDuration(lookup, "APP_AUTH_CHALLENGE_TTL", &cfg.Auth.ChallengeTTL, &validationErrors)
 	parseDuration(lookup, "APP_AUTH_ENROLLMENT_TTL", &cfg.Auth.EnrollmentTTL, &validationErrors)
+	parseDuration(lookup, "APP_ZONE_SYNC_INTERVAL", &cfg.ZoneSyncInterval, &validationErrors)
 	if cfg.Auth.SessionAbsoluteTTL <= cfg.Auth.SessionIdleTTL {
 		validationErrors = append(validationErrors, errors.New("APP_AUTH_SESSION_ABSOLUTE_TTL must exceed APP_AUTH_SESSION_IDLE_TTL"))
 	}
@@ -228,8 +251,12 @@ func load(lookup lookupEnv) (Config, error) {
 		validationErrors = append(validationErrors, errors.New("APP_AUTH_SESSION_REFRESH_INTERVAL must be shorter than APP_AUTH_SESSION_IDLE_TTL"))
 	}
 	parseInt(lookup, "APP_HTTP_MAX_HEADER_BYTES", &cfg.HTTP.MaxHeaderBytes, 1_024, 16<<20, &validationErrors)
-
+	parseTrustedProxyCIDRs(lookup, &cfg.HTTP.TrustedProxyCIDRs, &validationErrors)
 	if len(validationErrors) > 0 {
+		clear(cfg.MasterKey)
+		for _, key := range cfg.PreviousMasterKeys {
+			clear(key)
+		}
 		return Config{}, errors.Join(validationErrors...)
 	}
 	return cfg, nil
@@ -241,6 +268,60 @@ func value(lookup lookupEnv, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(raw)
+}
+
+func decodeMasterKey(raw string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil || len(key) != masterKeyBytes {
+		clear(key)
+		return nil, errors.New("invalid master key")
+	}
+	return key, nil
+}
+
+func readSmallSecretFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil || len(contents) > 4096 {
+		clear(contents)
+		return nil, errors.New("secret file exceeds size limit")
+	}
+	return contents, nil
+}
+
+func parsePreviousMasterKeys(lookup lookupEnv, activeVersion int, target *map[int][]byte, validationErrors *[]error) {
+	raw := value(lookup, "APP_PREVIOUS_MASTER_KEYS")
+	if raw == "" {
+		return
+	}
+	encoded := make(map[string]string)
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	if err := decoder.Decode(&encoded); err != nil || len(encoded) == 0 {
+		*validationErrors = append(*validationErrors, errors.New("APP_PREVIOUS_MASTER_KEYS must be a JSON object of version to base64 key"))
+		return
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		*validationErrors = append(*validationErrors, errors.New("APP_PREVIOUS_MASTER_KEYS must contain one JSON object"))
+		return
+	}
+	for rawVersion, encodedKey := range encoded {
+		version, err := strconv.Atoi(rawVersion)
+		if err != nil || version <= 0 || version == activeVersion {
+			*validationErrors = append(*validationErrors, errors.New("APP_PREVIOUS_MASTER_KEYS versions must be positive and exclude the active version"))
+			continue
+		}
+		key, err := decodeMasterKey(encodedKey)
+		if err != nil {
+			*validationErrors = append(*validationErrors, errors.New("APP_PREVIOUS_MASTER_KEYS values must encode exactly 32 bytes"))
+			continue
+		}
+		(*target)[version] = key
+	}
 }
 
 func parsePublicURL(raw string, environment Environment) (*url.URL, error) {
@@ -291,6 +372,26 @@ func parseDuration(lookup lookupEnv, key string, target *time.Duration, validati
 		return
 	}
 	*target = parsed
+}
+
+func parseTrustedProxyCIDRs(lookup lookupEnv, target *[]*net.IPNet, validationErrors *[]error) {
+	raw := value(lookup, "APP_TRUSTED_PROXY_CIDRS")
+	if raw == "" {
+		return
+	}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			*validationErrors = append(*validationErrors, errors.New("APP_TRUSTED_PROXY_CIDRS contains an empty CIDR"))
+			continue
+		}
+		_, network, err := net.ParseCIDR(part)
+		if err != nil {
+			*validationErrors = append(*validationErrors, errors.New("APP_TRUSTED_PROXY_CIDRS must contain valid CIDR values"))
+			continue
+		}
+		*target = append(*target, network)
+	}
 }
 func parseBool(lookup lookupEnv, key string, target *bool, validationErrors *[]error) {
 	raw := value(lookup, key)

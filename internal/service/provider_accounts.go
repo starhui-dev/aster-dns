@@ -155,6 +155,11 @@ func (s *ProviderAccountService) UpdateAccount(ctx context.Context, actor Actor,
 		if updateErr != nil {
 			return updateErr
 		}
+		if len(input.Options) != 0 {
+			if invalidateErr := repository.InvalidateZoneIndex(ctx, accountID, s.now()); invalidateErr != nil {
+				return invalidateErr
+			}
+		}
 		event, eventErr := newProviderAuditEvent(actor, metadata, "provider_account.update", accountID, audit.ResultSucceeded, "")
 		if eventErr != nil {
 			return eventErr
@@ -233,6 +238,9 @@ func (s *ProviderAccountService) ReplaceCredentials(ctx context.Context, actor A
 		if replaceErr != nil {
 			return replaceErr
 		}
+		if invalidateErr := repository.InvalidateZoneIndex(ctx, accountID, s.now()); invalidateErr != nil {
+			return invalidateErr
+		}
 		event, eventErr := newProviderAuditEvent(actor, metadata, "provider_account.credentials.replace", accountID, audit.ResultSucceeded, "")
 		if eventErr != nil {
 			return eventErr
@@ -277,7 +285,7 @@ func (s *ProviderAccountService) ValidateAccount(ctx context.Context, actor Acto
 	var updated ProviderAccount
 	persistErr := s.repository.WithinTx(ctx, func(repository ProviderRepository) error {
 		var updateErr error
-		updated, updateErr = repository.SetProviderAccountValidation(ctx, accountID, status, validatedAt, errorCode)
+		updated, updateErr = repository.SetProviderAccountValidation(ctx, accountID, account.CredentialRevision, account.UpdatedAt, status, validatedAt, errorCode)
 		if updateErr != nil {
 			return updateErr
 		}

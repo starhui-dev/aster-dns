@@ -22,7 +22,7 @@ import {
 } from "../components/ProviderFields";
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
-import { ApiError } from "../lib/api";
+import { ApiError, redactClientValue } from "../lib/api";
 import {
   batchRecordSets,
   createRecordSet,
@@ -61,8 +61,8 @@ export default function RecordsPage() {
   const [query, setQuery] = createSignal("");
   const [typeFilter, setTypeFilter] = createSignal("");
   const [fetchedAt, setFetchedAt] = createSignal<string>();
-  const [stale, setStale] = createSignal(false);
-  const [warning, setWarning] = createSignal<string>();
+  const [stale, setStale] = createSignal(true);
+  const [warning, setWarning] = createSignal<{ message: string; requestId?: string }>();
   const [loading, setLoading] = createSignal(true);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<{ message: string; requestId?: string } | null>(null);
@@ -78,6 +78,7 @@ export default function RecordsPage() {
   const [batchConfirmation, setBatchConfirmation] = createSignal("");
   const [batchResult, setBatchResult] = createSignal<BatchResult>();
 
+  let loadGeneration = 0;
   const canMutate = createMemo(() => {
     const state = auth.state();
     return (
@@ -91,6 +92,8 @@ export default function RecordsPage() {
   const selectedRecords = createMemo(() => records().filter((record) => selected().has(record.id)));
 
   const load = async (refresh = false, signal?: AbortSignal) => {
+    const generation = ++loadGeneration;
+    setStale(true);
     setLoading(true);
     try {
       const [zoneResult, catalog, recordResult] = await Promise.all([
@@ -102,17 +105,25 @@ export default function RecordsPage() {
           signal,
         ),
       ]);
+      if (generation !== loadGeneration) return;
       setZone(zoneResult.zone);
       setProviders(catalog.provider_types);
       setRecords(recordResult.recordsets);
       setFetchedAt(recordResult.fetched_at);
       setStale(recordResult.stale);
-      setWarning(recordResult.warning?.message);
+      setWarning(
+        recordResult.warning
+          ? { message: recordResult.warning.message, requestId: recordResult.warning.request_id }
+          : undefined,
+      );
       setError(null);
     } catch (caught) {
+      if (generation !== loadGeneration) return;
+      setStale(true);
+      setWarning({ message: "Provider refresh failed. The displayed snapshot is untrusted." });
       setError(errorState(caught));
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration) setLoading(false);
     }
   };
 
@@ -293,11 +304,15 @@ export default function RecordsPage() {
             <A class="text-sm font-semibold text-primary hover:underline" href="/zones">
               All zones
             </A>
-            <Button disabled={loading()} onClick={() => void load(true)}>
+            <Button disabled={loading() || busy()} onClick={() => void load(true)}>
               Force refresh
             </Button>
             <Show when={canMutate()}>
-              <Button variant="primary" onClick={() => setEditor({ mode: "create" })}>
+              <Button
+                variant="primary"
+                disabled={loading() || busy() || stale()}
+                onClick={() => setEditor({ mode: "create" })}
+              >
                 Add record
               </Button>
             </Show>
@@ -317,7 +332,14 @@ export default function RecordsPage() {
       </Show>
       <Show when={notice()}>{(value) => <Alert variant="success">{value()}</Alert>}</Show>
       <Show when={warning()}>
-        {(value) => <Alert variant="warning">{value()} Cached data is marked stale.</Alert>}
+        {(value) => (
+          <Alert variant="warning">
+            {value().message} Cached data is marked stale.
+            <Show when={value().requestId}>
+              <span class="mt-2 block font-mono text-xs">Request {value().requestId}</span>
+            </Show>
+          </Alert>
+        )}
       </Show>
       <Show when={stale() && warning() === undefined}>
         <Alert variant="warning">
@@ -407,12 +429,26 @@ export default function RecordsPage() {
           <div class="flex flex-wrap items-center justify-between gap-3">
             <p class="text-sm font-medium">{selectedRecords().length} record sets selected</p>
             <div class="flex gap-2">
-              <Button onClick={() => setBatchMode("ttl_update")}>Update TTL</Button>
-              <Button variant="danger" onClick={() => setBatchMode("delete")}>
+              <Button
+                disabled={loading() || busy() || stale() || selectedRecords().length > 100}
+                onClick={() => setBatchMode("ttl_update")}
+              >
+                Update TTL
+              </Button>
+              <Button
+                variant="danger"
+                disabled={loading() || busy() || stale() || selectedRecords().length > 100}
+                onClick={() => setBatchMode("delete")}
+              >
                 Batch delete
               </Button>
             </div>
           </div>
+          <Show when={selectedRecords().length > 100}>
+            <p class="mt-2 text-sm text-danger" role="alert">
+              Select no more than 100 record sets per batch.
+            </p>
+          </Show>
         </Panel>
       </Show>
 
@@ -484,6 +520,8 @@ export default function RecordsPage() {
                             <button
                               class="mt-1 text-xs font-semibold text-primary hover:underline"
                               type="button"
+                              aria-expanded={expanded().has(record.id)}
+                              aria-controls={`record-entries-${record.id}`}
                               onClick={() =>
                                 setExpanded((current) => {
                                   const next = new Set(current);
@@ -516,7 +554,7 @@ export default function RecordsPage() {
                             <div class="flex justify-end gap-2">
                               <Button
                                 size="sm"
-                                disabled={busy() || stale()}
+                                disabled={loading() || busy() || stale()}
                                 onClick={() => setEditor({ mode: "edit", record })}
                               >
                                 Edit
@@ -524,7 +562,7 @@ export default function RecordsPage() {
                               <Button
                                 size="sm"
                                 variant="danger"
-                                disabled={busy() || stale()}
+                                disabled={loading() || busy() || stale()}
                                 onClick={() => remove(record)}
                               >
                                 Delete
@@ -534,7 +572,10 @@ export default function RecordsPage() {
                         </td>
                       </tr>
                       <Show when={expanded().has(record.id)}>
-                        <tr class="border-b border-border bg-surface-subtle">
+                        <tr
+                          id={`record-entries-${record.id}`}
+                          class="border-b border-border bg-surface-subtle"
+                        >
                           <td class="px-3 py-4" colSpan={canMutate() ? 7 : 6}>
                             <ol class="space-y-3">
                               <For each={record.entries}>
@@ -570,7 +611,7 @@ export default function RecordsPage() {
       <dialog
         ref={(element) => setEditorDialog(element)}
         class="m-auto max-h-[94dvh] w-[min(56rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-border bg-surface p-0 text-foreground shadow-2xl backdrop:bg-foreground/35"
-        aria-label="Record editor"
+        aria-labelledby="record-editor-title"
         onClose={() => setEditor(undefined)}
       >
         <Show when={editor() && providerDefinition()}>
@@ -587,15 +628,16 @@ export default function RecordsPage() {
       <dialog
         ref={(element) => setBatchDialog(element)}
         class="m-auto w-[min(34rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface p-0 text-foreground shadow-2xl backdrop:bg-foreground/35"
-        aria-label="Batch record operation"
+        aria-labelledby="batch-operation-title"
+        aria-describedby="batch-operation-description"
         onClose={() => setBatchMode(undefined)}
       >
         <form onSubmit={submitBatch}>
           <header class="border-b border-border p-5">
-            <h2 class="text-lg font-semibold">
+            <h2 id="batch-operation-title" class="text-lg font-semibold">
               {batchMode() === "delete" ? "Batch delete record sets" : "Batch update TTL"}
             </h2>
-            <p class="mt-1 text-sm text-muted-foreground">
+            <p id="batch-operation-description" class="mt-1 text-sm text-muted-foreground">
               {selectedRecords().length} record sets in {zone()?.name}. Results are reported item by
               item.
             </p>
@@ -619,18 +661,16 @@ export default function RecordsPage() {
               <Alert variant="warning">
                 This deletes real Provider records. The operation is not transactional across items.
               </Alert>
-              <Show when={selectedRecords().length > 10}>
-                <Field label={`Type ${zone()?.name} to confirm`} for="batch-confirmation">
-                  <input
-                    id="batch-confirmation"
-                    class="text-input"
-                    required
-                    autocomplete="off"
-                    value={batchConfirmation()}
-                    onInput={(event) => setBatchConfirmation(event.currentTarget.value)}
-                  />
-                </Field>
-              </Show>
+              <Field label={`Type ${zone()?.name} to confirm`} for="batch-confirmation">
+                <input
+                  id="batch-confirmation"
+                  class="text-input"
+                  required
+                  autocomplete="off"
+                  value={batchConfirmation()}
+                  onInput={(event) => setBatchConfirmation(event.currentTarget.value)}
+                />
+              </Field>
             </Show>
           </div>
           <footer class="flex justify-end gap-2 border-t border-border p-5">
@@ -641,10 +681,7 @@ export default function RecordsPage() {
               type="submit"
               variant={batchMode() === "delete" ? "danger" : "primary"}
               disabled={
-                busy() ||
-                (batchMode() === "delete" &&
-                  selectedRecords().length > 10 &&
-                  batchConfirmation() !== zone()?.name)
+                busy() || (batchMode() === "delete" && batchConfirmation() !== zone()?.name)
               }
             >
               Apply to {selectedRecords().length} items
@@ -740,7 +777,7 @@ function RecordEditor(props: {
       <header class="flex items-start justify-between gap-4 border-b border-border p-5 sm:p-6">
         <div>
           <p class="text-xs font-semibold text-primary">DNS semantic editor</p>
-          <h2 class="mt-1 text-xl font-semibold">
+          <h2 id="record-editor-title" class="mt-1 text-xl font-semibold">
             {props.state.mode === "create" ? "Create record set" : "Edit record set"}
           </h2>
         </div>
@@ -1048,7 +1085,7 @@ function RecordSnapshot(props: { title: string; value: unknown }) {
     <div class="rounded-md border border-border bg-surface-subtle p-4">
       <h3 class="text-sm font-semibold">{props.title}</h3>
       <pre class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
-        {JSON.stringify(props.value, null, 2)}
+        {JSON.stringify(redactClientValue(props.value), null, 2)}
       </pre>
     </div>
   );

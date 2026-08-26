@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { apiRequest } from "./api";
+import { apiRequest, redactClientValue } from "./api";
 
 describe("apiRequest", () => {
   afterEach(() => {
@@ -51,5 +51,18 @@ describe("apiRequest", () => {
     await apiRequest("/mutation", { method: "POST", body: JSON.stringify({ value: true }) });
 
     expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("redacts canary secrets before diagnostic values reach the DOM", () => {
+    const canary = "frontend-canary-secret-random-long-value-4ae6f981";
+    const serialized = JSON.stringify(
+      redactClientValue({
+        credential: { apiToken: canary },
+        safe: "authorization=Bearer " + canary,
+        nested: [{ password: canary }],
+      }),
+    );
+    expect(serialized).not.toContain(canary);
+    expect(serialized).toContain("[REDACTED]");
   });
 });

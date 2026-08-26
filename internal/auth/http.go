@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"crypto/subtle"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/starhui-dev/aster-dns/internal/httpx"
@@ -62,12 +64,35 @@ func (s *Service) OriginProtection(next http.Handler) http.Handler {
 		}
 		origin, err := url.Parse(r.Header.Get("Origin"))
 		if err != nil || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" ||
-			origin.Scheme+"://"+origin.Host != s.Origin() {
-			httpx.WriteError(w, r, http.StatusForbidden, "origin_denied", "The request origin is not allowed.", nil)
+			origin.Scheme+"://"+origin.Host != s.Origin() || !sameAuthority(r.Host, s.config.PublicURL) {
+			httpx.WriteError(w, r, http.StatusForbidden, "origin_denied", "The request origin or host is not allowed.", nil)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func sameAuthority(requestHost string, publicURL *url.URL) bool {
+	requestHost = strings.TrimSpace(requestHost)
+	if requestHost == "" || publicURL == nil {
+		return false
+	}
+	host, port, err := net.SplitHostPort(requestHost)
+	if err != nil {
+		host = strings.Trim(requestHost, "[]")
+		port = defaultPort(publicURL)
+	}
+	return strings.EqualFold(host, publicURL.Hostname()) && port == defaultPort(publicURL)
+}
+
+func defaultPort(publicURL *url.URL) string {
+	if port := publicURL.Port(); port != "" {
+		return port
+	}
+	if publicURL.Scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 func (s *Service) CSRFProtection(next http.Handler) http.Handler {

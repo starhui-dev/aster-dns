@@ -25,7 +25,7 @@ func TestPasskeyChallengeReplayAndRelyingPartyValidation(t *testing.T) {
 	}
 	authenticator.AddCredential(credential)
 
-	begin, err := service.BeginPasskeyLogin(context.Background())
+	begin, err := service.BeginPasskeyLogin(context.Background(), RequestMetadata{IP: "192.0.2.1"})
 	if err != nil {
 		t.Fatalf("begin passkey login: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestPasskeyChallengeReplayAndRelyingPartyValidation(t *testing.T) {
 		{name: "wrong rp id", rp: virtualwebauthn.RelyingParty{Name: "Aster DNS", ID: "wrong.example.test", Origin: rp.Origin}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			options, beginErr := service.BeginPasskeyLogin(context.Background())
+			options, beginErr := service.BeginPasskeyLogin(context.Background(), RequestMetadata{IP: "192.0.2.2"})
 			if beginErr != nil {
 				t.Fatalf("begin login: %v", beginErr)
 			}

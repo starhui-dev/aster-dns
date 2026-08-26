@@ -8,7 +8,7 @@ import (
 
 var providerSensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)(?:bearer\s+|basic\s+)?[^\s,;]+`),
-	regexp.MustCompile(`(?i)((?:access[_-]?key(?:[_-]?id)?|secret[_-]?id|secret[_-]?(?:access[_-]?)?key|api[_-]?token|auth[_-]?token|signature|x-amz-signature|credential)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^&\s,;]+)`),
+	regexp.MustCompile(`(?i)((?:password|secret|token|security[_-]?token|session[_-]?token|access[_-]?key(?:[_-]?id)?|secret[_-]?id|secret[_-]?(?:access[_-]?)?key|api[_-]?token|api[_-]?key|auth[_-]?token|signature|x-amz-signature|credential)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^&\s,;]+)`),
 }
 
 func Redact(text string, secretValues ...string) string {

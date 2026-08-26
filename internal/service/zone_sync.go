@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	zoneSyncPageLimit = 200
-	maximumZonePages  = 10000
+	zoneSyncPageLimit   = 200
+	maximumZonePages    = 10000
+	maximumZoneSyncTime = 2 * time.Minute
 )
 
 type ZoneSyncService struct {
@@ -37,11 +38,15 @@ func NewZoneSyncService(repository ProviderRepository, clients *ProviderClientMa
 }
 
 func (s *ZoneSyncService) SyncAccount(ctx context.Context, actor Actor, accountID uuid.UUID, metadata RequestMetadata) ([]ZoneIndexEntry, error) {
-	accountLock := s.accountLock(accountID)
-	accountLock.Lock()
-	defer accountLock.Unlock()
+	release, err := s.acquireAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	syncContext, cancel := context.WithTimeout(ctx, maximumZoneSyncTime)
+	defer cancel()
 
-	client, account, err := s.clients.Get(ctx, accountID)
+	client, account, err := s.clients.Get(syncContext, accountID)
 	if err != nil {
 		return nil, s.auditSyncFailure(ctx, actor, accountID, metadata, err)
 	}
@@ -50,7 +55,7 @@ func (s *ZoneSyncService) SyncAccount(ctx context.Context, actor Actor, accountI
 	seenCursors := make(map[string]struct{})
 	request := provider.PageRequest{Limit: zoneSyncPageLimit}
 	for range maximumZonePages {
-		page, listErr := client.ListZones(ctx, request)
+		page, listErr := client.ListZones(syncContext, request)
 		if listErr != nil {
 			return nil, s.auditSyncFailure(ctx, actor, accountID, metadata, provider.MapError(listErr, "list_zones"))
 		}
@@ -85,7 +90,7 @@ func (s *ZoneSyncService) SyncAccount(ctx context.Context, actor Actor, accountI
 		if page.NextCursor == "" {
 			fetchedAt := s.now()
 			persistErr := s.repository.WithinTx(ctx, func(repository ProviderRepository) error {
-				if replaceErr := repository.ReplaceZoneIndex(ctx, accountID, zones, fetchedAt); replaceErr != nil {
+				if replaceErr := repository.ReplaceZoneIndex(ctx, accountID, account.CredentialRevision, account.UpdatedAt, zones, fetchedAt); replaceErr != nil {
 					return replaceErr
 				}
 				event, eventErr := newProviderAuditEvent(actor, metadata, "zone.sync", accountID, audit.ResultSucceeded, "")
@@ -131,7 +136,13 @@ func (s *ZoneSyncService) auditSyncFailure(ctx context.Context, actor Actor, acc
 	return syncErr
 }
 
-func (s *ZoneSyncService) accountLock(accountID uuid.UUID) *sync.Mutex {
-	lock, _ := s.locks.LoadOrStore(accountID, new(sync.Mutex))
-	return lock.(*sync.Mutex)
+func (s *ZoneSyncService) acquireAccount(ctx context.Context, accountID uuid.UUID) (func(), error) {
+	lockValue, _ := s.locks.LoadOrStore(accountID, make(chan struct{}, 1))
+	lock := lockValue.(chan struct{})
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }

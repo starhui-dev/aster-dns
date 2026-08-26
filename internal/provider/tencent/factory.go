@@ -203,9 +203,8 @@ func (f *Factory) Build(ctx context.Context, config core.AccountConfig, credenti
 	client.WithHttpTransport(&responseMetadataRoundTripper{base: baseTransport})
 
 	return &Provider{
-		client:       client,
-		timeout:      timeout,
-		secretValues: []string{values.SecretID, values.SecretKey, values.Token},
+		client:  client,
+		timeout: timeout,
 	}, nil
 }
 

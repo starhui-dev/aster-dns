@@ -138,10 +138,9 @@ func (f *Factory) Build(ctx context.Context, _ core.AccountConfig, credential co
 	// Construct generated services directly so environment-based legacy API key
 	// settings cannot be merged into this token-only client.
 	return &Provider{
-		zones:        zones.NewZoneService(opts...),
-		records:      dns.NewRecordService(opts...),
-		timeout:      timeout,
-		secretValues: []string{values.APIToken, "Bearer " + values.APIToken},
+		zones:   zones.NewZoneService(opts...),
+		records: dns.NewRecordService(opts...),
+		timeout: timeout,
 	}, nil
 }
 

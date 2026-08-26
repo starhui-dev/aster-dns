@@ -102,10 +102,11 @@ type ProviderRepository interface {
 	GetProviderAccountCredential(context.Context, uuid.UUID) (ProviderAccount, CredentialMaterial, error)
 	UpdateProviderAccount(context.Context, uuid.UUID, ProviderAccountChanges) (ProviderAccount, error)
 	ReplaceProviderAccountCredential(context.Context, uuid.UUID, uint64, CredentialMaterial) (ProviderAccount, error)
-	SetProviderAccountValidation(context.Context, uuid.UUID, ValidationStatus, time.Time, string) (ProviderAccount, error)
+	SetProviderAccountValidation(context.Context, uuid.UUID, uint64, time.Time, ValidationStatus, time.Time, string) (ProviderAccount, error)
 	DeleteProviderAccount(context.Context, uuid.UUID) (ProviderAccount, error)
 
-	ReplaceZoneIndex(context.Context, uuid.UUID, []ZoneIndexEntry, time.Time) error
+	ReplaceZoneIndex(context.Context, uuid.UUID, uint64, time.Time, []ZoneIndexEntry, time.Time) error
+	InvalidateZoneIndex(context.Context, uuid.UUID, time.Time) error
 	UpsertZoneIndex(context.Context, uuid.UUID, ZoneIndexEntry, time.Time) (ZoneIndexEntry, error)
 	ListZones(context.Context, ZoneQuery) (ZonePageData, error)
 	GetZone(context.Context, uuid.UUID) (ZoneIndexEntry, error)
@@ -145,9 +146,17 @@ type ZonePageData struct {
 	Total int
 }
 
+type AuditVisibility uint8
+
+const (
+	AuditVisibilityAll AuditVisibility = iota
+	AuditVisibilityDNS
+)
+
 type AuditQuery struct {
 	Actor             string
 	Action            string
+	DNSOnly           bool
 	ProviderAccountID *uuid.UUID
 	ZoneID            *uuid.UUID
 	Result            audit.Result

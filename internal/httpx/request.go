@@ -4,12 +4,22 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
+	"strings"
 )
 
 const maximumJSONBodyBytes = 1 << 20
 
 func DecodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
+	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || mediaType != "application/json" {
+		return errors.New("request content type must be application/json")
+	}
+	if r.ContentLength > maximumJSONBodyBytes {
+		return errors.New("request body is too large")
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maximumJSONBodyBytes)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()

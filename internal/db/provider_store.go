@@ -173,25 +173,35 @@ func (s *ProviderStore) ReplaceProviderAccountCredential(ctx context.Context, ac
 	return service.ProviderAccount{}, service.ErrProviderAccountNotFound
 }
 
-func (s *ProviderStore) SetProviderAccountValidation(ctx context.Context, accountID uuid.UUID, status service.ValidationStatus, validatedAt time.Time, errorCode string) (service.ProviderAccount, error) {
+func (s *ProviderStore) SetProviderAccountValidation(ctx context.Context, accountID uuid.UUID, expectedRevision uint64, expectedUpdatedAt time.Time, status service.ValidationStatus, validatedAt time.Time, errorCode string) (service.ProviderAccount, error) {
+	if expectedRevision > math.MaxInt64 {
+		return service.ProviderAccount{}, service.ErrInvalidProviderInput
+	}
 	row := s.q.QueryRow(ctx, `
 		UPDATE provider_accounts SET
-			validation_status = $2,
-			last_validated_at = $3,
-			last_validation_error_code = NULLIF($4, ''),
+			validation_status = $4,
+			last_validated_at = $5,
+			last_validation_error_code = NULLIF($6, ''),
 			updated_at = now()
-		WHERE id = $1
+		WHERE id = $1 AND credential_revision = $2 AND updated_at = $3
 		RETURNING `+providerAccountColumns,
-		accountID, status, validatedAt, errorCode,
+		accountID, int64(expectedRevision), expectedUpdatedAt, status, validatedAt, errorCode,
 	)
-	return scanProviderAccount(row)
+	account, err := scanProviderAccount(row)
+	if errors.Is(err, service.ErrProviderAccountNotFound) {
+		return service.ProviderAccount{}, service.ErrProviderAccountConflict
+	}
+	return account, err
 }
 
 func (s *ProviderStore) DeleteProviderAccount(ctx context.Context, accountID uuid.UUID) (service.ProviderAccount, error) {
 	return scanProviderAccount(s.q.QueryRow(ctx, `DELETE FROM provider_accounts WHERE id = $1 RETURNING `+providerAccountColumns, accountID))
 }
 
-func (s *ProviderStore) ReplaceZoneIndex(ctx context.Context, accountID uuid.UUID, zones []service.ZoneIndexEntry, fetchedAt time.Time) error {
+func (s *ProviderStore) ReplaceZoneIndex(ctx context.Context, accountID uuid.UUID, expectedRevision uint64, expectedUpdatedAt time.Time, zones []service.ZoneIndexEntry, fetchedAt time.Time) error {
+	if expectedRevision > math.MaxInt64 {
+		return service.ErrInvalidProviderInput
+	}
 	providerZoneIDs := make([]string, len(zones))
 	for index, zone := range zones {
 		metadata := zone.Metadata
@@ -232,9 +242,28 @@ func (s *ProviderStore) ReplaceZoneIndex(ctx context.Context, accountID uuid.UUI
 	if err != nil {
 		return mapProviderStoreError("mark missing provider zones", err)
 	}
-	command, err := s.q.Exec(ctx, `UPDATE provider_accounts SET last_zone_sync_at = $2, updated_at = now() WHERE id = $1`, accountID, fetchedAt)
+	command, err := s.q.Exec(ctx, `
+		UPDATE provider_accounts SET last_zone_sync_at = $4, updated_at = now()
+		WHERE id = $1 AND credential_revision = $2 AND updated_at = $3`,
+		accountID, int64(expectedRevision), expectedUpdatedAt, fetchedAt)
 	if err != nil {
 		return mapProviderStoreError("update provider zone sync time", err)
+	}
+	if command.RowsAffected() != 1 {
+		return service.ErrProviderAccountConflict
+	}
+	return nil
+}
+
+func (s *ProviderStore) InvalidateZoneIndex(ctx context.Context, accountID uuid.UUID, invalidatedAt time.Time) error {
+	if _, err := s.q.Exec(ctx, `
+		UPDATE zones SET deleted_from_provider_at = COALESCE(deleted_from_provider_at, $2), updated_at = $2
+		WHERE provider_account_id = $1 AND deleted_from_provider_at IS NULL`, accountID, invalidatedAt); err != nil {
+		return mapProviderStoreError("invalidate provider zone index", err)
+	}
+	command, err := s.q.Exec(ctx, `UPDATE provider_accounts SET last_zone_sync_at = NULL WHERE id = $1`, accountID)
+	if err != nil {
+		return mapProviderStoreError("invalidate provider zone sync state", err)
 	}
 	if command.RowsAffected() != 1 {
 		return service.ErrProviderAccountNotFound
@@ -341,14 +370,15 @@ func (s *ProviderStore) ListAuditEvents(ctx context.Context, query service.Audit
 		FROM audit_events
 		WHERE ($1 = '' OR COALESCE(actor_username_snapshot, '') ILIKE '%' || $1 || '%')
 			AND ($2 = '' OR action ILIKE '%' || $2 || '%')
-			AND ($3::uuid IS NULL OR provider_account_id = $3)
-			AND ($4::uuid IS NULL OR zone_id = $4)
-			AND ($5 = '' OR result = $5)
-			AND ($6::timestamptz IS NULL OR occurred_at >= $6)
-			AND ($7::timestamptz IS NULL OR occurred_at <= $7)
+			AND (NOT $3 OR (resource_type IN ('zone', 'recordset') AND (action LIKE 'zone.%' OR action LIKE 'recordset.%')))
+			AND ($4::uuid IS NULL OR provider_account_id = $4)
+			AND ($5::uuid IS NULL OR zone_id = $5)
+			AND ($6 = '' OR result = $6)
+			AND ($7::timestamptz IS NULL OR occurred_at >= $7)
+			AND ($8::timestamptz IS NULL OR occurred_at <= $8)
 		ORDER BY occurred_at DESC, id DESC
-		OFFSET $8 LIMIT $9`,
-		query.Actor, query.Action, query.ProviderAccountID, query.ZoneID, query.Result,
+		OFFSET $9 LIMIT $10`,
+		query.Actor, query.Action, query.DNSOnly, query.ProviderAccountID, query.ZoneID, query.Result,
 		query.From, query.To, query.Offset, query.Limit,
 	)
 	if err != nil {

@@ -1,0 +1,8 @@
+BEGIN;
+
+
+DROP TRIGGER IF EXISTS audit_events_no_truncate ON audit_events;
+DROP TRIGGER IF EXISTS audit_events_append_only ON audit_events;
+DROP FUNCTION IF EXISTS reject_audit_event_mutation();
+
+COMMIT;

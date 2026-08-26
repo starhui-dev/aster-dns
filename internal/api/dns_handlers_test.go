@@ -109,7 +109,8 @@ func TestDNSAPIRBACCSRFCRUDConflictBatchAndAudit(t *testing.T) {
 		t.Fatalf("get latest first: %v", err)
 	}
 	response = serveDNSRequest(operatorRouter, operatorToken, operatorCSRF, http.MethodPost, "/api/v1/zones/"+fixture.repository.zone.ID.String()+"/recordsets/batch", map[string]any{
-		"operation": "delete",
+		"operation":    "delete",
+		"confirmation": fixture.repository.zone.Name,
 		"items": []map[string]any{
 			{"recordset_id": updated.ID, "expected_fingerprint": latestFirst.Fingerprint, "provider_version": latestFirst.ProviderVersion},
 			{"recordset_id": second.ID, "expected_fingerprint": updated.Fingerprint},
@@ -313,6 +314,7 @@ func serveDNSRequest(router http.Handler, token, csrf, method, path string, body
 		payload, _ = json.Marshal(body)
 	}
 	request := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	request.Host = "dns.example.test"
 	request.Header.Set("X-Request-ID", "req_dns_api")
 	request.AddCookie(&http.Cookie{Name: "__Host-aster_session", Value: token})
 	if body != nil {

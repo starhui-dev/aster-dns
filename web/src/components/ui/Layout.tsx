@@ -106,7 +106,9 @@ export function Field(
       </label>
       {props.children}
       <Show when={props.hint}>
-        <p class="mt-1.5 text-xs leading-5 text-muted-foreground">{props.hint}</p>
+        <p id={`${props.for}-hint`} class="mt-1.5 text-xs leading-5 text-muted-foreground">
+          {props.hint}
+        </p>
       </Show>
     </div>
   );

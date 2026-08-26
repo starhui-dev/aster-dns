@@ -189,31 +189,17 @@ func (p *Provider) sanitizedCause(err error) error {
 	if err == nil {
 		return nil
 	}
-	message := err.Error()
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
 	var serviceError *sdkerr.ServiceResponseError
 	if errors.As(err, &serviceError) {
-		providerMessage := strings.TrimSpace(serviceError.ErrorMessage)
-		if encoded := strings.TrimSpace(serviceError.EncodedAuthorizationMessage); encoded != "" {
-			providerMessage = strings.ReplaceAll(providerMessage, encoded, "[REDACTED]")
-		}
-		if strings.Contains(strings.ToLower(providerMessage), "encoded_authorization_message") {
-			providerMessage = ""
-		}
-		errorCode := strings.TrimSpace(serviceError.ErrorCode)
-		switch {
-		case errorCode != "" && providerMessage != "":
-			message = fmt.Sprintf("Huawei Cloud DNS error %s: %s", errorCode, providerMessage)
-		case errorCode != "":
-			message = fmt.Sprintf("Huawei Cloud DNS error %s", errorCode)
-		case providerMessage != "":
-			message = providerMessage
-		default:
-			message = "Huawei Cloud DNS request failed"
+		if errorCode := strings.TrimSpace(serviceError.ErrorCode); errorCode != "" {
+			return fmt.Errorf("Huawei Cloud DNS error %s: [REDACTED]", errorCode)
 		}
 	}
-	message = core.Redact(message, p.secretValues...)
-	if strings.TrimSpace(message) == "" {
-		message = "Huawei Cloud DNS request failed"
-	}
-	return errors.New(message)
+	return errors.New("Huawei Cloud DNS upstream details [REDACTED]")
 }

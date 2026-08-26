@@ -21,9 +21,10 @@ const (
 	defaultPageLimit      = 50
 	maximumPageLimit      = 200
 	maximumBatchSize      = 100
-	batchConfirmThreshold = 10
+	maximumBatchTime      = 2 * time.Minute
 	recordReadPageLimit   = 200
 	maximumRecordPages    = 10000
+	maximumRecordReadTime = 2 * time.Minute
 	defaultRecordCacheTTL = 30 * time.Second
 	defaultZoneStaleAfter = 5 * time.Minute
 )
@@ -35,7 +36,7 @@ type DNSService struct {
 	zoneStaleAfter time.Duration
 	now            func() time.Time
 	cacheMu        sync.RWMutex
-	recordCache    map[uuid.UUID]recordCacheEntry
+	recordCache    map[uuid.UUID]recordCacheState
 }
 
 type recordCacheEntry struct {
@@ -45,6 +46,10 @@ type recordCacheEntry struct {
 	recordSets         []provider.RecordSet
 }
 
+type recordCacheState struct {
+	entry      recordCacheEntry
+	generation uint64
+}
 type ZoneListInput struct {
 	Search            string
 	ProviderType      provider.ProviderType
@@ -139,6 +144,7 @@ type AuditListInput struct {
 	To                *time.Time
 	Cursor            string
 	Limit             int
+	Visibility        AuditVisibility
 }
 
 type AuditPage struct {
@@ -157,7 +163,7 @@ func NewDNSService(repository ProviderRepository, clients *ProviderClientManager
 		recordCacheTTL: defaultRecordCacheTTL,
 		zoneStaleAfter: defaultZoneStaleAfter,
 		now:            func() time.Time { return time.Now().UTC() },
-		recordCache:    make(map[uuid.UUID]recordCacheEntry),
+		recordCache:    make(map[uuid.UUID]recordCacheState),
 	}, nil
 }
 
@@ -252,8 +258,10 @@ func (s *DNSService) ListRecordSets(ctx context.Context, zoneID uuid.UUID, input
 	if !input.Refresh && cachedOK && s.now().Sub(cached.fetchedAt) <= s.recordCacheTTL {
 		return paginateRecordSets(cached.recordSets, input, scope, limit, offset, cached.fetchedAt, false, nil), nil
 	}
-
-	recordSets, fetchErr := s.fetchAllRecordSets(ctx, client, zone)
+	generation := s.beginRecordFetch(zoneID)
+	fetchContext, cancel := context.WithTimeout(ctx, maximumRecordReadTime)
+	defer cancel()
+	recordSets, fetchErr := s.fetchAllRecordSets(fetchContext, client, zone)
 	if fetchErr != nil {
 		if !input.Refresh && cachedOK {
 			return paginateRecordSets(cached.recordSets, input, scope, limit, offset, cached.fetchedAt, true, fetchErr), nil
@@ -261,12 +269,10 @@ func (s *DNSService) ListRecordSets(ctx context.Context, zoneID uuid.UUID, input
 		return RecordSetPage{}, fetchErr
 	}
 	fetchedAt := s.now()
-	s.cacheMu.Lock()
-	s.recordCache[zoneID] = recordCacheEntry{
+	s.storeRecordFetch(zoneID, generation, recordCacheEntry{
 		accountID: zone.ProviderAccountID, credentialRevision: account.CredentialRevision,
 		fetchedAt: fetchedAt, recordSets: recordSets,
-	}
-	s.cacheMu.Unlock()
+	})
 	return paginateRecordSets(recordSets, input, scope, limit, offset, fetchedAt, false, nil), nil
 }
 
@@ -306,6 +312,8 @@ func (s *DNSService) CreateRecordSet(ctx context.Context, actor Actor, zoneID uu
 	if err = validateRecordCapabilities(client.Capabilities(ctx), normalized); err != nil {
 		return provider.RecordSet{}, s.auditRecordFailure(ctx, actor, zone, metadata, "recordset.create", "", nil, &normalized, err)
 	}
+	s.InvalidateZone(zoneID)
+	defer s.InvalidateZone(zoneID)
 	created, err := client.CreateRecordSet(ctx, zone.ProviderZoneID, normalized)
 	if err != nil {
 		return provider.RecordSet{}, s.auditRecordFailure(ctx, actor, zone, metadata, "recordset.create", "", nil, &normalized, provider.MapError(err, "create_record_set"))
@@ -349,6 +357,8 @@ func (s *DNSService) UpdateRecordSet(ctx context.Context, actor Actor, zoneID uu
 		conflict := newRecordConflict(current, normalized)
 		return provider.RecordSet{}, s.auditRecordFailure(ctx, actor, zone, metadata, "recordset.update", recordSetID, &current, &normalized, conflict)
 	}
+	s.InvalidateZone(zoneID)
+	defer s.InvalidateZone(zoneID)
 	updated, err := client.UpdateRecordSet(ctx, zone.ProviderZoneID, recordSetID, provider.UpdateRecordSetInput{
 		Desired: normalized, Precondition: input.Precondition,
 	})
@@ -391,6 +401,8 @@ func (s *DNSService) DeleteRecordSet(ctx context.Context, actor Actor, zoneID uu
 		conflict := &RecordConflictError{Cause: provider.NewError(provider.ErrConflict, "delete_record_set", "", 0, nil), Current: &current}
 		return s.auditRecordFailure(ctx, actor, zone, metadata, "recordset.delete", recordSetID, &current, nil, conflict)
 	}
+	s.InvalidateZone(zoneID)
+	defer s.InvalidateZone(zoneID)
 	if err = client.DeleteRecordSet(ctx, zone.ProviderZoneID, recordSetID, precondition); err != nil {
 		var mapped error = provider.MapError(err, "delete_record_set")
 		if provider.IsErrorCode(mapped, provider.ErrConflict) {
@@ -418,9 +430,21 @@ func (s *DNSService) BatchRecordSets(ctx context.Context, actor Actor, zoneID uu
 	if err != nil {
 		return BatchResult{}, err
 	}
-	if input.Operation == BatchDelete && len(input.Items) > batchConfirmThreshold && strings.TrimSpace(input.Confirmation) != zone.Name {
+	if input.Operation == BatchDelete && strings.TrimSpace(input.Confirmation) != zone.Name {
 		return BatchResult{}, ErrUnsafeBatchOperation
 	}
+	seenRecordSetIDs := make(map[string]struct{}, len(input.Items))
+	for _, item := range input.Items {
+		if item.RecordSetID == "" {
+			return BatchResult{}, ErrInvalidProviderInput
+		}
+		if _, duplicate := seenRecordSetIDs[item.RecordSetID]; duplicate {
+			return BatchResult{}, ErrUnsafeBatchOperation
+		}
+		seenRecordSetIDs[item.RecordSetID] = struct{}{}
+	}
+	batchContext, cancel := context.WithTimeout(ctx, maximumBatchTime)
+	defer cancel()
 
 	result := BatchResult{Total: len(input.Items), Items: make([]BatchItemResult, 0, len(input.Items))}
 	for _, item := range input.Items {
@@ -428,22 +452,22 @@ func (s *DNSService) BatchRecordSets(ctx context.Context, actor Actor, zoneID uu
 		precondition := provider.Precondition{ExpectedFingerprint: item.ExpectedFingerprint, ProviderVersion: item.ProviderVersion}
 		switch input.Operation {
 		case BatchDelete:
-			itemResult.Err = s.DeleteRecordSet(ctx, actor, zoneID, item.RecordSetID, precondition, metadata)
+			itemResult.Err = s.DeleteRecordSet(batchContext, actor, zoneID, item.RecordSetID, precondition, metadata)
 		case BatchTTLUpdate:
-			current, getErr := s.GetRecordSet(ctx, zoneID, item.RecordSetID)
+			current, getErr := s.GetRecordSet(batchContext, zoneID, item.RecordSetID)
 			if getErr != nil {
-				itemResult.Err = getErr
+				itemResult.Err = s.auditRecordFailure(ctx, actor, zone, metadata, "recordset.update", item.RecordSetID, nil, nil, getErr)
 				break
 			}
 			if item.TTL == 0 || current.Type == provider.RecordTypeSOA || automaticTTL(current) {
-				itemResult.Err = ErrUnsafeBatchOperation
+				itemResult.Err = s.auditRecordFailure(ctx, actor, zone, metadata, "recordset.update", item.RecordSetID, &current, nil, ErrUnsafeBatchOperation)
 				break
 			}
 			desired := provider.CreateRecordSetInput{
 				Name: current.Name, Type: current.Type, TTL: item.TTL,
 				Entries: current.Entries, Extensions: current.Extensions,
 			}
-			updated, updateErr := s.UpdateRecordSet(ctx, actor, zoneID, item.RecordSetID, UpdateRecordSetRequest{
+			updated, updateErr := s.UpdateRecordSet(batchContext, actor, zoneID, item.RecordSetID, UpdateRecordSetRequest{
 				Desired: desired, Precondition: precondition,
 			}, metadata)
 			itemResult.Err = updateErr
@@ -474,6 +498,7 @@ func (s *DNSService) ListAuditEvents(ctx context.Context, input AuditListInput) 
 	}
 	data, err := s.repository.ListAuditEvents(ctx, AuditQuery{
 		Actor: strings.TrimSpace(input.Actor), Action: strings.TrimSpace(input.Action),
+		DNSOnly:           input.Visibility == AuditVisibilityDNS,
 		ProviderAccountID: input.ProviderAccountID, ZoneID: input.ZoneID, Result: input.Result,
 		From: input.From, To: input.To, Offset: offset, Limit: limit,
 	})
@@ -490,17 +515,38 @@ func (s *DNSService) GetAuditEvent(ctx context.Context, eventID uuid.UUID) (audi
 	return s.repository.GetAuditEvent(ctx, eventID)
 }
 
+func (s *DNSService) GetVisibleAuditEvent(ctx context.Context, eventID uuid.UUID, visibility AuditVisibility) (audit.Event, error) {
+	event, err := s.repository.GetAuditEvent(ctx, eventID)
+	if err != nil {
+		return audit.Event{}, err
+	}
+	if visibility == AuditVisibilityDNS && !isDNSAuditEvent(event) {
+		return audit.Event{}, ErrAuditEventNotFound
+	}
+	return event, nil
+}
+
+func isDNSAuditEvent(event audit.Event) bool {
+	return (event.ResourceType == "zone" || event.ResourceType == "recordset") &&
+		(strings.HasPrefix(event.Action, "zone.") || strings.HasPrefix(event.Action, "recordset."))
+}
+
 func (s *DNSService) InvalidateZone(zoneID uuid.UUID) {
 	s.cacheMu.Lock()
-	delete(s.recordCache, zoneID)
+	state := s.recordCache[zoneID]
+	state.entry = recordCacheEntry{}
+	state.generation++
+	s.recordCache[zoneID] = state
 	s.cacheMu.Unlock()
 }
 
 func (s *DNSService) InvalidateAccount(accountID uuid.UUID) {
 	s.cacheMu.Lock()
-	for zoneID, entry := range s.recordCache {
-		if entry.accountID == accountID {
-			delete(s.recordCache, zoneID)
+	for zoneID, state := range s.recordCache {
+		if state.entry.accountID == accountID {
+			state.entry = recordCacheEntry{}
+			state.generation++
+			s.recordCache[zoneID] = state
 		}
 	}
 	s.cacheMu.Unlock()
@@ -508,9 +554,28 @@ func (s *DNSService) InvalidateAccount(accountID uuid.UUID) {
 
 func (s *DNSService) cachedRecordSets(zoneID uuid.UUID, credentialRevision uint64) (recordCacheEntry, bool) {
 	s.cacheMu.RLock()
-	entry, ok := s.recordCache[zoneID]
+	entry := s.recordCache[zoneID].entry
 	s.cacheMu.RUnlock()
-	return entry, ok && entry.credentialRevision == credentialRevision
+	return entry, !entry.fetchedAt.IsZero() && entry.credentialRevision == credentialRevision
+}
+
+func (s *DNSService) beginRecordFetch(zoneID uuid.UUID) uint64 {
+	s.cacheMu.Lock()
+	state := s.recordCache[zoneID]
+	state.generation++
+	s.recordCache[zoneID] = state
+	s.cacheMu.Unlock()
+	return state.generation
+}
+
+func (s *DNSService) storeRecordFetch(zoneID uuid.UUID, generation uint64, entry recordCacheEntry) {
+	s.cacheMu.Lock()
+	state := s.recordCache[zoneID]
+	if state.generation == generation {
+		state.entry = entry
+		s.recordCache[zoneID] = state
+	}
+	s.cacheMu.Unlock()
 }
 
 func (s *DNSService) fetchAllRecordSets(ctx context.Context, client provider.Provider, zone ZoneIndexEntry) ([]provider.RecordSet, error) {

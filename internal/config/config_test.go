@@ -101,6 +101,32 @@ func TestLoadDatabaseConfigurationRequiresMasterKey(t *testing.T) {
 	}
 }
 
+func TestLoadMasterKeyringVersions(t *testing.T) {
+	t.Parallel()
+	active := make([]byte, masterKeyBytes)
+	active[0] = 2
+	previous := make([]byte, masterKeyBytes)
+	previous[0] = 1
+	cfg, err := load(mapLookup(map[string]string{
+		"APP_MASTER_KEY":           base64.StdEncoding.EncodeToString(active),
+		"APP_MASTER_KEY_VERSION":   "2",
+		"APP_PREVIOUS_MASTER_KEYS": `{"1":"` + base64.StdEncoding.EncodeToString(previous) + `"}`,
+	}))
+	if err != nil {
+		t.Fatalf("load keyring: %v", err)
+	}
+	if cfg.MasterKeyVersion != 2 || len(cfg.PreviousMasterKeys[1]) != masterKeyBytes {
+		t.Fatalf("loaded keyring = active %d, previous %#v", cfg.MasterKeyVersion, cfg.PreviousMasterKeys)
+	}
+	if _, err = load(mapLookup(map[string]string{
+		"APP_MASTER_KEY":           base64.StdEncoding.EncodeToString(active),
+		"APP_MASTER_KEY_VERSION":   "2",
+		"APP_PREVIOUS_MASTER_KEYS": `{"2":"` + base64.StdEncoding.EncodeToString(previous) + `"}`,
+	})); err == nil {
+		t.Fatal("active key version was accepted as a previous key")
+	}
+}
+
 func mapLookup(values map[string]string) lookupEnv {
 	return func(key string) (string, bool) {
 		value, ok := values[key]

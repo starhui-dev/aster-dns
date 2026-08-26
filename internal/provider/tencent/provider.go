@@ -41,9 +41,8 @@ const (
 )
 
 type Provider struct {
-	client       *dnspod.Client
-	timeout      time.Duration
-	secretValues []string
+	client  *dnspod.Client
+	timeout time.Duration
 }
 
 type responseMetadata struct {
@@ -338,9 +337,9 @@ func readCall[T any](p *Provider, ctx context.Context, operation string, call fu
 		if attempt == readAttempts-1 || !retryableReadError(mapped) {
 			return nil, mapped
 		}
-		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
-		if mapped.RetryAfter > delay {
-			delay = mapped.RetryAfter
+		delay, retry := core.ReadRetryDelay(time.Duration(1<<attempt)*100*time.Millisecond, mapped.RetryAfter, time.Second)
+		if !retry {
+			return nil, mapped
 		}
 		if err = waitContext(ctx, delay); err != nil {
 			return nil, core.NewError(core.ErrTimeout, operation, mapped.ProviderRequestID, mapped.RetryAfter, p.sanitizedCause(err))

@@ -185,7 +185,7 @@ func (p *Provider) sanitizedCause(err error) error {
 	if err == nil {
 		return nil
 	}
-	message := core.Redact(err.Error(), p.secretValues...)
+	message := core.Redact(err.Error())
 	message = tencentSensitivePattern.ReplaceAllString(message, `${1}[REDACTED]`)
 	return errors.New(message)
 }

@@ -41,7 +41,6 @@ type Provider struct {
 	endpoint     string
 	roundTripper http.RoundTripper
 	timeout      time.Duration
-	secretValues []string
 }
 
 type responseMetadata struct {
@@ -270,9 +269,9 @@ func readCall[T any](p *Provider, ctx context.Context, operation string, call fu
 		if attempt == readAttempts-1 || !retryableReadError(mapped) || mapped.RetryAfter > time.Second {
 			return nil, metadata, mapped
 		}
-		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
-		if mapped.RetryAfter > delay {
-			delay = mapped.RetryAfter
+		delay, retry := core.ReadRetryDelay(time.Duration(1<<attempt)*100*time.Millisecond, mapped.RetryAfter, maximumReadRetryDelay)
+		if !retry {
+			return nil, metadata, mapped
 		}
 		if err = waitContext(ctx, delay); err != nil {
 			return nil, metadata, core.NewError(core.ErrTimeout, operation, mapped.ProviderRequestID, mapped.RetryAfter, err)
@@ -316,9 +315,13 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	if value == "" {
 		return 0
 	}
-	if seconds, err := strconv.Atoi(value); err == nil {
+	const maximumRetryAfter = 24 * time.Hour
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
 		if seconds <= 0 {
 			return 0
+		}
+		if seconds > int64(maximumRetryAfter/time.Second) {
+			return maximumRetryAfter
 		}
 		return time.Duration(seconds) * time.Second
 	}
@@ -326,7 +329,11 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	if err != nil || !when.After(now) {
 		return 0
 	}
-	return when.Sub(now)
+	delay := when.Sub(now)
+	if delay > maximumRetryAfter {
+		return maximumRetryAfter
+	}
+	return delay
 }
 
 func nextMarkerCursor(links *model.PageLink, ids []string, scope string) (string, error) {

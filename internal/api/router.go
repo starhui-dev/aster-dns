@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -18,16 +19,17 @@ type BuildInfo struct {
 }
 
 type Options struct {
-	Logger           *slog.Logger
-	Build            BuildInfo
-	ReadyCheck       func(context.Context) error
-	ReadyTimeout     time.Duration
-	WebDir           string
-	Auth             *auth.Service
-	ProviderAccounts *providerservice.ProviderAccountService
-	ZoneSync         *providerservice.ZoneSyncService
-	DNS              *providerservice.DNSService
-	HTTPS            bool
+	Logger            *slog.Logger
+	Build             BuildInfo
+	ReadyCheck        func(context.Context) error
+	ReadyTimeout      time.Duration
+	WebDir            string
+	Auth              *auth.Service
+	ProviderAccounts  *providerservice.ProviderAccountService
+	ZoneSync          *providerservice.ZoneSyncService
+	DNS               *providerservice.DNSService
+	HTTPS             bool
+	TrustedProxyCIDRs []*net.IPNet
 }
 
 type apiOverviewResponse struct {
@@ -45,6 +47,7 @@ type healthResponse struct {
 func NewRouter(options Options) http.Handler {
 	router := chi.NewRouter()
 	router.Use(httpx.RequestID)
+	router.Use(httpx.RealIP(options.TrustedProxyCIDRs))
 	router.Use(httpx.SecurityHeaders(options.HTTPS))
 	router.Use(httpx.AccessLog(options.Logger))
 	router.Use(httpx.Recoverer(options.Logger))

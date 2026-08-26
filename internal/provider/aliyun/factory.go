@@ -179,9 +179,8 @@ func (f *Factory) Build(ctx context.Context, config core.AccountConfig, credenti
 	client.Client.DisableSDKError = dara.Bool(true)
 
 	return &Provider{
-		client:       client,
-		timeout:      timeout,
-		secretValues: []string{values.AccessKeyID, values.AccessKeySecret, values.SecurityToken},
+		client:  client,
+		timeout: timeout,
 	}, nil
 }
 

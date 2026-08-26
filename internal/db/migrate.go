@@ -105,6 +105,34 @@ func CheckReady(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
+func ReadEncryptionKeyVersions(ctx context.Context, pool *pgxpool.Pool) ([]int, error) {
+	if pool == nil {
+		return nil, errors.New("database is not configured")
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT DISTINCT key_version FROM (
+			SELECT credential_key_version AS key_version FROM provider_accounts WHERE credential_key_version IS NOT NULL
+			UNION ALL
+			SELECT key_version FROM totp_credentials
+		) encrypted_rows ORDER BY key_version`)
+	if err != nil {
+		return nil, errors.New("read encrypted data key versions")
+	}
+	defer rows.Close()
+	versions := make([]int, 0)
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil || version <= 0 {
+			return nil, errors.New("read encrypted data key versions")
+		}
+		versions = append(versions, version)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.New("read encrypted data key versions")
+	}
+	return versions, nil
+}
+
 func pgxMigrationURL(databaseURL string) (string, error) {
 	parsed, err := url.Parse(databaseURL)
 	if err != nil {

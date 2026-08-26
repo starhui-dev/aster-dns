@@ -141,5 +141,5 @@ func (p *Provider) sanitizedCause(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return context.DeadlineExceeded
 	}
-	return errors.New(core.Redact(err.Error(), p.secretValues...))
+	return errors.New("Alibaba Cloud DNS upstream details [REDACTED]")
 }

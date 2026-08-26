@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider } from "../app/AuthContext";
@@ -27,6 +27,17 @@ describe("ProviderAccountsPage", () => {
     expect(await screen.findByLabelText("Access key (AK)")).toHaveValue("");
     expect(screen.getByLabelText("Secret key (SK)")).toHaveAttribute("type", "password");
     expect(screen.getByLabelText("DNS region")).toBeInTheDocument();
+
+    const canary = "frontend-credential-canary-random-long-550195f2";
+    fireEvent.input(screen.getByLabelText("Access key (AK)"), { target: { value: canary } });
+    expect(document.body.textContent).not.toContain(canary);
+    expect(JSON.stringify(window.localStorage)).not.toContain(canary);
+    expect(JSON.stringify(window.sessionStorage)).not.toContain(canary);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close provider editor" }));
+    await waitFor(() => expect(screen.queryByLabelText("Access key (AK)")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Add provider account" }));
+    expect(await screen.findByLabelText("Access key (AK)")).toHaveValue("");
   });
 });
 

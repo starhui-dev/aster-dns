@@ -63,6 +63,7 @@ func TestAuthenticationMiddlewareAndCSRFProtection(t *testing.T) {
 
 	unauthenticated := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/mutation", nil)
+	request.Host = service.config.PublicURL.Host
 	request.Header.Set("Origin", service.Origin())
 	handler.ServeHTTP(unauthenticated, request)
 	if unauthenticated.Code != http.StatusUnauthorized {
@@ -71,6 +72,7 @@ func TestAuthenticationMiddlewareAndCSRFProtection(t *testing.T) {
 
 	invalid := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/mutation", nil)
+	request.Host = service.config.PublicURL.Host
 	request.Header.Set("Origin", service.Origin())
 	request.Header.Set(csrfHeader, issued.CSRFToken)
 	request.AddCookie(&http.Cookie{Name: service.sessionCookieName(), Value: issued.Token})
@@ -82,6 +84,7 @@ func TestAuthenticationMiddlewareAndCSRFProtection(t *testing.T) {
 
 	valid := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/mutation", nil)
+	request.Host = service.config.PublicURL.Host
 	request.Header.Set("Origin", service.Origin())
 	request.Header.Set(csrfHeader, issued.CSRFToken)
 	request.AddCookie(&http.Cookie{Name: service.sessionCookieName(), Value: issued.Token})
@@ -124,6 +127,27 @@ func TestAuthorizationMiddlewareRoleMatrix(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.Code, test.status)
 			}
 		})
+	}
+}
+
+func TestLoginLimiterBoundsAttemptsAndTrackedKeys(t *testing.T) {
+	t.Parallel()
+	limiter := NewLoginLimiter(2, time.Minute, 2)
+	now := time.Now().UTC()
+	if !limiter.Allow("password-ip|192.0.2.1", now) || !limiter.Allow("password-ip|192.0.2.1", now) {
+		t.Fatal("initial login attempts were rejected")
+	}
+	if limiter.Allow("password-ip|192.0.2.1", now) {
+		t.Fatal("brute-force attempt exceeded limiter burst")
+	}
+	if !limiter.Allow("password-ip|192.0.2.2", now) || !limiter.Allow("password-ip|192.0.2.3", now) {
+		t.Fatal("independent login sources were rejected")
+	}
+	limiter.mu.Lock()
+	tracked := len(limiter.entries)
+	limiter.mu.Unlock()
+	if tracked != 2 {
+		t.Fatalf("tracked limiter keys = %d, want 2", tracked)
 	}
 }
 

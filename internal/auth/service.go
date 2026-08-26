@@ -23,13 +23,14 @@ type Config struct {
 }
 
 type Service struct {
-	store     Store
-	webauthn  *webauthn.WebAuthn
-	passwords *PasswordHasher
-	totp      *TOTPService
-	limiter   *LoginLimiter
-	config    Config
-	now       func() time.Time
+	store         Store
+	webauthn      *webauthn.WebAuthn
+	passwords     *PasswordHasher
+	totp          *TOTPService
+	limiter       *LoginLimiter
+	publicLimiter *LoginLimiter
+	config        Config
+	now           func() time.Time
 }
 
 func NewService(store Store, envelope *secretcrypto.Envelope, config Config) (*Service, error) {
@@ -69,14 +70,20 @@ func NewService(store Store, envelope *secretcrypto.Envelope, config Config) (*S
 		return nil, errors.New("session refresh interval is invalid")
 	}
 	return &Service{
-		store:     store,
-		webauthn:  webAuthn,
-		passwords: passwords,
-		totp:      NewTOTPService(envelope),
-		limiter:   NewLoginLimiter(5, time.Minute, 10_000),
-		config:    config,
-		now:       func() time.Time { return time.Now().UTC() },
+		store:         store,
+		webauthn:      webAuthn,
+		passwords:     passwords,
+		totp:          NewTOTPService(envelope),
+		limiter:       NewLoginLimiter(5, time.Minute, 10_000),
+		publicLimiter: NewLoginLimiter(20, time.Minute, 10_000),
+		config:        config,
+		now:           func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+func (s *Service) allowPublicAuth(operation string, metadata RequestMetadata) bool {
+	return s.publicLimiter.Allow("public-auth-ip|"+metadata.IP, s.now()) &&
+		s.publicLimiter.Allow("public-auth-operation|"+operation+"|"+metadata.IP, s.now())
 }
 
 func (s *Service) Origin() string {

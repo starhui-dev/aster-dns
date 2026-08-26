@@ -20,7 +20,10 @@ type EnrollmentVerifyInput struct {
 	Credential      json.RawMessage
 }
 
-func (s *Service) BeginEnrollment(ctx context.Context, input EnrollmentBeginInput) (RegistrationOptions, error) {
+func (s *Service) BeginEnrollment(ctx context.Context, input EnrollmentBeginInput, metadata RequestMetadata) (RegistrationOptions, error) {
+	if !s.allowPublicAuth("enrollment_begin", metadata) {
+		return RegistrationOptions{}, ErrRateLimited
+	}
 	if !ValidOpaqueToken(input.EnrollmentToken) {
 		return RegistrationOptions{}, ErrInvalidCredentials
 	}
@@ -55,6 +58,9 @@ func (s *Service) BeginEnrollment(ctx context.Context, input EnrollmentBeginInpu
 }
 
 func (s *Service) FinishEnrollment(ctx context.Context, input EnrollmentVerifyInput, metadata RequestMetadata) (IssuedSession, error) {
+	if !s.allowPublicAuth("enrollment_finish", metadata) {
+		return IssuedSession{}, ErrRateLimited
+	}
 	if !ValidOpaqueToken(input.EnrollmentToken) || !ValidOpaqueToken(input.CeremonyToken) {
 		return IssuedSession{}, ErrInvalidCredentials
 	}

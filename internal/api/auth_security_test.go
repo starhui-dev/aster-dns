@@ -95,6 +95,7 @@ func TestAuthAPIDeniesInvalidCSRFAndOrigin(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+			request.Host = "dns.example.test"
 			request.Header.Set("Origin", test.origin)
 			request.Header.Set("X-CSRF-Token", test.csrfHeader)
 			request.AddCookie(&http.Cookie{Name: "__Host-aster_session", Value: rawToken})
@@ -109,12 +110,13 @@ func TestAuthAPIDeniesInvalidCSRFAndOrigin(t *testing.T) {
 }
 
 func TestAuthAPILogAuditAndResponseDoNotLeakCanarySecrets(t *testing.T) {
-	const canary = "canary-password-session-totp-secret"
+	const canary = "canary-password-session-totp-random-long-7fce6b7b0aa14ec8998c"
 	store := &apiAuthStore{}
 	service, _, _ := newAPIAuthService(t, store, true, auth.RoleAdmin)
 	router, logs := newAuthTestRouter(service)
 	body, _ := json.Marshal(map[string]string{"username": "missing-user", "password": canary})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login/password", bytes.NewReader(body))
+	request.Host = "dns.example.test"
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Origin", service.Origin())
 	response := httptest.NewRecorder()
