@@ -124,6 +124,7 @@ func (f *Factory) Build(ctx context.Context, _ core.AccountConfig, credential co
 		timeout = defaultRequestTimeout
 	}
 	opts := []option.RequestOption{
+		option.WithEnvironmentProduction(),
 		option.WithAPIToken(values.APIToken),
 		option.WithMaxRetries(0),
 		option.WithRequestTimeout(timeout),

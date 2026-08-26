@@ -60,6 +60,17 @@ type capturedRequest struct {
 	Email         string
 }
 
+type errorHTTPClient struct {
+	calls   int
+	lastURL string
+}
+
+func (c *errorHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	c.calls++
+	c.lastURL = request.URL.String()
+	return nil, errors.New("transport canary")
+}
+
 type cloudflareFixture struct {
 	t                 *testing.T
 	server            *httptest.Server
@@ -429,6 +440,37 @@ func TestFactoryUsesScopedAPITokenOnly(t *testing.T) {
 		if request.APIKey != "" || request.Email != "" {
 			t.Fatalf("legacy global API key headers leaked: %#v", request)
 		}
+	}
+}
+
+func TestFactoryUsesProductionBaseURLByDefault(t *testing.T) {
+	httpClient := &errorHTTPClient{}
+	factory := &Factory{httpClient: httpClient, timeout: time.Second}
+	built, err := factory.Build(context.Background(), core.AccountConfig{
+		ID: "00000000-0000-7000-8000-000000000005", Type: Type, Name: "fixture", Options: json.RawMessage(`{}`), CredentialRevision: 1,
+	}, core.NewCredential([]byte(`{"api_token":"`+fixtureToken+`"}`)))
+	if err != nil {
+		t.Fatalf("build provider: %v", err)
+	}
+	provider, ok := built.(*Provider)
+	if !ok {
+		t.Fatalf("provider type = %T", built)
+	}
+	if err = provider.ValidateCredentials(context.Background()); err == nil {
+		t.Fatal("validate credentials unexpectedly succeeded")
+	}
+	var providerErr *core.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != core.ErrUpstream {
+		t.Fatalf("validation error = %v", err)
+	}
+	if httpClient.calls == 0 {
+		t.Fatal("default production base URL did not reach the HTTP client")
+	}
+	if !strings.HasPrefix(httpClient.lastURL, "https://api.cloudflare.com/client/v4/zones") {
+		t.Fatalf("default request URL = %q", httpClient.lastURL)
+	}
+	if strings.Contains(err.Error(), "base url is not set") {
+		t.Fatalf("default base URL was not configured: %v", err)
 	}
 }
 
