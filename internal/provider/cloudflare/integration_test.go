@@ -47,16 +47,34 @@ func TestCloudflareIntegrationReadOnly(t *testing.T) {
 	if err := provider.ValidateCredentials(ctx); err != nil {
 		t.Fatalf("validate credentials: %v", err)
 	}
-	zones, err := provider.ListZones(ctx, core.PageRequest{Limit: 1})
-	if err != nil {
-		t.Fatalf("list zones: %v", err)
+	zoneID := os.Getenv("CLOUDFLARE_DNS_TEST_ZONE_ID")
+	if zoneID == "" {
+		t.Skip("CLOUDFLARE_DNS_TEST_ZONE_ID must identify a dedicated test zone")
 	}
-	if len(zones.Items) == 0 {
-		t.Skip("Cloudflare account has no zones")
+	zoneRequest := core.PageRequest{Limit: 1}
+	zoneFound := false
+	for {
+		zones, err := provider.ListZones(ctx, zoneRequest)
+		if err != nil {
+			t.Fatalf("list zones: %v", err)
+		}
+		for _, candidate := range zones.Items {
+			if candidate.ID == zoneID {
+				zoneFound = true
+				break
+			}
+		}
+		if zoneFound || zones.NextCursor == "" {
+			break
+		}
+		zoneRequest.Cursor = zones.NextCursor
 	}
-	zone, err := provider.GetZone(ctx, zones.Items[0].ID)
+	if !zoneFound {
+		t.Fatalf("dedicated test zone %q was not found in list zones", zoneID)
+	}
+	zone, err := provider.GetZone(ctx, zoneID)
 	if err != nil {
-		t.Fatalf("get zone: %v", err)
+		t.Fatalf("get dedicated test zone: %v", err)
 	}
 	recordSets, err := provider.ListRecordSets(ctx, zone.ID, core.PageRequest{Limit: 1})
 	if err != nil {
@@ -65,6 +83,11 @@ func TestCloudflareIntegrationReadOnly(t *testing.T) {
 	if len(recordSets.Items) > 0 {
 		if _, err = provider.GetRecordSet(ctx, zone.ID, recordSets.Items[0].ID); err != nil {
 			t.Fatalf("get record set: %v", err)
+		}
+	}
+	if recordSets.NextCursor != "" {
+		if _, err = provider.ListRecordSets(ctx, zone.ID, core.PageRequest{Cursor: recordSets.NextCursor, Limit: 1}); err != nil {
+			t.Fatalf("list record sets next page: %v", err)
 		}
 	}
 }
