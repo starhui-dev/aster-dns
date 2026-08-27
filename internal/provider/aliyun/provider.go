@@ -25,11 +25,12 @@ const (
 	operationUpdateRecordSet     = "update_record_set"
 	operationDeleteRecordSet     = "delete_record_set"
 
-	aliyunDomainPageSize  = int64(100)
-	aliyunRecordPageSize  = int64(500)
-	readAttempts          = 3
-	maximumReadRetryDelay = time.Second
-	offsetCursorPrefix    = "aliyun-offset-v1:"
+	aliyunDomainPageSize         = int64(100)
+	aliyunRecordPageSize         = int64(500)
+	readAttempts                 = 3
+	maximumReadRetryDelay        = time.Second
+	aliyunFinalStateReadAttempts = 5
+	offsetCursorPrefix           = "aliyun-offset-v1:"
 )
 
 const (

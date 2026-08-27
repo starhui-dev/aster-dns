@@ -6,8 +6,10 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"testing"
 	"time"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 	"github.com/starhui-dev/aster-dns/internal/audit"
 )
@@ -102,10 +104,13 @@ func (s *memoryStore) InsertUser(_ context.Context, user User) error {
 	return nil
 }
 
-func (s *memoryStore) UpdateUser(_ context.Context, id uuid.UUID, changes UserChanges) (User, error) {
+func (s *memoryStore) UpdateUser(_ context.Context, id uuid.UUID, expectedUpdatedAt time.Time, changes UserChanges) (User, error) {
 	user, ok := s.users[id]
 	if !ok {
 		return User{}, ErrNotFound
+	}
+	if !user.UpdatedAt.Equal(expectedUpdatedAt) {
+		return User{}, ErrConflict
 	}
 	if changes.DisplayName != nil {
 		user.DisplayName = *changes.DisplayName
@@ -127,12 +132,16 @@ func (s *memoryStore) UpdateUser(_ context.Context, id uuid.UUID, changes UserCh
 	return cloneMemoryUser(user), nil
 }
 
-func (s *memoryStore) SetUserDisabled(_ context.Context, id uuid.UUID, disabledAt *time.Time) (User, error) {
+func (s *memoryStore) SetUserDisabled(_ context.Context, id uuid.UUID, expectedUpdatedAt time.Time, disabledAt *time.Time) (User, error) {
 	user, ok := s.users[id]
 	if !ok {
 		return User{}, ErrNotFound
 	}
+	if !user.UpdatedAt.Equal(expectedUpdatedAt) {
+		return User{}, ErrConflict
+	}
 	user.DisabledAt = disabledAt
+	user.UpdatedAt = time.Now().UTC()
 	s.users[id] = user
 	return cloneMemoryUser(user), nil
 }
@@ -177,13 +186,17 @@ func (s *memoryStore) DeletePasskey(_ context.Context, userID, passkeyID uuid.UU
 	return Passkey{}, ErrNotFound
 }
 
-func (s *memoryStore) UpdatePasskey(_ context.Context, passkey Passkey) error {
+func (s *memoryStore) UpdatePasskey(_ context.Context, update Passkey, expectedSignCount uint32) error {
+	passkey := update
 	user, ok := s.users[passkey.UserID]
 	if !ok {
 		return ErrNotFound
 	}
 	for index := range user.Passkeys {
 		if user.Passkeys[index].ID == passkey.ID {
+			if user.Passkeys[index].Credential.Authenticator.SignCount != expectedSignCount {
+				return ErrConflict
+			}
 			user.Passkeys[index] = passkey
 			s.users[user.ID] = user
 			return nil
@@ -383,4 +396,20 @@ func cloneMemoryUser(user User) User {
 }
 
 var _ Store = (*memoryStore)(nil)
-var _ = errors.Is
+
+func TestMemoryStoreUpdatePasskeyRejectsStaleSignCount(t *testing.T) {
+	store := newMemoryStore()
+	userID := uuid.New()
+	passkeyID := uuid.New()
+	store.users[userID] = User{ID: userID, Passkeys: []Passkey{{
+		ID: passkeyID, UserID: userID, Credential: webauthn.Credential{Authenticator: webauthn.Authenticator{SignCount: 7}},
+	}}}
+	updated := store.users[userID].Passkeys[0]
+	updated.Credential.Authenticator.SignCount = 8
+	if err := store.UpdatePasskey(context.Background(), updated, 6); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale sign count error = %v", err)
+	}
+	if got := store.users[userID].Passkeys[0].Credential.Authenticator.SignCount; got != 7 {
+		t.Fatalf("stale update changed sign count to %d", got)
+	}
+}

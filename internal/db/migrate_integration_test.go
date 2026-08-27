@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/starhui-dev/aster-dns/migrations"
 )
@@ -66,6 +67,52 @@ func TestMigrationsCleanIncrementalAndIdempotent(t *testing.T) {
 		"audit_events_no_truncate",
 	} {
 		assertMigrationObject(t, ctx, databaseURL, object, true)
+	}
+	for _, object := range []string{
+		"audit_events_actor_user_id_fkey",
+		"audit_events_provider_account_id_fkey",
+		"audit_events_zone_id_fkey",
+	} {
+		assertMigrationObject(t, ctx, databaseURL, object, false)
+	}
+}
+
+func TestAuditReferencesSurviveProviderAccountDeletion(t *testing.T) {
+	databaseURL := strings.TrimSpace(os.Getenv("MIGRATION_TEST_DATABASE_URL"))
+	if databaseURL == "" || os.Getenv("MIGRATION_TEST_ALLOW_RESET") != "1" {
+		t.Skip("dedicated migration database is not configured")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := MigrateUp(ctx, databaseURL); err != nil {
+		t.Fatalf("ensure latest schema for deletion audit: %v", err)
+	}
+	pool := openMigrationTestPool(t, ctx, databaseURL)
+	defer pool.Close()
+	userID := uuid.New()
+	accountID := uuid.New()
+	auditID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, role) VALUES ($1, $2, 'admin')`, userID, "migration-"+userID.String()); err != nil {
+		t.Fatalf("seed deletion audit user: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO provider_accounts (id, provider_type, name) VALUES ($1, 'fixture', $2)`, accountID, "migration-"+accountID.String()); err != nil {
+		t.Fatalf("seed deletion audit account: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO audit_events (id, actor_user_id, actor_username_snapshot, action, resource_type, resource_id, provider_account_id, request_id, result, error_code)
+		VALUES ($1, $2, 'admin', 'provider_account.delete', 'provider_account', $3, $4, 'migration-delete', 'succeeded', NULL)`,
+		auditID, userID, accountID.String(), accountID); err != nil {
+		t.Fatalf("seed deletion audit event: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM provider_accounts WHERE id = $1`, accountID); err != nil {
+		t.Fatalf("delete provider account with immutable audit: %v", err)
+	}
+	var retainedID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT provider_account_id FROM audit_events WHERE id = $1`, auditID).Scan(&retainedID); err != nil {
+		t.Fatalf("read retained deletion audit: %v", err)
+	}
+	if retainedID != accountID {
+		t.Fatalf("retained provider account ID = %s, want %s", retainedID, accountID)
 	}
 }
 

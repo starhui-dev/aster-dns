@@ -225,6 +225,11 @@ function UserRow(props: {
   const toggleDisabled = () => {
     const id = props.user.id;
     const disabled = props.user.disabled_at === undefined;
+    if (
+      disabled &&
+      !window.confirm(`Disable user “${props.user.username}” and revoke active sessions?`)
+    )
+      return;
     const reload = props.reload;
     const run = props.run;
     void run(async () => {

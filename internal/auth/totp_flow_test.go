@@ -77,3 +77,120 @@ func TestTOTPSetupConfirmAndLoginReplayProtection(t *testing.T) {
 		t.Fatalf("TOTP secret leaked to audit: %s", auditJSON)
 	}
 }
+
+func TestLogoutInvalidatesPendingTOTPLogin(t *testing.T) {
+	service, store, _ := newTestService(t, true)
+	baseTime := time.Unix(1_787_600_000, 0).UTC()
+	service.now = func() time.Time { return baseTime }
+	user := testUser(t, RoleAdmin)
+	user.TOTPRequired = true
+	store.users[user.ID] = user
+	credential, key, err := service.totp.Setup(user, 1, baseTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmedAt := baseTime
+	credential.ConfirmedAt = &confirmedAt
+	store.totp[user.ID] = credential
+	current, err := service.newSession(user, AuthMethodPasskey, RequestMetadata{RequestID: "req_current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.sessions[current.Session.ID] = current.Session
+	pending, err := service.completePrimaryLogin(context.Background(), user, AuthMethodPasskey, RequestMetadata{RequestID: "req_pending"}, nil)
+	if err != nil || !pending.TOTPRequired {
+		t.Fatalf("pending login = %+v, %v", pending, err)
+	}
+	if err = service.Logout(context.Background(), AuthenticatedSession{Session: current.Session, User: user}, RequestMetadata{RequestID: "req_logout"}, false); err != nil {
+		t.Fatal(err)
+	}
+	provisioningKey, err := otp.NewKeyFromURL(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := totp.GenerateCode(provisioningKey.Secret(), baseTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.CompleteTOTPLogin(context.Background(), pending.TOTPToken, code, RequestMetadata{RequestID: "req_stale_totp"}); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("stale pending TOTP error = %v", err)
+	}
+}
+
+func TestRevokeOtherSessionInvalidatesPendingTOTPLogin(t *testing.T) {
+	service, store, _ := newTestService(t, true)
+	baseTime := time.Unix(1_787_600_000, 0).UTC()
+	service.now = func() time.Time { return baseTime }
+	user := testUser(t, RoleAdmin)
+	user.TOTPRequired = true
+	store.users[user.ID] = user
+	credential, key, err := service.totp.Setup(user, 1, baseTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmedAt := baseTime
+	credential.ConfirmedAt = &confirmedAt
+	store.totp[user.ID] = credential
+	current, err := service.newSession(user, AuthMethodPasskey, RequestMetadata{RequestID: "req_current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := service.newSession(user, AuthMethodPassword, RequestMetadata{RequestID: "req_other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.sessions[current.Session.ID] = current.Session
+	store.sessions[other.Session.ID] = other.Session
+	pending, err := service.completePrimaryLogin(context.Background(), user, AuthMethodPasskey, RequestMetadata{RequestID: "req_pending"}, nil)
+	if err != nil || !pending.TOTPRequired {
+		t.Fatalf("pending login = %+v, %v", pending, err)
+	}
+	if revoked, revokeErr := service.RevokeSession(context.Background(), AuthenticatedSession{Session: current.Session, User: user}, other.Session.ID, RequestMetadata{RequestID: "req_revoke"}); revokeErr != nil || !revoked {
+		t.Fatalf("revoke other session = %v, %v", revoked, revokeErr)
+	}
+	provisioningKey, err := otp.NewKeyFromURL(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := totp.GenerateCode(provisioningKey.Secret(), baseTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.CompleteTOTPLogin(context.Background(), pending.TOTPToken, code, RequestMetadata{RequestID: "req_stale_totp"}); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("stale pending TOTP error = %v", err)
+	}
+}
+
+func TestDisablingUserInvalidatesEnrollmentAndTOTPChallenges(t *testing.T) {
+	service, store, _ := newTestService(t, false)
+	baseTime := time.Unix(1_787_600_000, 0).UTC()
+	service.now = func() time.Time { return baseTime }
+	admin := testUser(t, RoleAdmin)
+	target := testUser(t, RoleOperator)
+	store.users[admin.ID] = admin
+	store.users[target.ID] = target
+	current, err := service.newSession(admin, AuthMethodPasskey, RequestMetadata{RequestID: "req_disable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.sessions[current.Session.ID] = current.Session
+	tokens := make(map[ChallengeKind]string)
+	for _, kind := range []ChallengeKind{ChallengePendingTOTP, ChallengeEnrollmentGrant, ChallengeEnrollmentRegistration} {
+		challenge, rawToken, challengeErr := service.createChallenge(kind, &target.ID, nil, nil, nil, nil, AuthMethodPasskey, service.config.ChallengeTTL)
+		if challengeErr != nil {
+			t.Fatal(challengeErr)
+		}
+		if err = store.InsertChallenge(context.Background(), challenge); err != nil {
+			t.Fatal(err)
+		}
+		tokens[kind] = rawToken
+	}
+	if _, err = service.SetUserDisabled(context.Background(), AuthenticatedSession{Session: current.Session, User: admin}, target.ID, true, RequestMetadata{RequestID: "req_disable"}); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	for kind, rawToken := range tokens {
+		if _, err = store.GetChallenge(context.Background(), HashToken(rawToken), kind, baseTime); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("challenge %s remained after disable: %v", kind, err)
+		}
+	}
+}

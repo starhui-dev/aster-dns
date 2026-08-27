@@ -126,7 +126,8 @@ type AliyunRecordSetExtensions struct {
 }
 
 type TencentRecordSetExtensions struct {
-	Status string `json:"status,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Default *bool  `json:"default,omitempty"`
 }
 
 type RecordEntryExtensions struct {

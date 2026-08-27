@@ -157,13 +157,16 @@ func (s *Service) UpdateUser(ctx context.Context, current AuthenticatedSession, 
 			}
 		}
 		var updateErr error
-		updated, updateErr = store.UpdateUser(ctx, userID, changes)
+		updated, updateErr = store.UpdateUser(ctx, userID, before.UpdatedAt, changes)
 		if updateErr != nil {
 			return updateErr
 		}
 		if securityChanged {
 			if _, revokeErr := store.RevokeAllSessions(ctx, userID, nil, s.now()); revokeErr != nil {
 				return revokeErr
+			}
+			if deleteErr := store.DeleteChallengesForUser(ctx, userID, ChallengePendingTOTP); deleteErr != nil {
+				return deleteErr
 			}
 		}
 		event, eventErr := newAuditEvent(metadata, &current.User, "auth.user.updated", "user", userID.String(), audit.ResultSucceeded, "")
@@ -205,13 +208,18 @@ func (s *Service) SetUserDisabled(ctx context.Context, current AuthenticatedSess
 			}
 		}
 		var updateErr error
-		updated, updateErr = store.SetUserDisabled(ctx, userID, disabledAt)
+		updated, updateErr = store.SetUserDisabled(ctx, userID, before.UpdatedAt, disabledAt)
 		if updateErr != nil {
 			return updateErr
 		}
 		if disabled {
 			if _, revokeErr := store.RevokeAllSessions(ctx, userID, nil, s.now()); revokeErr != nil {
 				return revokeErr
+			}
+			for _, kind := range []ChallengeKind{ChallengePendingTOTP, ChallengeEnrollmentGrant, ChallengeEnrollmentRegistration} {
+				if deleteErr := store.DeleteChallengesForUser(ctx, userID, kind); deleteErr != nil {
+					return deleteErr
+				}
 			}
 		}
 		action := "auth.user.enabled"

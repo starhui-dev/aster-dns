@@ -149,7 +149,7 @@ func (s *Service) CompleteTOTPLogin(ctx context.Context, rawToken, code string, 
 	return issued, nil
 }
 
-func (s *Service) completePrimaryLogin(ctx context.Context, user User, method AuthMethod, metadata RequestMetadata, updatePasskey *Passkey) (LoginResult, error) {
+func (s *Service) completePrimaryLogin(ctx context.Context, user User, method AuthMethod, metadata RequestMetadata, updatePasskey *PasskeyUpdate) (LoginResult, error) {
 	if user.TOTPRequired {
 		challenge, rawToken, err := s.createChallenge(ChallengePendingTOTP, &user.ID, nil, nil, nil, nil, method, s.config.ChallengeTTL)
 		if err != nil {
@@ -157,7 +157,7 @@ func (s *Service) completePrimaryLogin(ctx context.Context, user User, method Au
 		}
 		err = s.store.WithinTx(ctx, func(store Store) error {
 			if updatePasskey != nil {
-				if updateErr := store.UpdatePasskey(ctx, *updatePasskey); updateErr != nil {
+				if updateErr := store.UpdatePasskey(ctx, updatePasskey.Passkey, updatePasskey.ExpectedSignCount); updateErr != nil {
 					return updateErr
 				}
 			}
@@ -182,7 +182,7 @@ func (s *Service) completePrimaryLogin(ctx context.Context, user User, method Au
 	}
 	err = s.store.WithinTx(ctx, func(store Store) error {
 		if updatePasskey != nil {
-			if updateErr := store.UpdatePasskey(ctx, *updatePasskey); updateErr != nil {
+			if updateErr := store.UpdatePasskey(ctx, updatePasskey.Passkey, updatePasskey.ExpectedSignCount); updateErr != nil {
 				return updateErr
 			}
 		}

@@ -83,7 +83,10 @@ func (e *Envelope) Encrypt(plaintext, aad []byte) (ciphertext, nonce []byte, key
 	if e == nil || len(plaintext) == 0 || len(plaintext) > maximumPlaintextSize {
 		return nil, nil, 0, errors.New("secret plaintext size is invalid")
 	}
-	aead := e.aeads[e.activeVersion]
+	aead, ok := e.aeads[e.activeVersion]
+	if !ok || aead == nil {
+		return nil, nil, 0, errors.New("secret envelope is not initialized")
+	}
 	nonce = make([]byte, aead.NonceSize())
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, 0, errors.New("generate encryption nonce")

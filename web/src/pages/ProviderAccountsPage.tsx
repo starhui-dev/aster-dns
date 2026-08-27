@@ -34,7 +34,7 @@ interface EditorState {
   account?: ProviderAccount;
 }
 
-export default function ProviderAccountsPage() {
+export default function ProviderAccountsPage(props: { accountId?: string } = {}) {
   const auth = useAuth();
   const [providers, setProviders] = createSignal<ProviderTypeDefinition[]>([]);
   const [accounts, setAccounts] = createSignal<ProviderAccount[]>([]);
@@ -43,13 +43,15 @@ export default function ProviderAccountsPage() {
   const [error, setError] = createSignal<{ message: string; requestId?: string } | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
   const [editor, setEditor] = createSignal<EditorState | null>(null);
+
+  let openedAccountID: string | undefined;
   const [dialog, setDialog] = createSignal<HTMLDialogElement>();
   const isAdmin = createMemo(() => {
     const state = auth.state();
     return state.kind === "authenticated" && state.session.user.role === "admin";
   });
 
-  const load = async (signal?: AbortSignal) => {
+  const load = async (signal?: AbortSignal, clearError = true) => {
     setLoading(true);
     try {
       const [catalog, accountList] = await Promise.all([
@@ -58,7 +60,7 @@ export default function ProviderAccountsPage() {
       ]);
       setProviders(catalog.provider_types);
       setAccounts(accountList.provider_accounts);
-      setError(null);
+      if (clearError) setError(null);
     } catch (caught) {
       setError(errorState(caught));
     } finally {
@@ -79,6 +81,20 @@ export default function ProviderAccountsPage() {
     if (editor() === null && element.open) element.close();
   });
 
+  createEffect(() => {
+    const accountID = props.accountId;
+    if (accountID === undefined || openedAccountID === accountID) return;
+    const account = accounts().find((item) => item.id === accountID);
+    if (account === undefined) return;
+    openedAccountID = accountID;
+    queueMicrotask(() =>
+      document
+        .getElementById(`provider-account-${accountID}`)
+        ?.scrollIntoView?.({ block: "center" }),
+    );
+    if (isAdmin()) setEditor({ mode: "edit", account });
+  });
+
   const run = async (operation: () => Promise<void>, success: string) => {
     setBusy(true);
     setError(null);
@@ -89,7 +105,7 @@ export default function ProviderAccountsPage() {
     } catch (caught) {
       setError(errorState(caught));
     } finally {
-      await load();
+      await load(undefined, false);
       setBusy(false);
     }
   };
@@ -153,39 +169,46 @@ export default function ProviderAccountsPage() {
             }
           >
             {(account) => (
-              <AccountCard
-                account={account}
-                provider={providers().find((item) => item.type === account.provider_type)}
-                admin={isAdmin()}
-                busy={busy()}
-                edit={() => setEditor({ mode: "edit", account })}
-                replaceCredentials={() => setEditor({ mode: "credentials", account })}
-                validate={() =>
-                  void run(async () => {
-                    await validateProviderAccount(account.id);
-                  }, `${account.name} validated.`)
-                }
-                sync={() =>
-                  void run(async () => {
-                    const result = await syncProviderZones(account.id);
-                    setNotice(`${account.name} synchronized ${result.zone_count} zones.`);
-                  }, `${account.name} zones synchronized.`)
-                }
-                toggle={() =>
-                  void run(
-                    async () => {
-                      await updateProviderAccount(account.id, { enabled: !account.enabled });
-                    },
-                    `${account.name} ${account.enabled ? "disabled" : "enabled"}.`,
-                  )
-                }
-                remove={() => {
-                  if (!window.confirm(`Delete provider account “${account.name}”?`)) return;
-                  void run(async () => {
-                    await deleteProviderAccount(account.id);
-                  }, `${account.name} deleted.`);
-                }}
-              />
+              <div id={`provider-account-${account.id}`} class="h-full">
+                <AccountCard
+                  account={account}
+                  provider={providers().find((item) => item.type === account.provider_type)}
+                  admin={isAdmin()}
+                  busy={busy()}
+                  edit={() => setEditor({ mode: "edit", account })}
+                  replaceCredentials={() => setEditor({ mode: "credentials", account })}
+                  validate={() =>
+                    void run(async () => {
+                      await validateProviderAccount(account.id);
+                    }, `${account.name} validated.`)
+                  }
+                  sync={() =>
+                    void run(async () => {
+                      const result = await syncProviderZones(account.id);
+                      setNotice(`${account.name} synchronized ${result.zone_count} zones.`);
+                    }, `${account.name} zones synchronized.`)
+                  }
+                  toggle={() => {
+                    if (
+                      account.enabled &&
+                      !window.confirm(`Disable provider account “${account.name}”?`)
+                    )
+                      return;
+                    void run(
+                      async () => {
+                        await updateProviderAccount(account.id, { enabled: !account.enabled });
+                      },
+                      `${account.name} ${account.enabled ? "disabled" : "enabled"}.`,
+                    );
+                  }}
+                  remove={() => {
+                    if (!window.confirm(`Delete provider account “${account.name}”?`)) return;
+                    void run(async () => {
+                      await deleteProviderAccount(account.id);
+                    }, `${account.name} deleted.`);
+                  }}
+                />
+              </div>
             )}
           </For>
         </div>
@@ -379,6 +402,7 @@ function ProviderAccountEditor(props: {
         setCredentials({});
         await props.saved(`${name()} created.`);
       } catch (caught) {
+        setCredentials({});
         props.failed(caught);
       } finally {
         props.setBusy(false);

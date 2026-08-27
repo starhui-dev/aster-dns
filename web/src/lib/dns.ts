@@ -327,7 +327,7 @@ export function deleteRecordSet(
   zoneID: string,
   recordSetID: string,
   fingerprint: string,
-): Promise<void> {
+): Promise<{ deleted: boolean; refetch_required: boolean }> {
   return apiRequest(
     `/zones/${encodeURIComponent(zoneID)}/recordsets/${encodeURIComponent(recordSetID)}`,
     { method: "DELETE", headers: { "If-Match": fingerprint } },

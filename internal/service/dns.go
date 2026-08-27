@@ -41,12 +41,14 @@ type DNSService struct {
 
 type recordCacheEntry struct {
 	accountID          uuid.UUID
+	accountUpdatedAt   time.Time
 	credentialRevision uint64
 	fetchedAt          time.Time
 	recordSets         []provider.RecordSet
 }
 
 type recordCacheState struct {
+	accountID  uuid.UUID
 	entry      recordCacheEntry
 	generation uint64
 }
@@ -205,7 +207,26 @@ func (s *DNSService) RefreshZone(ctx context.Context, actor Actor, zoneID uuid.U
 	}
 	current, err := client.GetZone(ctx, indexed.ProviderZoneID)
 	if err != nil {
-		return ZoneIndexEntry{}, s.auditZoneFailure(ctx, actor, indexed, metadata, "zone.refresh", provider.MapError(err, "get_zone"))
+		mapped := provider.MapError(err, "get_zone")
+		if provider.IsErrorCode(mapped, provider.ErrNotFound) {
+			markErr := s.repository.WithinTx(ctx, func(repository ProviderRepository) error {
+				if err := repository.MarkZoneDeleted(ctx, indexed.ID, account.ID, account.CredentialRevision, account.UpdatedAt, s.now()); err != nil {
+					return err
+				}
+				event, eventErr := newDNSAuditEvent(actor, metadata, "zone.refresh", "zone", indexed.ID.String(), account.ID, &indexed.ID, audit.ResultFailed, string(provider.ErrNotFound))
+				if eventErr != nil {
+					return eventErr
+				}
+				event.BeforeData = safeZoneData(indexed)
+				return repository.InsertAuditEvent(ctx, event)
+			})
+			if markErr == nil {
+				s.InvalidateZone(zoneID)
+				return ZoneIndexEntry{}, mapped
+			}
+			return ZoneIndexEntry{}, s.auditZoneFailure(ctx, actor, indexed, metadata, "zone.refresh", markErr)
+		}
+		return ZoneIndexEntry{}, s.auditZoneFailure(ctx, actor, indexed, metadata, "zone.refresh", mapped)
 	}
 	current, err = provider.NormalizeZone(current)
 	if err != nil {
@@ -219,7 +240,7 @@ func (s *DNSService) RefreshZone(ctx context.Context, actor Actor, zoneID uuid.U
 	var refreshed ZoneIndexEntry
 	err = s.repository.WithinTx(ctx, func(repository ProviderRepository) error {
 		var persistErr error
-		refreshed, persistErr = repository.UpsertZoneIndex(ctx, account.ID, ZoneIndexEntry{
+		refreshed, persistErr = repository.UpsertZoneIndex(ctx, account.ID, account.CredentialRevision, account.UpdatedAt, ZoneIndexEntry{
 			ID: indexed.ID, ProviderZoneID: current.ID, Name: current.Name, Status: current.Status, Metadata: zoneMetadata,
 		}, fetchedAt)
 		if persistErr != nil {
@@ -254,11 +275,11 @@ func (s *DNSService) ListRecordSets(ctx context.Context, zoneID uuid.UUID, input
 		return RecordSetPage{}, err
 	}
 
-	cached, cachedOK := s.cachedRecordSets(zoneID, account.CredentialRevision)
+	cached, cachedOK := s.cachedRecordSets(zoneID, account.ID, account.CredentialRevision, account.UpdatedAt)
 	if !input.Refresh && cachedOK && s.now().Sub(cached.fetchedAt) <= s.recordCacheTTL {
 		return paginateRecordSets(cached.recordSets, input, scope, limit, offset, cached.fetchedAt, false, nil), nil
 	}
-	generation := s.beginRecordFetch(zoneID)
+	generation := s.beginRecordFetch(zoneID, account.ID)
 	fetchContext, cancel := context.WithTimeout(ctx, maximumRecordReadTime)
 	defer cancel()
 	recordSets, fetchErr := s.fetchAllRecordSets(fetchContext, client, zone)
@@ -270,12 +291,11 @@ func (s *DNSService) ListRecordSets(ctx context.Context, zoneID uuid.UUID, input
 	}
 	fetchedAt := s.now()
 	s.storeRecordFetch(zoneID, generation, recordCacheEntry{
-		accountID: zone.ProviderAccountID, credentialRevision: account.CredentialRevision,
-		fetchedAt: fetchedAt, recordSets: recordSets,
+		accountID: zone.ProviderAccountID, accountUpdatedAt: account.UpdatedAt,
+		credentialRevision: account.CredentialRevision, fetchedAt: fetchedAt, recordSets: recordSets,
 	})
 	return paginateRecordSets(recordSets, input, scope, limit, offset, fetchedAt, false, nil), nil
 }
-
 func (s *DNSService) GetRecordSet(ctx context.Context, zoneID uuid.UUID, recordSetID string) (provider.RecordSet, error) {
 	zone, err := s.repository.GetZone(ctx, zoneID)
 	if err != nil {
@@ -320,7 +340,8 @@ func (s *DNSService) CreateRecordSet(ctx context.Context, actor Actor, zoneID uu
 	}
 	created, err = provider.NormalizeRecordSet(zone.Name, created)
 	if err != nil {
-		return provider.RecordSet{}, provider.NewError(provider.ErrUpstream, "normalize_record_set", "", 0, err)
+		mapped := provider.NewError(provider.ErrUpstream, "normalize_record_set", "", 0, err)
+		return provider.RecordSet{}, s.auditRecordFailure(ctx, actor, zone, metadata, "recordset.create", created.ID, nil, &normalized, mapped)
 	}
 	s.InvalidateZone(zoneID)
 	if err = s.auditRecordSuccess(ctx, actor, zone, metadata, "recordset.create", created.ID, nil, &created); err != nil {
@@ -371,7 +392,8 @@ func (s *DNSService) UpdateRecordSet(ctx context.Context, actor Actor, zoneID uu
 	}
 	updated, err = provider.NormalizeRecordSet(zone.Name, updated)
 	if err != nil {
-		return provider.RecordSet{}, provider.NewError(provider.ErrUpstream, "normalize_record_set", "", 0, err)
+		mapped := provider.NewError(provider.ErrUpstream, "normalize_record_set", "", 0, err)
+		return provider.RecordSet{}, s.auditRecordFailure(ctx, actor, zone, metadata, "recordset.update", recordSetID, &current, &normalized, mapped)
 	}
 	s.InvalidateZone(zoneID)
 	if err = s.auditRecordSuccess(ctx, actor, zone, metadata, "recordset.update", recordSetID, &current, &updated); err != nil {
@@ -543,25 +565,28 @@ func (s *DNSService) InvalidateZone(zoneID uuid.UUID) {
 func (s *DNSService) InvalidateAccount(accountID uuid.UUID) {
 	s.cacheMu.Lock()
 	for zoneID, state := range s.recordCache {
-		if state.entry.accountID == accountID {
-			state.entry = recordCacheEntry{}
-			state.generation++
-			s.recordCache[zoneID] = state
+		if state.accountID != accountID {
+			continue
 		}
+		state.entry = recordCacheEntry{}
+		state.generation++
+		s.recordCache[zoneID] = state
 	}
 	s.cacheMu.Unlock()
 }
 
-func (s *DNSService) cachedRecordSets(zoneID uuid.UUID, credentialRevision uint64) (recordCacheEntry, bool) {
+func (s *DNSService) cachedRecordSets(zoneID, accountID uuid.UUID, credentialRevision uint64, accountUpdatedAt time.Time) (recordCacheEntry, bool) {
 	s.cacheMu.RLock()
 	entry := s.recordCache[zoneID].entry
 	s.cacheMu.RUnlock()
-	return entry, !entry.fetchedAt.IsZero() && entry.credentialRevision == credentialRevision
+	return entry, !entry.fetchedAt.IsZero() && entry.accountID == accountID &&
+		entry.credentialRevision == credentialRevision && entry.accountUpdatedAt.Equal(accountUpdatedAt)
 }
 
-func (s *DNSService) beginRecordFetch(zoneID uuid.UUID) uint64 {
+func (s *DNSService) beginRecordFetch(zoneID uuid.UUID, accountID uuid.UUID) uint64 {
 	s.cacheMu.Lock()
 	state := s.recordCache[zoneID]
+	state.accountID = accountID
 	state.generation++
 	s.recordCache[zoneID] = state
 	s.cacheMu.Unlock()

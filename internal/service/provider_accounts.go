@@ -121,6 +121,10 @@ func (s *ProviderAccountService) UpdateAccount(ctx context.Context, actor Actor,
 	if err != nil {
 		return ProviderAccount{}, err
 	}
+	s.clients.Invalidate(accountID)
+	if s.cache != nil {
+		s.cache.InvalidateAccount(accountID)
+	}
 	factory, ok := s.registry.Factory(before.ProviderType)
 	if !ok {
 		return ProviderAccount{}, ErrProviderTypeUnavailable
@@ -148,10 +152,16 @@ func (s *ProviderAccountService) UpdateAccount(ctx context.Context, actor Actor,
 		changes.Options = options
 		changes.ResetValidation = true
 	}
+	if input.Enabled != nil || len(input.Options) != 0 {
+		s.clients.Invalidate(accountID)
+		if s.cache != nil {
+			s.cache.InvalidateAccount(accountID)
+		}
+	}
 	var updated ProviderAccount
 	err = s.repository.WithinTx(ctx, func(repository ProviderRepository) error {
 		var updateErr error
-		updated, updateErr = repository.UpdateProviderAccount(ctx, accountID, changes)
+		updated, updateErr = repository.UpdateProviderAccount(ctx, accountID, before.UpdatedAt, changes)
 		if updateErr != nil {
 			return updateErr
 		}
@@ -181,6 +191,10 @@ func (s *ProviderAccountService) UpdateAccount(ctx context.Context, actor Actor,
 }
 
 func (s *ProviderAccountService) DeleteAccount(ctx context.Context, actor Actor, accountID uuid.UUID, metadata RequestMetadata) error {
+	s.clients.Invalidate(accountID)
+	if s.cache != nil {
+		s.cache.InvalidateAccount(accountID)
+	}
 	var deleted ProviderAccount
 	err := s.repository.WithinTx(ctx, func(repository ProviderRepository) error {
 		var deleteErr error
@@ -192,14 +206,13 @@ func (s *ProviderAccountService) DeleteAccount(ctx context.Context, actor Actor,
 		if eventErr != nil {
 			return eventErr
 		}
-		event.ProviderAccountID = nil
 		event.BeforeData = safeProviderAccountAuditData(deleted)
 		return repository.InsertAuditEvent(ctx, event)
 	})
 	if err != nil {
 		return err
 	}
-	s.clients.Invalidate(accountID)
+	s.clients.Remove(accountID)
 	if s.cache != nil {
 		s.cache.InvalidateAccount(accountID)
 	}
@@ -210,6 +223,10 @@ func (s *ProviderAccountService) ReplaceCredentials(ctx context.Context, actor A
 	account, err := s.repository.GetProviderAccount(ctx, accountID)
 	if err != nil {
 		return ProviderAccount{}, err
+	}
+	s.clients.Invalidate(accountID)
+	if s.cache != nil {
+		s.cache.InvalidateAccount(accountID)
 	}
 	factory, ok := s.registry.Factory(account.ProviderType)
 	if !ok {
@@ -334,6 +351,7 @@ func safeProviderAccountAuditData(account ProviderAccount) map[string]any {
 		"name":                  account.Name,
 		"description":           account.Description,
 		"enabled":               account.Enabled,
+		"options":               append(json.RawMessage(nil), account.Options...),
 		"credential_revision":   account.CredentialRevision,
 		"credential_configured": account.CredentialConfigured,
 		"validation_status":     account.ValidationStatus,

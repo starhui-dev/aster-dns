@@ -19,6 +19,7 @@ export default function DashboardPage() {
   const [events, setEvents] = createSignal<AuditEvent[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal<{ message: string; requestId?: string }>();
+  const [zoneTotal, setZoneTotal] = createSignal(0);
 
   const unhealthy = createMemo(() =>
     accounts().filter(
@@ -58,6 +59,7 @@ export default function DashboardPage() {
       ]);
       setAccounts(providerResult.provider_accounts);
       setZones(zoneResult.zones);
+      setZoneTotal(zoneResult.total);
       setEvents(auditResult.audit_events);
       setError(undefined);
     } catch (caught) {
@@ -105,7 +107,7 @@ export default function DashboardPage() {
         />
         <Metric
           label="Indexed zones"
-          value={zones().length}
+          value={zoneTotal()}
           hint={`${new Set(zones().map((zone) => zone.provider_type)).size} providers`}
         />
         <Metric

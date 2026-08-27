@@ -46,6 +46,21 @@ func TestRevokedAndDisabledSessionsCannotContinue(t *testing.T) {
 	}
 }
 
+func TestRotateSessionRequiresActiveCurrentSession(t *testing.T) {
+	service, store, _ := newTestService(t, false)
+	user := testUser(t, RoleAdmin)
+	current, err := service.newSession(user, AuthMethodPasskey, RequestMetadata{RequestID: "req_rotation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.rotateSession(context.Background(), store, AuthenticatedSession{User: user, Session: current.Session}, RequestMetadata{RequestID: "req_rotation"}); err != ErrUnauthenticated {
+		t.Fatalf("rotate absent session error = %v", err)
+	}
+	if len(store.sessions) != 0 {
+		t.Fatalf("rotation inserted %d session(s)", len(store.sessions))
+	}
+}
+
 func TestAuthenticationMiddlewareAndCSRFProtection(t *testing.T) {
 	service, store, _ := newTestService(t, false)
 	user := testUser(t, RoleAdmin)
@@ -127,6 +142,32 @@ func TestAuthorizationMiddlewareRoleMatrix(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.Code, test.status)
 			}
 		})
+	}
+}
+
+func TestDeletePasskeyAdvancesUserVersion(t *testing.T) {
+	service, store, _ := newTestService(t, false)
+	user := testUser(t, RoleAdmin)
+	firstID, secondID := uuid.New(), uuid.New()
+	user.Passkeys = []Passkey{{ID: firstID, UserID: user.ID}, {ID: secondID, UserID: user.ID}}
+	store.users[user.ID] = user
+	current, err := service.newSession(user, AuthMethodPasskey, RequestMetadata{RequestID: "req_delete_passkey"})
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if err = store.InsertSession(context.Background(), current.Session); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	before := store.users[user.ID].UpdatedAt
+	if _, err = service.DeletePasskey(context.Background(), AuthenticatedSession{User: user, Session: current.Session}, firstID, RequestMetadata{RequestID: "req_delete_passkey"}); err != nil {
+		t.Fatalf("delete passkey: %v", err)
+	}
+	updated := store.users[user.ID]
+	if len(updated.Passkeys) != 1 || updated.Passkeys[0].ID != secondID {
+		t.Fatalf("remaining passkeys = %#v", updated.Passkeys)
+	}
+	if !updated.UpdatedAt.After(before) {
+		t.Fatalf("user version was not advanced: before=%s after=%s", before, updated.UpdatedAt)
 	}
 }
 

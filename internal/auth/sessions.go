@@ -118,6 +118,9 @@ func (s *Service) Logout(ctx context.Context, current AuthenticatedSession, meta
 		} else if _, err := store.RevokeSession(ctx, current.User.ID, current.Session.ID, now); err != nil {
 			return err
 		}
+		if err := store.DeleteChallengesForUser(ctx, current.User.ID, ChallengePendingTOTP); err != nil {
+			return err
+		}
 		event, err := newAuditEvent(metadata, &current.User, map[bool]string{true: "auth.logout_all", false: "auth.logout"}[all], "session", current.Session.ID.String(), audit.ResultSucceeded, "")
 		if err != nil {
 			return err
@@ -140,6 +143,9 @@ func (s *Service) RevokeSession(ctx context.Context, current AuthenticatedSessio
 		if !revoked {
 			return ErrNotFound
 		}
+		if err = store.DeleteChallengesForUser(ctx, current.User.ID, ChallengePendingTOTP); err != nil {
+			return err
+		}
 		event, err := newAuditEvent(metadata, &current.User, "auth.session.revoked", "session", sessionID.String(), audit.ResultSucceeded, "")
 		if err != nil {
 			return err
@@ -152,6 +158,9 @@ func (s *Service) RevokeSession(ctx context.Context, current AuthenticatedSessio
 func (s *Service) RevokeOtherSessions(ctx context.Context, current AuthenticatedSession, metadata RequestMetadata) error {
 	return s.store.WithinTx(ctx, func(store Store) error {
 		if _, err := store.RevokeAllSessions(ctx, current.User.ID, &current.Session.ID, s.now()); err != nil {
+			return err
+		}
+		if err := store.DeleteChallengesForUser(ctx, current.User.ID, ChallengePendingTOTP); err != nil {
 			return err
 		}
 		event, err := newAuditEvent(metadata, &current.User, "auth.sessions.others_revoked", "user", current.User.ID.String(), audit.ResultSucceeded, "")
@@ -167,8 +176,12 @@ func (s *Service) rotateSession(ctx context.Context, store Store, current Authen
 	if err != nil {
 		return IssuedSession{}, err
 	}
-	if _, err = store.RevokeSession(ctx, current.User.ID, current.Session.ID, s.now()); err != nil {
+	revoked, err := store.RevokeSession(ctx, current.User.ID, current.Session.ID, s.now())
+	if err != nil {
 		return IssuedSession{}, err
+	}
+	if !revoked {
+		return IssuedSession{}, ErrUnauthenticated
 	}
 	if err = store.InsertSession(ctx, issued.Session); err != nil {
 		return IssuedSession{}, err

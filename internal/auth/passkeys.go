@@ -119,35 +119,43 @@ func (s *Service) ListPasskeys(ctx context.Context, current AuthenticatedSession
 }
 
 func (s *Service) DeletePasskey(ctx context.Context, current AuthenticatedSession, passkeyID uuid.UUID, metadata RequestMetadata) (IssuedSession, error) {
-	user, err := s.store.GetUserByID(ctx, current.User.ID)
-	if err != nil {
-		return IssuedSession{}, err
-	}
-	issued, err := s.newSession(user, current.Session.AuthMethod, metadata)
-	if err != nil {
-		return IssuedSession{}, err
-	}
-	err = s.store.WithinTx(ctx, func(store Store) error {
-		count, countErr := store.CountPasskeys(ctx, user.ID)
-		if countErr != nil {
-			return countErr
+	var issued IssuedSession
+	err := s.store.WithinTx(ctx, func(store Store) error {
+		user, err := store.GetUserByID(ctx, current.User.ID)
+		if err != nil {
+			return err
+		}
+		count, err := store.CountPasskeys(ctx, user.ID)
+		if err != nil {
+			return err
 		}
 		if count <= 1 && !(s.config.PasswordLoginEnabled && user.PasswordEnabled && user.PasswordHash != "") {
 			return ErrLastAuthentication
 		}
-		deleted, deleteErr := store.DeletePasskey(ctx, user.ID, passkeyID)
-		if deleteErr != nil {
-			return deleteErr
+		deleted, err := store.DeletePasskey(ctx, user.ID, passkeyID)
+		if err != nil {
+			return err
 		}
-		if _, revokeErr := store.RevokeAllSessions(ctx, user.ID, nil, s.now()); revokeErr != nil {
-			return revokeErr
+		updatedUser, err := store.UpdateUser(ctx, user.ID, user.UpdatedAt, UserChanges{})
+		if err != nil {
+			return err
 		}
-		if insertErr := store.InsertSession(ctx, issued.Session); insertErr != nil {
-			return insertErr
+		if _, err = store.RevokeAllSessions(ctx, user.ID, nil, s.now()); err != nil {
+			return err
 		}
-		event, eventErr := newAuditEvent(metadata, &user, "auth.passkey.deleted", "passkey", deleted.ID.String(), audit.ResultSucceeded, "")
-		if eventErr != nil {
-			return eventErr
+		if err = store.DeleteChallengesForUser(ctx, user.ID, ChallengePendingTOTP); err != nil {
+			return err
+		}
+		issued, err = s.newSession(updatedUser, current.Session.AuthMethod, metadata)
+		if err != nil {
+			return err
+		}
+		if err = store.InsertSession(ctx, issued.Session); err != nil {
+			return err
+		}
+		event, err := newAuditEvent(metadata, &user, "auth.passkey.deleted", "passkey", deleted.ID.String(), audit.ResultSucceeded, "")
+		if err != nil {
+			return err
 		}
 		event.BeforeData = map[string]any{"name": deleted.Name}
 		return store.InsertAuditEvent(ctx, event)

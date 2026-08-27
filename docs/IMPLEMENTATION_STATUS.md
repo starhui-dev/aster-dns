@@ -1,6 +1,6 @@
 # Implementation Status
 
-Updated: 2026-08-26
+Updated: 2026-08-27
 
 ## Outcome
 
@@ -47,7 +47,7 @@ Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS ar
 - Client construction is single-flight per account and re-checks persisted revision/options before publishing the client. Cached clients expire after five minutes. Provider calls are limited to eight concurrent calls per account and a 30-second total call deadline.
 - Decrypted credential JSON exists only for factory construction and is cleared immediately afterward on a best-effort basis; factories do not retain the one-shot credential backing bytes. Official SDK clients necessarily retain their configured credential representation for authenticated calls.
 - Generic account validation calls only the Provider's minimal read-only `ValidateCredentials` contract, persists safe validation state, and audits success/failure. Official adapters apply at most three read attempts with bounded exponential jitter; a long `Retry-After` is surfaced rather than slept through inside a request.
-- Zone sync walks all Provider pages with page/cursor/time safety bounds, persists the complete index atomically, revives reappearing zones, soft-marks missing zones, skips disabled accounts, serializes syncs per account, and audits the result.
+- Zone sync walks all Provider pages with page/cursor/time safety bounds, persists the complete index atomically, revives reappearing zones, soft-marks missing zones, invalidates the account's record cache after a successful sync, skips disabled accounts, serializes syncs per account, and audits the result.
 
 ### Shared Provider testing infrastructure
 
@@ -174,7 +174,8 @@ Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS ar
 - PostgreSQL stores only 32-byte SHA-256 hashes of session and CSRF tokens.
 - Session cookies are HttpOnly and SameSite=Strict; Secure is enabled for HTTPS public URLs. The readable CSRF cookie is SameSite=Strict and never contains the session token.
 - Idle and absolute expiration are enforced independently. Last-seen/idle refresh is bounded by a configurable refresh interval.
-- Login, bootstrap, enrollment, password changes, TOTP changes, and logout-all rotate or revoke sessions as appropriate.
+- Login, bootstrap, enrollment, password changes, TOTP changes, logout, individual session revocation, and logout-all rotate or revoke sessions as appropriate; pending TOTP challenges are invalidated by session/security changes.
+- Disabling a user revokes all sessions and invalidates pending TOTP and enrollment challenges.
 - Users can list current sessions, revoke an individual non-current session, revoke other sessions, or log out all sessions.
 
 ### Passkeys / WebAuthn

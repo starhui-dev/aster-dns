@@ -1,7 +1,9 @@
 package tencent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -14,7 +16,7 @@ import (
 )
 
 // DNSPod documents up to 30 seconds of index delay after creating a record.
-const finalStateReadAttempts = 6
+const finalStateReadAttempts = 5
 
 func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input core.CreateRecordSetInput) (core.RecordSet, error) {
 	zoneName, numericZoneID, err := p.resolveZone(ctx, zoneID, operationCreateRecordSet)
@@ -54,9 +56,10 @@ func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input cor
 		if createErr != nil {
 			return core.RecordSet{}, createErr
 		}
+		createdEntry.Extensions.Tencent = expectedTencentEntryExtensions(createdEntry, route, status)
 		created = append(created, createdEntry)
 	}
-	return p.findFinalRecordSet(ctx, zoneName, numericZoneID, entryIDs(created), nil, desiredKey, operationCreateRecordSet)
+	return p.findFinalRecordSet(ctx, zoneName, numericZoneID, created, nil, desiredKey, operationCreateRecordSet)
 }
 
 func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID string, input core.UpdateRecordSetInput) (core.RecordSet, error) {
@@ -66,6 +69,9 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 	}
 	if err = checkPrecondition(input.Precondition, current); err != nil {
 		return core.RecordSet{}, core.NewError(errorCodeForPrecondition(err), operationUpdateRecordSet, "", 0, err)
+	}
+	if isTencentDefaultRecordSet(current) {
+		return core.RecordSet{}, core.NewError(core.ErrUnsupported, operationUpdateRecordSet, "", 0, errors.New("Tencent Cloud system default NS records are read-only"))
 	}
 	normalized, err := core.NormalizeCreateRecordSetInput(zoneName, input.Desired)
 	if err != nil {
@@ -117,6 +123,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 				return core.RecordSet{}, createErr
 			}
 			desired.ID = created.ID
+			desired.Extensions.Tencent = expectedTencentEntryExtensions(desired, desiredRoute, desiredStatus)
 			finalEntries = append(finalEntries, desired)
 			continue
 		}
@@ -134,6 +141,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 				return core.RecordSet{}, err
 			}
 		}
+		desired.Extensions.Tencent = expectedTencentEntryExtensions(desired, desiredRoute, desiredStatus)
 		finalEntries = append(finalEntries, desired)
 	}
 
@@ -150,7 +158,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 			return core.RecordSet{}, err
 		}
 	}
-	return p.findFinalRecordSet(ctx, zoneName, numericZoneID, entryIDs(finalEntries), removedIDs, desiredKey, operationUpdateRecordSet)
+	return p.findFinalRecordSet(ctx, zoneName, numericZoneID, finalEntries, removedIDs, desiredKey, operationUpdateRecordSet)
 }
 
 func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID string, precondition core.Precondition) error {
@@ -161,12 +169,29 @@ func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID stri
 	if err = checkPrecondition(precondition, current); err != nil {
 		return core.NewError(errorCodeForPrecondition(err), operationDeleteRecordSet, "", 0, err)
 	}
+	if isTencentDefaultRecordSet(current) {
+		return core.NewError(core.ErrUnsupported, operationDeleteRecordSet, "", 0, errors.New("Tencent Cloud system default NS records are read-only"))
+	}
 	for _, entry := range current.Entries {
 		if err = p.deleteRecord(ctx, zoneName, numericZoneID, entry.ID, operationDeleteRecordSet); err != nil {
 			return err
 		}
 	}
+	sets, requestID, verifyErr := p.listRecordSetsForMutation(ctx, zoneName, numericZoneID, operationDeleteRecordSet)
+	if verifyErr != nil {
+		return verifyErr
+	}
+	removedIDs := entryIDs(current.Entries)
+	for _, recordSet := range sets {
+		if recordSetIntersectsIDs(recordSet, removedIDs) {
+			return core.NewError(core.ErrConflict, operationDeleteRecordSet, requestID, 0, errors.New("Tencent Cloud deleted record entries are still visible"))
+		}
+	}
 	return nil
+}
+
+func isTencentDefaultRecordSet(recordSet core.RecordSet) bool {
+	return recordSet.Extensions.Tencent != nil && recordSet.Extensions.Tencent.Default != nil && *recordSet.Extensions.Tencent.Default
 }
 
 func (p *Provider) currentRecordSetForMutation(ctx context.Context, zoneID, recordSetID, operation string) (core.RecordSet, string, uint64, []core.RecordSet, error) {
@@ -207,7 +232,8 @@ func (p *Provider) listRecordSetsForMutation(ctx context.Context, zoneName strin
 	return sets, requestID, nil
 }
 
-func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, zoneID uint64, ids, removedIDs []string, desiredKey recordGroupKey, operation string) (core.RecordSet, error) {
+func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, zoneID uint64, expectedEntries []core.RecordEntry, removedIDs []string, desiredKey recordGroupKey, operation string) (core.RecordSet, error) {
+	ids := entryIDs(expectedEntries)
 	requestID := ""
 	lastCause := errors.New("Tencent Cloud final record state could not be re-fetched")
 	for attempt := 0; attempt < finalStateReadAttempts; attempt++ {
@@ -222,7 +248,7 @@ func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, zone
 				lastCause = errors.New("Tencent Cloud removed record entries are still visible")
 				continue
 			}
-			if recordSetContainsIDs(recordSet, ids) {
+			if recordSetContainsExactEntries(recordSet, expectedEntries) {
 				if groupKeyFromRecordSet(recordSet) == desiredKey {
 					return recordSet, nil
 				}
@@ -241,7 +267,39 @@ func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, zone
 			return core.RecordSet{}, core.NewError(core.ErrTimeout, operation, requestID, 0, waitErr)
 		}
 	}
-	return core.RecordSet{}, core.NewError(core.ErrConflict, operation, requestID, 0, lastCause)
+	return core.RecordSet{}, core.NewError(core.ErrTimeout, operation, requestID, 0, lastCause)
+}
+
+func expectedTencentEntryExtensions(entry core.RecordEntry, route routing, status string) *core.TencentRecordEntryExtensions {
+	var result core.TencentRecordEntryExtensions
+	if entry.Extensions.Tencent != nil {
+		result = *entry.Extensions.Tencent
+	}
+	result.Line, result.LineID, result.Status = route.line, route.lineID, status
+	return &result
+}
+
+func recordSetContainsExactEntries(recordSet core.RecordSet, expected []core.RecordEntry) bool {
+	if len(recordSet.Entries) != len(expected) {
+		return false
+	}
+	actualByID := make(map[string]core.RecordEntry, len(recordSet.Entries))
+	for _, entry := range recordSet.Entries {
+		actualByID[entry.ID] = entry
+	}
+	for _, desired := range expected {
+		actual, ok := actualByID[desired.ID]
+		if !ok {
+			return false
+		}
+		actual.ID, desired.ID = "", ""
+		actualJSON, actualErr := json.Marshal(actual)
+		desiredJSON, desiredErr := json.Marshal(desired)
+		if actualErr != nil || desiredErr != nil || !bytes.Equal(actualJSON, desiredJSON) {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Provider) addRecord(ctx context.Context, zoneName string, zoneID uint64, subDomain string, recordType core.RecordType, ttl uint32, route routing, status string, entry core.RecordEntry, operation string) (core.RecordEntry, error) {
@@ -333,8 +391,8 @@ func (p *Provider) deleteRecord(ctx context.Context, zoneName string, zoneID uin
 	if err != nil {
 		return err
 	}
-	if response == nil || response.Response == nil {
-		return p.providerPayloadError(operation, "", errors.New("Tencent Cloud returned an empty delete-record response"))
+	if response == nil || response.Response == nil || strings.TrimSpace(stringValue(response.Response.RequestId)) == "" {
+		return p.providerPayloadError(operation, "", errors.New("Tencent Cloud returned an invalid delete-record response"))
 	}
 	return nil
 }

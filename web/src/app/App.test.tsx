@@ -66,6 +66,18 @@ describe("App", () => {
     expect(cloudflareZone).toHaveAttribute("href", `/zones/${cloudflareZoneID}/records`);
     expect(huaweiZone).toHaveAttribute("href", `/zones/${huaweiZoneID}/records`);
   });
+
+  it("opens the account selected by the detail route", async () => {
+    window.history.replaceState({}, "", "/accounts/01900000-0000-7000-8000-000000000102");
+    vi.stubGlobal("fetch", vi.fn(zonesFetch));
+
+    render(() => <App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Edit Huawei production" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Account name")).toHaveValue("Huawei production");
+  });
 });
 
 const cloudflareZoneID = "01900000-0000-7000-8000-000000000201";

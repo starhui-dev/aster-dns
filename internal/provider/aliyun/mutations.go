@@ -1,14 +1,16 @@
 package aliyun
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
-
 	alidns "github.com/alibabacloud-go/alidns-20150109/v5/client"
 	"github.com/alibabacloud-go/tea/dara"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
+	"strings"
+	"time"
 )
 
 func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input core.CreateRecordSetInput) (core.RecordSet, error) {
@@ -64,8 +66,8 @@ func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input cor
 			}
 		}
 	}
-	ids := entryIDs(created)
-	return p.findFinalRecordSet(ctx, zoneName, ids, desiredKey, route.status, operationCreateRecordSet)
+	expectedEntries := finalizeAliyunEntries(created, normalized.Entries, route)
+	return p.findFinalRecordSet(ctx, zoneName, expectedEntries, desiredKey, route.status, operationCreateRecordSet)
 }
 
 func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID string, input core.UpdateRecordSetInput) (core.RecordSet, error) {
@@ -188,11 +190,12 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 			return core.RecordSet{}, err
 		}
 	}
-	return p.findFinalRecordSet(ctx, zoneName, entryIDs(finalEntries), desiredKey, desiredRoute.status, operationUpdateRecordSet)
+	expectedEntries := finalizeAliyunEntries(finalEntries, finalEntries, desiredRoute)
+	return p.findFinalRecordSet(ctx, zoneName, expectedEntries, desiredKey, desiredRoute.status, operationUpdateRecordSet)
 }
 
 func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID string, precondition core.Precondition) error {
-	current, _, _, err := p.currentRecordSetForMutation(ctx, zoneID, recordSetID, operationDeleteRecordSet)
+	current, zoneName, _, err := p.currentRecordSetForMutation(ctx, zoneID, recordSetID, operationDeleteRecordSet)
 	if err != nil {
 		return err
 	}
@@ -204,7 +207,36 @@ func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID stri
 			return err
 		}
 	}
-	return nil
+	return p.verifyRecordSetDeleted(ctx, zoneName, current, operationDeleteRecordSet)
+}
+
+func (p *Provider) verifyRecordSetDeleted(ctx context.Context, zoneName string, deleted core.RecordSet, operation string) error {
+	deletedIDs := entryIDs(deleted.Entries)
+	var requestID string
+	for attempt := 0; attempt < aliyunFinalStateReadAttempts; attempt++ {
+		sets, currentRequestID, err := p.listRecordSetsForMutation(ctx, zoneName, operation)
+		if err != nil {
+			return err
+		}
+		requestID = currentRequestID
+		stillVisible := false
+		for _, recordSet := range sets {
+			if recordSetIntersectsIDs(recordSet, deletedIDs) {
+				stillVisible = true
+				break
+			}
+		}
+		if !stillVisible {
+			return nil
+		}
+		if attempt == aliyunFinalStateReadAttempts-1 {
+			break
+		}
+		if err = waitContext(ctx, time.Duration(1<<attempt)*time.Second); err != nil {
+			return core.NewError(core.ErrTimeout, operation, requestID, 0, err)
+		}
+	}
+	return core.NewError(core.ErrTimeout, operation, requestID, 0, errors.New("Alibaba Cloud record set is still visible after deletion"))
 }
 
 func (p *Provider) currentRecordSetForMutation(ctx context.Context, zoneID, recordSetID, operation string) (core.RecordSet, string, []core.RecordSet, error) {
@@ -245,13 +277,13 @@ func (p *Provider) listRecordSetsForMutation(ctx context.Context, zoneName, oper
 	return sets, requestID, nil
 }
 
-func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, ids []string, desiredKey recordGroupKey, desiredStatus, operation string) (core.RecordSet, error) {
+func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, expectedEntries []core.RecordEntry, desiredKey recordGroupKey, desiredStatus, operation string) (core.RecordSet, error) {
 	sets, requestID, err := p.listRecordSetsForMutation(ctx, zoneName, operation)
 	if err != nil {
 		return core.RecordSet{}, err
 	}
 	for _, recordSet := range sets {
-		if recordSetContainsIDs(recordSet, ids) {
+		if recordSetContainsExactEntries(recordSet, expectedEntries) {
 			if groupKeyFromRecordSet(recordSet) != desiredKey || (desiredStatus != "" && routingFromRecordSet(recordSet).status != desiredStatus) {
 				return core.RecordSet{}, core.NewError(core.ErrConflict, operation, requestID, 0, errors.New("Alibaba Cloud final record state differs from the requested state"))
 			}
@@ -259,6 +291,46 @@ func (p *Provider) findFinalRecordSet(ctx context.Context, zoneName string, ids 
 		}
 	}
 	return core.RecordSet{}, core.NewError(core.ErrConflict, operation, requestID, 0, errors.New("Alibaba Cloud final record state could not be re-fetched"))
+}
+
+func finalizeAliyunEntries(entries, requested []core.RecordEntry, route routing) []core.RecordEntry {
+	final := make([]core.RecordEntry, len(entries))
+	for index, entry := range entries {
+		extension := core.AliyunRecordEntryExtensions{Line: route.line, Status: route.status}
+		if index < len(requested) && requested[index].Extensions.Aliyun != nil {
+			extension = *requested[index].Extensions.Aliyun
+			extension.Line, extension.Status = route.line, route.status
+		}
+		if !route.weighted {
+			extension.Weight = nil
+		}
+		entry.Extensions.Aliyun = &extension
+		final[index] = entry
+	}
+	return final
+}
+
+func recordSetContainsExactEntries(recordSet core.RecordSet, expected []core.RecordEntry) bool {
+	if len(recordSet.Entries) != len(expected) {
+		return false
+	}
+	actualByID := make(map[string]core.RecordEntry, len(recordSet.Entries))
+	for _, entry := range recordSet.Entries {
+		actualByID[entry.ID] = entry
+	}
+	for _, desired := range expected {
+		actual, ok := actualByID[desired.ID]
+		if !ok {
+			return false
+		}
+		actual.ID, desired.ID = "", ""
+		actualJSON, actualErr := json.Marshal(actual)
+		desiredJSON, desiredErr := json.Marshal(desired)
+		if actualErr != nil || desiredErr != nil || !bytes.Equal(actualJSON, desiredJSON) {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Provider) addDomainRecord(ctx context.Context, zoneName, rr string, recordType core.RecordType, ttl uint32, line string, entry core.RecordEntry, operation string) (core.RecordEntry, error) {

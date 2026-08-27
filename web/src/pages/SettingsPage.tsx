@@ -92,6 +92,7 @@ export default function SettingsPage() {
       const response = await setPassword(password);
       setNewPassword("");
       await auth.acceptLogin(response);
+      await load();
     }, "Password fallback updated and other sessions revoked.");
   };
 
@@ -103,6 +104,7 @@ export default function SettingsPage() {
       setTOTPCode("");
       setProvisioningURI(null);
       await auth.acceptLogin(response);
+      await load();
     }, "TOTP enabled and other sessions revoked.");
   };
 
@@ -208,12 +210,14 @@ export default function SettingsPage() {
               class="mt-4"
               variant="danger"
               disabled={busy()}
-              onClick={() =>
+              onClick={() => {
+                if (!window.confirm("Disable password fallback and revoke other sessions?")) return;
                 void run(async () => {
                   const response = await deletePassword();
                   await auth.acceptLogin(response);
-                }, "Password fallback disabled and other sessions revoked.")
-              }
+                  await load();
+                }, "Password fallback disabled and other sessions revoked.");
+              }}
             >
               Disable password fallback
             </Button>
@@ -231,13 +235,15 @@ export default function SettingsPage() {
             <Button
               variant="danger"
               disabled={busy()}
-              onClick={() =>
+              onClick={() => {
+                if (!window.confirm("Disable TOTP and revoke other sessions?")) return;
                 void run(async () => {
                   const response = await deleteTOTP();
                   await auth.acceptLogin(response);
                   setProvisioningURI(null);
-                }, "TOTP disabled and other sessions revoked.")
-              }
+                  await load();
+                }, "TOTP disabled and other sessions revoked.");
+              }}
             >
               Disable TOTP
             </Button>
@@ -297,12 +303,13 @@ export default function SettingsPage() {
         <div class="mb-4 flex justify-end">
           <Button
             disabled={busy()}
-            onClick={() =>
+            onClick={() => {
+              if (!window.confirm("Revoke all other sessions?")) return;
               void run(async () => {
                 await revokeOtherSessions();
                 await load();
-              }, "Other sessions revoked.")
-            }
+              }, "Other sessions revoked.");
+            }}
           >
             Revoke other sessions
           </Button>
@@ -327,12 +334,13 @@ export default function SettingsPage() {
                   <Button
                     variant="danger"
                     disabled={busy()}
-                    onClick={() =>
+                    onClick={() => {
+                      if (!window.confirm("Revoke this session?")) return;
                       void run(async () => {
                         await revokeSession(item.id);
                         await load();
-                      }, "Session revoked.")
-                    }
+                      }, "Session revoked.");
+                    }}
                   >
                     Revoke
                   </Button>

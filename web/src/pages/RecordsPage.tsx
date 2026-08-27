@@ -99,11 +99,28 @@ export default function RecordsPage() {
       const [zoneResult, catalog, recordResult] = await Promise.all([
         getZone(params.zoneId, signal),
         listProviderTypes(signal),
-        listRecordSets(
-          params.zoneId,
-          { q: query(), type: typeFilter(), limit: 200, refresh },
-          signal,
-        ),
+        (async () => {
+          let result = await listRecordSets(
+            params.zoneId,
+            { q: query(), type: typeFilter(), limit: 200, refresh },
+            signal,
+          );
+          const all = [...result.recordsets];
+          for (
+            let page = 1;
+            result.next_cursor !== undefined && result.next_cursor !== "";
+            page += 1
+          ) {
+            if (page >= 1_000) throw new Error("Record pagination exceeded the safety limit.");
+            result = await listRecordSets(
+              params.zoneId,
+              { q: query(), type: typeFilter(), cursor: result.next_cursor, limit: 200, refresh },
+              signal,
+            );
+            all.push(...result.recordsets);
+          }
+          return { ...result, recordsets: all };
+        })(),
       ]);
       if (generation !== loadGeneration) return;
       setZone(zoneResult.zone);
@@ -304,9 +321,11 @@ export default function RecordsPage() {
             <A class="text-sm font-semibold text-primary hover:underline" href="/zones">
               All zones
             </A>
-            <Button disabled={loading() || busy()} onClick={() => void load(true)}>
-              Force refresh
-            </Button>
+            <Show when={canMutate()}>
+              <Button disabled={loading() || busy()} onClick={() => void load(true)}>
+                Force refresh
+              </Button>
+            </Show>
             <Show when={canMutate()}>
               <Button
                 variant="primary"

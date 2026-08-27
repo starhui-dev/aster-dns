@@ -22,6 +22,7 @@ const (
 type ZoneSyncService struct {
 	repository ProviderRepository
 	clients    *ProviderClientManager
+	cache      ProviderCacheInvalidator
 	now        func() time.Time
 	locks      sync.Map
 }
@@ -35,6 +36,10 @@ func NewZoneSyncService(repository ProviderRepository, clients *ProviderClientMa
 		clients:    clients,
 		now:        func() time.Time { return time.Now().UTC() },
 	}, nil
+}
+
+func (s *ZoneSyncService) SetCacheInvalidator(cache ProviderCacheInvalidator) {
+	s.cache = cache
 }
 
 func (s *ZoneSyncService) SyncAccount(ctx context.Context, actor Actor, accountID uuid.UUID, metadata RequestMetadata) ([]ZoneIndexEntry, error) {
@@ -103,6 +108,9 @@ func (s *ZoneSyncService) SyncAccount(ctx context.Context, actor Actor, accountI
 			})
 			if persistErr != nil {
 				return nil, persistErr
+			}
+			if s.cache != nil {
+				s.cache.InvalidateAccount(accountID)
 			}
 			return zones, nil
 		}

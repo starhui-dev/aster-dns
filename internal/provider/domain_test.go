@@ -83,6 +83,17 @@ func TestCanonicalizeZoneNameUsesIDNA(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeRecordNameRejectsAbsoluteNameOutsideZone(t *testing.T) {
+	t.Parallel()
+	if _, err := CanonicalizeRecordName("www.other.example.", "example.com"); err == nil {
+		t.Fatal("absolute record name outside the target zone unexpectedly passed")
+	}
+	got, err := CanonicalizeRecordName("www.example.com.", "example.com")
+	if err != nil || got != "www.example.com" {
+		t.Fatalf("in-zone absolute record name = %q, %v", got, err)
+	}
+}
+
 func TestNormalizeRecordSetRejectsInvalidRecords(t *testing.T) {
 	t.Parallel()
 	tests := []RecordSet{

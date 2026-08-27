@@ -72,18 +72,19 @@ type capturedRequest struct {
 }
 
 type aliyunFixture struct {
-	t             *testing.T
-	mu            sync.Mutex
-	domains       []fixtureDomain
-	records       map[string][]fixtureRecord
-	failures      map[string][]fixtureFailure
-	counts        map[string]int
-	requests      []capturedRequest
-	nextRecordID  int
-	nextTimestamp int64
-	delay         time.Duration
-	requestStart  chan struct{}
-	startOnce     sync.Once
+	t                    *testing.T
+	mu                   sync.Mutex
+	domains              []fixtureDomain
+	records              map[string][]fixtureRecord
+	failures             map[string][]fixtureFailure
+	counts               map[string]int
+	requests             []capturedRequest
+	nextRecordID         int
+	nextTimestamp        int64
+	delay                time.Duration
+	retainDeletedRecords bool
+	requestStart         chan struct{}
+	startOnce            sync.Once
 }
 
 func newAliyunFixture(t *testing.T) *aliyunFixture {
@@ -330,7 +331,9 @@ func (f *aliyunFixture) deleteRecordLocked(recordID string) bool {
 	for domainName := range f.records {
 		for index := range f.records[domainName] {
 			if f.records[domainName][index].ID == recordID {
-				f.records[domainName] = append(f.records[domainName][:index], f.records[domainName][index+1:]...)
+				if !f.retainDeletedRecords {
+					f.records[domainName] = append(f.records[domainName][:index], f.records[domainName][index+1:]...)
+				}
 				return true
 			}
 		}
@@ -617,6 +620,17 @@ func TestRecordGroupingExtensionsAndNormalization(t *testing.T) {
 	}
 }
 
+func TestTXTMappingPreservesUnquotedBoundarySpaces(t *testing.T) {
+	t.Parallel()
+	entry, err := parseDomainRecordValue(core.RecordTypeTXT, " leading and trailing ", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Value != " leading and trailing " {
+		t.Fatalf("TXT value = %q", entry.Value)
+	}
+}
+
 func TestRejectsCrossDomainPayloadAndInvalidMXPriority(t *testing.T) {
 	t.Run("cross-domain record payload", func(t *testing.T) {
 		fixture := newAliyunFixture(t)
@@ -652,6 +666,23 @@ func TestRejectsCrossDomainPayloadAndInvalidMXPriority(t *testing.T) {
 				t.Fatalf("invalid MX mutation error = %v, add calls = %d", err, fixture.count("AddDomainRecord"))
 			}
 		})
+	}
+}
+func TestFinalRecordSetRequiresExactEntries(t *testing.T) {
+	t.Parallel()
+	expected := []core.RecordEntry{{ID: "1", Value: "192.0.2.1", Extensions: core.RecordEntryExtensions{Aliyun: &core.AliyunRecordEntryExtensions{Line: defaultLine, Status: statusEnable}}}}
+	actual := core.RecordSet{Entries: append([]core.RecordEntry(nil), expected...)}
+	if !recordSetContainsExactEntries(actual, expected) {
+		t.Fatal("exact final entries did not match")
+	}
+	actual.Entries = append(actual.Entries, core.RecordEntry{ID: "2", Value: "192.0.2.2", Extensions: expected[0].Extensions})
+	if recordSetContainsExactEntries(actual, expected) {
+		t.Fatal("extra concurrent entry was accepted")
+	}
+	actual.Entries = append([]core.RecordEntry(nil), expected...)
+	actual.Entries[0].Value = "192.0.2.9"
+	if recordSetContainsExactEntries(actual, expected) {
+		t.Fatal("wrong final value was accepted")
 	}
 }
 
@@ -720,6 +751,25 @@ func TestCreateUpdateDeleteRequestMapping(t *testing.T) {
 	}
 	if fixture.count("DeleteDomainRecord") != 3 {
 		t.Fatalf("delete calls = %d", fixture.count("DeleteDomainRecord"))
+	}
+}
+
+func TestDeleteRecordSetRequiresProviderDisappearance(t *testing.T) {
+	fixture := newAliyunFixture(t)
+	fixture.retainDeletedRecords = true
+	provider := fixture.provider(t)
+	page, err := provider.ListRecordSets(context.Background(), "domain-1", core.PageRequest{Limit: 100})
+	if err != nil || len(page.Items) == 0 {
+		t.Fatalf("list record sets: %v", err)
+	}
+	current := page.Items[0]
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err = provider.DeleteRecordSet(ctx, "domain-1", current.ID, core.Precondition{
+		ExpectedFingerprint: current.Fingerprint, ProviderVersion: current.ProviderVersion,
+	})
+	if !core.IsErrorCode(err, core.ErrTimeout) {
+		t.Fatalf("delete with stale provider visibility error = %v", err)
 	}
 }
 

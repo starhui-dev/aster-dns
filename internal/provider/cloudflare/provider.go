@@ -33,7 +33,7 @@ const (
 	zonePageSize          = 50
 	recordPageSize        = 5000
 	readAttempts          = 3
-	maximumReadRetryDelay = time.Second
+	maximumReadRetryDelay = 15 * time.Second
 	offsetCursorPrefix    = "cloudflare-offset-v1:"
 	maxProviderPageCount  = 1_000_000
 )
@@ -76,6 +76,9 @@ func readCall[T any](p *Provider, ctx context.Context, operation string, call fu
 		}
 		delay, retry := core.ReadRetryDelay(time.Duration(1<<attempt)*100*time.Millisecond, mapped.RetryAfter, maximumReadRetryDelay)
 		if !retry {
+			return nil, mappedError
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
 			return nil, mappedError
 		}
 		if err = waitContext(ctx, delay); err != nil {

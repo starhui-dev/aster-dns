@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	cloudflaresdk "github.com/cloudflare/cloudflare-go/v7"
 	"github.com/cloudflare/cloudflare-go/v7/dns"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 )
@@ -131,7 +132,7 @@ func mapRecord(zoneName string, source dns.RecordResponse, recordType core.Recor
 	if automaticTTL {
 		ttl = cloudflareAutomaticTTL
 	}
-	entry, err := parseRecordContent(recordType, source.Content, source.Priority)
+	entry, err := parseRecordResponse(recordType, source)
 	if err != nil {
 		return core.RecordEntry{}, recordGroupKey{}, nil, time.Time{}, err
 	}
@@ -193,6 +194,46 @@ func normalizeTags(source []string) ([]string, error) {
 	return items, nil
 }
 
+func parseRecordResponse(recordType core.RecordType, source dns.RecordResponse) (core.RecordEntry, error) {
+	switch recordType {
+	case core.RecordTypeCAA:
+		var data *dns.CAARecordData
+		switch value := source.Data.(type) {
+		case dns.CAARecordData:
+			data = &value
+		case *dns.CAARecordData:
+			data = value
+		}
+		if data != nil {
+			if data.Flags != math.Trunc(data.Flags) || data.Flags < 0 || data.Flags > math.MaxUint8 {
+				return core.RecordEntry{}, errors.New("Cloudflare CAA flags are invalid")
+			}
+			flags, tag := uint8(data.Flags), data.Tag
+			return core.RecordEntry{Flags: &flags, Tag: &tag, Value: data.Value}, nil
+		}
+	case core.RecordTypeSRV:
+		var data *dns.SRVRecordData
+		switch value := source.Data.(type) {
+		case dns.SRVRecordData:
+			data = &value
+		case *dns.SRVRecordData:
+			data = value
+		}
+		if data != nil {
+			values := []float64{data.Priority, data.Weight, data.Port}
+			for _, value := range values {
+				if value != math.Trunc(value) || value < 0 || value > math.MaxUint16 {
+					return core.RecordEntry{}, errors.New("Cloudflare SRV data is invalid")
+				}
+			}
+			priority, weight, port := uint16(data.Priority), uint16(data.Weight), uint16(data.Port)
+			target := data.Target
+			return core.RecordEntry{Priority: &priority, Weight: &weight, Port: &port, Target: &target}, nil
+		}
+	}
+	return parseRecordContent(recordType, source.Content, source.Priority)
+}
+
 func parseRecordContent(recordType core.RecordType, content string, priority float64) (core.RecordEntry, error) {
 	if recordType == core.RecordTypeTXT {
 		return core.RecordEntry{Value: content}, nil
@@ -240,13 +281,27 @@ func parseRecordContent(recordType core.RecordType, content string, priority flo
 		tag := fields[1]
 		value := strings.TrimSpace(strings.TrimPrefix(content, fields[0]))
 		value = strings.TrimSpace(strings.TrimPrefix(value, fields[1]))
-		if unquoted, unquoteErr := strconv.Unquote(value); unquoteErr == nil {
+		if strings.HasPrefix(value, `"`) {
+			unquoted, unquoteErr := parseDNSCharacterString(value)
+			if unquoteErr != nil {
+				return core.RecordEntry{}, fmt.Errorf("Cloudflare CAA value: %w", unquoteErr)
+			}
 			value = unquoted
 		}
 		return core.RecordEntry{Flags: &flags, Tag: &tag, Value: value}, nil
 	default:
 		return core.RecordEntry{}, fmt.Errorf("unsupported Cloudflare record type %q", recordType)
 	}
+}
+
+func parseDNSCharacterString(value string) (string, error) {
+	entry, err := core.NormalizeCreateRecordSetInput("example.invalid", core.CreateRecordSetInput{
+		Name: "example.invalid", Type: core.RecordTypeTXT, TTL: 60, Entries: []core.RecordEntry{{Value: value}},
+	})
+	if err != nil {
+		return "", err
+	}
+	return entry.Entries[0].Value, nil
 }
 
 func wireRecordContent(recordType core.RecordType, entry core.RecordEntry) (string, float64, error) {
@@ -262,9 +317,28 @@ func wireRecordContent(recordType core.RecordType, entry core.RecordEntry) (stri
 	case core.RecordTypeSRV:
 		return fmt.Sprintf("%d %d %d %s", uint16PointerValue(entry.Priority), uint16PointerValue(entry.Weight), uint16PointerValue(entry.Port), stringPointerValue(entry.Target)), 0, nil
 	case core.RecordTypeCAA:
-		return fmt.Sprintf("%d %s %s", uint8PointerValue(entry.Flags), stringPointerValue(entry.Tag), strconv.Quote(entry.Value)), 0, nil
+		return fmt.Sprintf("%d %s %s", uint8PointerValue(entry.Flags), stringPointerValue(entry.Tag), wireTXTContent(entry.Value)), 0, nil
 	default:
 		return "", 0, fmt.Errorf("unsupported Cloudflare record type %q", recordType)
+	}
+}
+
+func structuredRecordData(recordType core.RecordType, entry core.RecordEntry) any {
+	switch recordType {
+	case core.RecordTypeCAA:
+		return dns.CAARecordDataParam{
+			Flags: cloudflaresdk.F(float64(uint8PointerValue(entry.Flags))),
+			Tag:   cloudflaresdk.F(stringPointerValue(entry.Tag)), Value: cloudflaresdk.F(entry.Value),
+		}
+	case core.RecordTypeSRV:
+		return dns.SRVRecordDataParam{
+			Priority: cloudflaresdk.F(float64(uint16PointerValue(entry.Priority))),
+			Weight:   cloudflaresdk.F(float64(uint16PointerValue(entry.Weight))),
+			Port:     cloudflaresdk.F(float64(uint16PointerValue(entry.Port))),
+			Target:   cloudflaresdk.F(stringPointerValue(entry.Target)),
+		}
+	default:
+		return nil
 	}
 }
 
@@ -470,6 +544,23 @@ func recordSetHasExactIDs(recordSet core.RecordSet, ids []string) bool {
 	}
 	for _, id := range ids {
 		if _, exists := available[id]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func recordSetHasExactEntries(recordSet core.RecordSet, expected []core.RecordEntry) bool {
+	if len(recordSet.Entries) != len(expected) {
+		return false
+	}
+	actualByID := make(map[string]core.RecordEntry, len(recordSet.Entries))
+	for _, entry := range recordSet.Entries {
+		actualByID[entry.ID] = entry
+	}
+	for _, wanted := range expected {
+		actual, exists := actualByID[wanted.ID]
+		if !exists || !equalRecordEntry(actual, wanted) {
 			return false
 		}
 	}

@@ -35,8 +35,11 @@ func CanonicalizeRecordName(name, zoneName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if absolute || canonical == zone || strings.HasSuffix(canonical, "."+zone) {
+	if canonical == zone || strings.HasSuffix(canonical, "."+zone) {
 		return canonical, nil
+	}
+	if absolute {
+		return "", errors.New("record name must belong to the target zone")
 	}
 	return canonicalizeName(canonical+"."+zone, true, false)
 }

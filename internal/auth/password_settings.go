@@ -25,13 +25,16 @@ func (s *Service) SetPassword(ctx context.Context, current AuthenticatedSession,
 		return IssuedSession{}, err
 	}
 	err = s.store.WithinTx(ctx, func(store Store) error {
-		updated, updateErr := store.UpdateUser(ctx, user.ID, changes)
+		updated, updateErr := store.UpdateUser(ctx, user.ID, user.UpdatedAt, changes)
 		if updateErr != nil {
 			return updateErr
 		}
 		issued.User = updated
 		if _, revokeErr := store.RevokeAllSessions(ctx, user.ID, nil, s.now()); revokeErr != nil {
 			return revokeErr
+		}
+		if deleteErr := store.DeleteChallengesForUser(ctx, user.ID, ChallengePendingTOTP); deleteErr != nil {
+			return deleteErr
 		}
 		if insertErr := store.InsertSession(ctx, issued.Session); insertErr != nil {
 			return insertErr
@@ -68,13 +71,16 @@ func (s *Service) DeletePassword(ctx context.Context, current AuthenticatedSessi
 		return IssuedSession{}, err
 	}
 	err = s.store.WithinTx(ctx, func(store Store) error {
-		updated, updateErr := store.UpdateUser(ctx, user.ID, changes)
+		updated, updateErr := store.UpdateUser(ctx, user.ID, user.UpdatedAt, changes)
 		if updateErr != nil {
 			return updateErr
 		}
 		issued.User = updated
 		if _, revokeErr := store.RevokeAllSessions(ctx, user.ID, nil, s.now()); revokeErr != nil {
 			return revokeErr
+		}
+		if deleteErr := store.DeleteChallengesForUser(ctx, user.ID, ChallengePendingTOTP); deleteErr != nil {
+			return deleteErr
 		}
 		if insertErr := store.InsertSession(ctx, issued.Session); insertErr != nil {
 			return insertErr

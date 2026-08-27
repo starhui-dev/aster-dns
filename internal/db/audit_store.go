@@ -44,10 +44,10 @@ func insertAuditEvent(ctx context.Context, querier auditQuerier, event audit.Eve
 			resource_id, provider_account_id, zone_id, request_id, ip, user_agent,
 			result, error_code, before_data, after_data, metadata
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::inet, $12, $13, $14, $15::jsonb, $16::jsonb, $17::jsonb)`,
-		event.ID, event.OccurredAt, event.ActorUserID, nullableString(event.ActorUsernameSnapshot),
+		event.ID, event.OccurredAt, event.ActorUserID, nullableString(audit.SanitizeText(event.ActorUsernameSnapshot)),
 		event.Action, event.ResourceType, nullableString(event.ResourceID), event.ProviderAccountID, event.ZoneID,
-		event.RequestID, nullableString(event.IP), nullableString(event.UserAgent), event.Result, nullableString(event.ErrorCode),
-		beforeData, afterData, metadata,
+		event.RequestID, nullableString(event.IP), nullableString(audit.SanitizeText(event.UserAgent)), event.Result,
+		nullableString(event.ErrorCode), beforeData, afterData, metadata,
 	)
 	if err != nil {
 		return mapError("insert audit event", err)

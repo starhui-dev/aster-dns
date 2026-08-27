@@ -78,13 +78,14 @@ func (s *Service) FinishPasskeyLogin(ctx context.Context, input PasskeyLoginVeri
 		}
 		return LoginResult{}, ErrInvalidCredentials
 	}
-	var updated *Passkey
+	var updated *PasskeyUpdate
 	for index := range resolved.Passkeys {
 		if bytes.Equal(resolved.Passkeys[index].Credential.ID, credential.ID) {
+			expectedSignCount := resolved.Passkeys[index].Credential.Authenticator.SignCount
 			resolved.Passkeys[index].Credential = *credential
 			now := s.now()
 			resolved.Passkeys[index].LastUsedAt = &now
-			updated = &resolved.Passkeys[index]
+			updated = &PasskeyUpdate{Passkey: resolved.Passkeys[index], ExpectedSignCount: expectedSignCount}
 			break
 		}
 	}

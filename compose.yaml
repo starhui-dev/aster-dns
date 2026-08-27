@@ -43,7 +43,8 @@ services:
       APP_LISTEN_ADDR: :8080
       APP_PUBLIC_URL: ${APP_COMPOSE_PUBLIC_URL:-http://localhost:8080}
       APP_DATABASE_URL: postgres://${POSTGRES_USER:-aster_dns}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@postgres:5432/${POSTGRES_DB:-aster_dns}?sslmode=${POSTGRES_SSLMODE:-disable}
-      APP_MASTER_KEY: ${APP_MASTER_KEY:?APP_MASTER_KEY must be set in .env}
+      APP_MASTER_KEY: ${APP_MASTER_KEY-}
+      APP_MASTER_KEY_FILE: ${APP_MASTER_KEY_FILE-}
       APP_MASTER_KEY_VERSION: ${APP_MASTER_KEY_VERSION:-1}
       APP_PREVIOUS_MASTER_KEYS: ${APP_PREVIOUS_MASTER_KEYS:-}
       APP_BOOTSTRAP_TOKEN: ${APP_BOOTSTRAP_TOKEN-}
@@ -67,7 +68,7 @@ services:
       APP_AUTH_CHALLENGE_TTL: ${APP_AUTH_CHALLENGE_TTL:-5m}
       APP_AUTH_ENROLLMENT_TTL: ${APP_AUTH_ENROLLMENT_TTL:-24h}
     healthcheck:
-      test: ["CMD", "/app/server", "healthcheck", "--url", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "/app/server", "healthcheck", "--url", "http://127.0.0.1:8080/readyz"]
       interval: 10s
       timeout: 3s
       retries: 6
@@ -85,7 +86,7 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    stop_grace_period: 20s
+    stop_grace_period: 30s
 
 volumes:
   postgres-data:

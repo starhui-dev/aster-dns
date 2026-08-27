@@ -226,9 +226,12 @@ func mapDomainRecord(zoneName string, source *alidns.DescribeDomainRecordsRespon
 }
 
 func parseDomainRecordValue(recordType core.RecordType, value string, priority int64) (core.RecordEntry, error) {
+	if recordType == core.RecordTypeTXT {
+		return core.RecordEntry{Value: value}, nil
+	}
 	value = strings.TrimSpace(value)
 	switch recordType {
-	case core.RecordTypeA, core.RecordTypeAAAA, core.RecordTypeTXT:
+	case core.RecordTypeA, core.RecordTypeAAAA:
 		return core.RecordEntry{Value: value}, nil
 	case core.RecordTypeCNAME, core.RecordTypeNS:
 		return core.RecordEntry{Target: stringPointer(value)}, nil

@@ -22,6 +22,7 @@ const (
 type providerAccountRuntime struct {
 	build            chan struct{}
 	calls            chan struct{}
+	mutations        chan struct{}
 	mu               sync.RWMutex
 	generation       uint64
 	ctx              context.Context
@@ -118,7 +119,25 @@ func (m *ProviderClientManager) Invalidate(accountID uuid.UUID) {
 	if m == nil {
 		return
 	}
-	m.accountRuntime(accountID).invalidate()
+	m.mu.Lock()
+	runtime := m.accounts[accountID]
+	m.mu.Unlock()
+	if runtime != nil {
+		runtime.invalidate()
+	}
+}
+
+func (m *ProviderClientManager) Remove(accountID uuid.UUID) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	runtime := m.accounts[accountID]
+	delete(m.accounts, accountID)
+	m.mu.Unlock()
+	if runtime != nil {
+		runtime.invalidate()
+	}
 }
 
 func (m *ProviderClientManager) accountRuntime(accountID uuid.UUID) *providerAccountRuntime {
@@ -129,7 +148,7 @@ func (m *ProviderClientManager) accountRuntime(accountID uuid.UUID) *providerAcc
 	}
 	generationContext, cancel := context.WithCancel(context.Background())
 	runtime := &providerAccountRuntime{
-		build: make(chan struct{}, 1), calls: make(chan struct{}, maximumAccountConcurrency),
+		build: make(chan struct{}, 1), calls: make(chan struct{}, maximumAccountConcurrency), mutations: make(chan struct{}, 1),
 		generation: 1, ctx: generationContext, cancel: cancel,
 	}
 	m.accounts[accountID] = runtime
@@ -236,7 +255,24 @@ func providerCall[T any](p *boundedProvider, ctx context.Context, call func(cont
 		}
 		return zero, callContext.Err()
 	}
+	if !p.runtime.current(p.generation) {
+		return zero, ErrProviderAccountConflict
+	}
+	if err := callContext.Err(); err != nil {
+		return zero, err
+	}
 	return call(callContext)
+}
+
+func providerMutationCall[T any](p *boundedProvider, ctx context.Context, call func(context.Context) (T, error)) (T, error) {
+	var zero T
+	select {
+	case p.runtime.mutations <- struct{}{}:
+		defer func() { <-p.runtime.mutations }()
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
+	return providerCall(p, ctx, call)
 }
 
 func (p *boundedProvider) ValidateCredentials(ctx context.Context) error {
@@ -269,19 +305,19 @@ func (p *boundedProvider) GetRecordSet(ctx context.Context, zoneID, recordSetID 
 }
 
 func (p *boundedProvider) CreateRecordSet(ctx context.Context, zoneID string, input provider.CreateRecordSetInput) (provider.RecordSet, error) {
-	return providerCall(p, ctx, func(callContext context.Context) (provider.RecordSet, error) {
+	return providerMutationCall(p, ctx, func(callContext context.Context) (provider.RecordSet, error) {
 		return p.inner.CreateRecordSet(callContext, zoneID, input)
 	})
 }
 
 func (p *boundedProvider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID string, input provider.UpdateRecordSetInput) (provider.RecordSet, error) {
-	return providerCall(p, ctx, func(callContext context.Context) (provider.RecordSet, error) {
+	return providerMutationCall(p, ctx, func(callContext context.Context) (provider.RecordSet, error) {
 		return p.inner.UpdateRecordSet(callContext, zoneID, recordSetID, input)
 	})
 }
 
 func (p *boundedProvider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID string, precondition provider.Precondition) error {
-	_, err := providerCall(p, ctx, func(callContext context.Context) (struct{}, error) {
+	_, err := providerMutationCall(p, ctx, func(callContext context.Context) (struct{}, error) {
 		return struct{}{}, p.inner.DeleteRecordSet(callContext, zoneID, recordSetID, precondition)
 	})
 	return err

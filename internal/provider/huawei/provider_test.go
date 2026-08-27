@@ -33,20 +33,21 @@ type fixtureZone struct {
 }
 
 type fixtureRecord struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	ZoneID    string   `json:"zone_id"`
-	ZoneName  string   `json:"zone_name"`
-	Type      string   `json:"type"`
-	TTL       int32    `json:"ttl"`
-	Records   []string `json:"records"`
-	Status    string   `json:"status"`
-	Line      string   `json:"line,omitempty"`
-	LineName  string   `json:"line_name,omitempty"`
-	Weight    *int32   `json:"weight,omitempty"`
-	CreatedAt string   `json:"created_at"`
-	UpdatedAt string   `json:"updated_at,omitempty"`
-	Default   bool     `json:"default"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	ZoneID      string   `json:"zone_id"`
+	ZoneName    string   `json:"zone_name"`
+	Type        string   `json:"type"`
+	TTL         int32    `json:"ttl"`
+	Records     []string `json:"records"`
+	Status      string   `json:"status"`
+	Line        string   `json:"line,omitempty"`
+	LineName    string   `json:"line_name,omitempty"`
+	Weight      *int32   `json:"weight,omitempty"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at,omitempty"`
+	Default     bool     `json:"default"`
+	FinalStatus string   `json:"-"`
 }
 
 type fixtureFailure struct {
@@ -258,6 +259,7 @@ func (f *huaweiFixture) handleCreateRecordSet(w http.ResponseWriter, r *http.Req
 		Records []string `json:"records"`
 		Line    string   `json:"line"`
 		Weight  *int32   `json:"weight"`
+		Status  string   `json:"status"`
 	}
 	if err := json.Unmarshal(body, &request); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -268,7 +270,7 @@ func (f *huaweiFixture) handleCreateRecordSet(w http.ResponseWriter, r *http.Req
 	zoneName := f.zoneNameLocked(zoneID)
 	record := fixtureRecord{
 		ID: fmt.Sprintf("created-%d", f.nextRecordID), Name: request.Name, ZoneID: zoneID, ZoneName: zoneName,
-		Type: request.Type, TTL: request.TTL, Records: request.Records, Status: "PENDING_CREATE",
+		Type: request.Type, TTL: request.TTL, Records: request.Records, Status: "PENDING_CREATE", FinalStatus: firstNonEmpty(request.Status, "ACTIVE"),
 		Line: firstNonEmpty(request.Line, "default_view"), Weight: request.Weight, CreatedAt: "2026-08-24T02:00:00.000",
 	}
 	f.nextRecordID++
@@ -325,7 +327,12 @@ func (f *huaweiFixture) handleRecordMutation(w http.ResponseWriter, r *http.Requ
 	}
 	switch r.Method {
 	case http.MethodGet:
-		_ = json.NewEncoder(w).Encode(f.records[zoneID][index])
+		record := f.records[zoneID][index]
+		if strings.HasPrefix(record.Status, "PENDING_") {
+			record.Status = firstNonEmpty(record.FinalStatus, "ACTIVE")
+			f.records[zoneID][index] = record
+		}
+		_ = json.NewEncoder(w).Encode(record)
 	case http.MethodPut:
 		var request struct {
 			Name    string   `json:"name"`
@@ -544,7 +551,7 @@ func TestHuaweiRecordStatusMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	createRequest := fixture.lastRequest(http.MethodPost, "/v2.1/zones/zone-1/recordsets")
-	if !strings.Contains(string(createRequest.body), `"status":"DISABLE"`) || created.Extensions.Huawei == nil || created.Extensions.Huawei.Status != "" || created.Extensions.Huawei.ProviderStatus != "PENDING_CREATE" {
+	if !strings.Contains(string(createRequest.body), `"status":"DISABLE"`) || created.Extensions.Huawei == nil || created.Extensions.Huawei.Status != "DISABLE" || created.Extensions.Huawei.ProviderStatus != "DISABLE" {
 		t.Fatalf("create status request = %s, response = %#v", createRequest.body, created.Extensions)
 	}
 
@@ -611,6 +618,30 @@ func TestRecordSetCreateUpdateDeleteAndPreconditions(t *testing.T) {
 	}
 	if err = provider.DeleteRecordSet(context.Background(), "zone-1", updated.ID, core.Precondition{ExpectedFingerprint: updated.Fingerprint, ProviderVersion: updated.ProviderVersion}); err != nil {
 		t.Fatalf("delete: %v", err)
+	}
+}
+
+func TestHuaweiRejectsCrossZoneRecordPayloadBeforeMutation(t *testing.T) {
+	fixture := newHuaweiFixture(t)
+	fixture.records["zone-1"][0].ZoneID = "zone-2"
+	client := fixture.provider(t)
+	if _, err := client.ListRecordSets(context.Background(), "zone-1", core.PageRequest{Limit: 100}); !core.IsErrorCode(err, core.ErrUpstream) {
+		t.Fatalf("cross-zone list error = %v", err)
+	}
+	current := fixture.records["zone-1"][0]
+	current.ZoneID = "zone-1"
+	fixture.records["zone-1"][0] = current
+	recordSet, err := client.GetRecordSet(context.Background(), "zone-1", "record-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.records["zone-1"][0].ZoneID = "zone-2"
+	desired := core.CreateRecordSetInput{Name: recordSet.Name, Type: recordSet.Type, TTL: recordSet.TTL, Entries: recordSet.Entries, Extensions: recordSet.Extensions}
+	if _, err = client.UpdateRecordSet(context.Background(), "zone-1", recordSet.ID, core.UpdateRecordSetInput{Desired: desired, Precondition: core.Precondition{ExpectedFingerprint: recordSet.Fingerprint, ProviderVersion: recordSet.ProviderVersion}}); !core.IsErrorCode(err, core.ErrUpstream) {
+		t.Fatalf("cross-zone update error = %v", err)
+	}
+	if fixture.count(http.MethodPut, "/v2.1/zones/zone-1/recordsets/record-a") != 0 {
+		t.Fatal("cross-zone payload reached mutation")
 	}
 }
 func TestHuaweiSystemDefaultRecordSetIsReadOnly(t *testing.T) {

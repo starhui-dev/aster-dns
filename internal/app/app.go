@@ -120,6 +120,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 			return err
 		}
 		providerAccountService.SetCacheInvalidator(dnsService)
+		zoneSyncService.SetCacheInvalidator(dnsService)
 	}
 	workerContext, stopWorkers := context.WithCancel(ctx)
 	var workers sync.WaitGroup

@@ -64,3 +64,10 @@ func TestKeyringEnvelopeReadsPreviousVersionAndWritesActiveVersion(t *testing.T)
 		t.Fatal("keyring reports unsupported version")
 	}
 }
+
+func TestZeroEnvelopeEncryptReturnsError(t *testing.T) {
+	var envelope Envelope
+	if _, _, _, err := envelope.Encrypt([]byte("secret"), nil); err == nil {
+		t.Fatal("zero envelope encryption unexpectedly succeeded")
+	}
+}

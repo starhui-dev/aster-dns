@@ -1,5 +1,5 @@
-import { Route, Router } from "@solidjs/router";
-import { ErrorBoundary } from "solid-js";
+import { Route, Router, useParams } from "@solidjs/router";
+import { ErrorBoundary, Show } from "solid-js";
 
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/ui/Button";
@@ -12,7 +12,7 @@ import SettingsPage from "../pages/SettingsPage";
 import UsersPage from "../pages/UsersPage";
 import ZonesPage from "../pages/ZonesPage";
 import AppShell from "./AppShell";
-import { AuthProvider } from "./AuthContext";
+import { AuthProvider, useAuth } from "./AuthContext";
 import AuthGate from "./AuthGate";
 
 export default function App() {
@@ -25,15 +25,40 @@ export default function App() {
             <Route path="/zones" component={ZonesPage} />
             <Route path="/zones/:zoneId/records" component={RecordsPage} />
             <Route path="/accounts" component={ProviderAccountsPage} />
-            <Route path="/accounts/:accountId" component={ProviderAccountsPage} />
+            <Route path="/accounts/:accountId" component={ProviderAccountDetailPage} />
             <Route path="/audit" component={AuditPage} />
             <Route path="/settings" component={SettingsPage} />
-            <Route path="/users" component={UsersPage} />
+            <Route path="/users" component={AdminUsersPage} />
             <Route path="*404" component={NotFoundPage} />
           </Router>
         </AuthGate>
       </AuthProvider>
     </ErrorBoundary>
+  );
+}
+
+function ProviderAccountDetailPage() {
+  const params = useParams<{ accountId: string }>();
+  return <ProviderAccountsPage accountId={params.accountId} />;
+}
+function AdminUsersPage() {
+  const auth = useAuth();
+  const allowed = () => {
+    const state = auth.state();
+    return state.kind === "authenticated" && state.session.user.role === "admin";
+  };
+  return (
+    <Show when={allowed()} fallback={<NotAuthorizedPage />}>
+      <UsersPage />
+    </Show>
+  );
+}
+
+function NotAuthorizedPage() {
+  return (
+    <Panel>
+      <Alert variant="danger">You are not authorized to view this page.</Alert>
+    </Panel>
   );
 }
 

@@ -41,15 +41,16 @@ func (p *Provider) CreateRecordSet(ctx context.Context, zoneID string, input cor
 		}
 	}
 
-	createdIDs := make([]string, 0, len(normalized.Entries))
+	expectedEntries := make([]core.RecordEntry, 0, len(normalized.Entries))
 	for _, entry := range normalized.Entries {
 		created, createErr := p.createRecord(ctx, zone.ID, normalized, options, entry, operationCreateRecordSet)
 		if createErr != nil {
 			return core.RecordSet{}, createErr
 		}
-		createdIDs = append(createdIDs, created.ID)
+		entry.ID = created.ID
+		expectedEntries = append(expectedEntries, entry)
 	}
-	return p.findFinalRecordSet(ctx, zone, createdIDs, desiredKey, operationCreateRecordSet)
+	return p.findFinalRecordSet(ctx, zone, expectedEntries, desiredKey, operationCreateRecordSet)
 }
 
 func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID string, input core.UpdateRecordSetInput) (core.RecordSet, error) {
@@ -124,7 +125,7 @@ func (p *Provider) UpdateRecordSet(ctx context.Context, zoneID, recordSetID stri
 			return core.RecordSet{}, err
 		}
 	}
-	return p.findFinalRecordSet(ctx, zone, entryIDs(finalEntries), desiredKey, operationUpdateRecordSet)
+	return p.findFinalRecordSet(ctx, zone, finalEntries, desiredKey, operationUpdateRecordSet)
 }
 
 func (p *Provider) DeleteRecordSet(ctx context.Context, zoneID, recordSetID string, precondition core.Precondition) error {
@@ -184,13 +185,13 @@ func (p *Provider) listRecordSetsForMutation(ctx context.Context, zone core.Zone
 	return sets, raw, nil
 }
 
-func (p *Provider) findFinalRecordSet(ctx context.Context, zone core.Zone, ids []string, desiredKey recordGroupKey, operation string) (core.RecordSet, error) {
+func (p *Provider) findFinalRecordSet(ctx context.Context, zone core.Zone, expectedEntries []core.RecordEntry, desiredKey recordGroupKey, operation string) (core.RecordSet, error) {
 	sets, raw, err := p.listRecordSetsForMutation(ctx, zone, operation)
 	if err != nil {
 		return core.RecordSet{}, err
 	}
 	for _, recordSet := range sets {
-		if recordSetHasExactIDs(recordSet, ids) {
+		if recordSetHasExactEntries(recordSet, expectedEntries) {
 			if !equivalentGroupKey(groupKeyFromRecordSet(recordSet), desiredKey) {
 				return core.RecordSet{}, core.NewError(core.ErrConflict, operation, responseRequestID(raw), 0, errors.New("Cloudflare final record state differs from the requested state"))
 			}
@@ -263,9 +264,14 @@ func newRecordBody(input core.CreateRecordSetInput, options recordOptions, entry
 	}
 	body := dns.RecordNewParamsBody{
 		Name: cloudflaresdk.F(input.Name), TTL: cloudflaresdk.F(wireTTL(input.TTL, options.automaticTTL)),
-		Type: cloudflaresdk.F(dns.RecordNewParamsBodyType(input.Type)), Content: cloudflaresdk.F(content),
+		Type:    cloudflaresdk.F(dns.RecordNewParamsBodyType(input.Type)),
 		Proxied: cloudflaresdk.F(options.proxied), Comment: cloudflaresdk.F(options.comment),
 		Tags: cloudflaresdk.F[any](append([]string(nil), options.tags...)),
+	}
+	if data := structuredRecordData(input.Type, entry); data != nil {
+		body.Data = cloudflaresdk.F[any](data)
+	} else {
+		body.Content = cloudflaresdk.F(content)
 	}
 	if input.Type == core.RecordTypeMX {
 		body.Priority = cloudflaresdk.F(priority)
@@ -280,9 +286,14 @@ func updateRecordBody(input core.CreateRecordSetInput, options recordOptions, en
 	}
 	body := dns.RecordUpdateParamsBody{
 		Name: cloudflaresdk.F(input.Name), TTL: cloudflaresdk.F(wireTTL(input.TTL, options.automaticTTL)),
-		Type: cloudflaresdk.F(dns.RecordUpdateParamsBodyType(input.Type)), Content: cloudflaresdk.F(content),
+		Type:    cloudflaresdk.F(dns.RecordUpdateParamsBodyType(input.Type)),
 		Proxied: cloudflaresdk.F(options.proxied), Comment: cloudflaresdk.F(options.comment),
 		Tags: cloudflaresdk.F[any](append([]string(nil), options.tags...)),
+	}
+	if data := structuredRecordData(input.Type, entry); data != nil {
+		body.Data = cloudflaresdk.F[any](data)
+	} else {
+		body.Content = cloudflaresdk.F(content)
 	}
 	if input.Type == core.RecordTypeMX {
 		body.Priority = cloudflaresdk.F(priority)

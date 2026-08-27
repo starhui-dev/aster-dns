@@ -45,6 +45,7 @@ type fixtureRecord struct {
 	Weight    *uint64
 	Remark    string
 	UpdatedOn string
+	DefaultNS bool
 }
 
 type fixtureFailure struct {
@@ -315,6 +316,7 @@ func recordListPayload(record fixtureRecord) map[string]any {
 		"RecordId": record.ID, "Value": record.Value, "Status": record.Status, "Remark": record.Remark, "UpdatedOn": record.UpdatedOn,
 		"Name": record.Name, "Line": record.Line, "LineId": record.LineID, "Type": record.Type, "TTL": record.TTL, "MX": record.MX,
 	}
+	payload["DefaultNS"] = record.DefaultNS
 	if record.Weight != nil {
 		payload["Weight"] = *record.Weight
 	}
@@ -415,11 +417,15 @@ func TestFactoryMetadataAndCapabilities(t *testing.T) {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
 	gradeDescriptor := false
+	defaultDescriptor := false
 	weightApplicability := false
 	remarkDescriptor := false
 	for _, field := range capabilities.ExtensionFields {
 		if field.Namespace == Type && field.Scope == core.ExtensionScopeZone && field.Key == "grade" && field.ReadOnly {
 			gradeDescriptor = true
+		}
+		if field.Namespace == Type && field.Scope == core.ExtensionScopeRecordSet && field.Key == "default" && field.Type == core.DescriptorFieldBoolean && field.ReadOnly {
+			defaultDescriptor = true
 		}
 		if field.Namespace == Type && field.Scope == core.ExtensionScopeRecordEntry && field.Key == "weight" && len(field.ApplicableWhen) == 1 {
 			values := field.ApplicableWhen[0].Values
@@ -430,7 +436,7 @@ func TestFactoryMetadataAndCapabilities(t *testing.T) {
 			remarkDescriptor = true
 		}
 	}
-	if len(capabilities.ExtensionFields) != 7 || !gradeDescriptor || !weightApplicability || !remarkDescriptor {
+	if len(capabilities.ExtensionFields) != 8 || !gradeDescriptor || !defaultDescriptor || !weightApplicability || !remarkDescriptor {
 		t.Fatalf("extension descriptors = %#v", capabilities.ExtensionFields)
 	}
 }
@@ -598,6 +604,50 @@ func TestRecordFixturesPreserveLineWeightStatusAndRoutingGroups(t *testing.T) {
 	}
 }
 
+func TestTXTMappingPreservesUnquotedBoundarySpaces(t *testing.T) {
+	t.Parallel()
+	entry, err := parseRecordValue(core.RecordTypeTXT, " leading and trailing ", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Value != " leading and trailing " {
+		t.Fatalf("TXT value = %q", entry.Value)
+	}
+}
+
+func TestTencentSystemDefaultNSRecordSetIsReadOnly(t *testing.T) {
+	fixture := newTencentFixture(t)
+	fixture.records[1] = append(fixture.records[1],
+		fixtureRecord{ID: 110, DomainID: 1, Name: "@", Type: "NS", Value: "f1g1ns1.dnspod.net.", TTL: 86400, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, DefaultNS: true, UpdatedOn: "2026-08-25 01:00:10"},
+		fixtureRecord{ID: 111, DomainID: 1, Name: "@", Type: "NS", Value: "f1g1ns2.dnspod.net.", TTL: 86400, Line: defaultLine, LineID: defaultLineID, Status: statusEnable, DefaultNS: true, UpdatedOn: "2026-08-25 01:00:11"},
+	)
+	client := fixture.provider(t)
+	page, err := client.ListRecordSets(context.Background(), "1", core.PageRequest{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current core.RecordSet
+	for _, recordSet := range page.Items {
+		if recordSet.Name == "example.com" && recordSet.Type == core.RecordTypeNS {
+			current = recordSet
+			break
+		}
+	}
+	if current.Type != core.RecordTypeNS || current.Extensions.Tencent == nil || current.Extensions.Tencent.Default == nil || !*current.Extensions.Tencent.Default {
+		t.Fatalf("default NS record set = %#v", current)
+	}
+	desired := core.CreateRecordSetInput{Name: current.Name, Type: current.Type, TTL: current.TTL, Entries: current.Entries, Extensions: current.Extensions}
+	if _, err = client.UpdateRecordSet(context.Background(), "1", current.ID, core.UpdateRecordSetInput{Desired: desired, Precondition: core.Precondition{ExpectedFingerprint: current.Fingerprint, ProviderVersion: current.ProviderVersion}}); !core.IsErrorCode(err, core.ErrUnsupported) {
+		t.Fatalf("default NS update error = %v", err)
+	}
+	if err = client.DeleteRecordSet(context.Background(), "1", current.ID, core.Precondition{ExpectedFingerprint: current.Fingerprint, ProviderVersion: current.ProviderVersion}); !core.IsErrorCode(err, core.ErrUnsupported) {
+		t.Fatalf("default NS delete error = %v", err)
+	}
+	if fixture.count("ModifyRecord") != 0 || fixture.count("DeleteRecord") != 0 {
+		t.Fatalf("default NS mutation calls: modify=%d delete=%d", fixture.count("ModifyRecord"), fixture.count("DeleteRecord"))
+	}
+}
+
 func TestMixedEntryStatusesRemainOneRecordSet(t *testing.T) {
 	fixture := newTencentFixture(t)
 	fixture.records[1] = append(fixture.records[1],
@@ -637,7 +687,7 @@ func TestMixedEntryStatusesRemainOneRecordSet(t *testing.T) {
 	if requestStatuses[110] != statusEnable || requestStatuses[111] != statusDisable {
 		t.Fatalf("modify statuses = %#v", requestStatuses)
 	}
-	complete, err := provider.findFinalRecordSet(context.Background(), "example.com", 1, []string{updated.Entries[0].ID}, nil, groupKeyFromRecordSet(updated), operationUpdateRecordSet)
+	complete, err := provider.findFinalRecordSet(context.Background(), "example.com", 1, updated.Entries, nil, groupKeyFromRecordSet(updated), operationUpdateRecordSet)
 	if err != nil || len(complete.Entries) != 2 {
 		t.Fatalf("complete final record set = %#v, %v", complete, err)
 	}

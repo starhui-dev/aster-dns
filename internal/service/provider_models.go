@@ -100,14 +100,15 @@ type ProviderRepository interface {
 	ListProviderAccounts(context.Context) ([]ProviderAccount, error)
 	GetProviderAccount(context.Context, uuid.UUID) (ProviderAccount, error)
 	GetProviderAccountCredential(context.Context, uuid.UUID) (ProviderAccount, CredentialMaterial, error)
-	UpdateProviderAccount(context.Context, uuid.UUID, ProviderAccountChanges) (ProviderAccount, error)
+	UpdateProviderAccount(context.Context, uuid.UUID, time.Time, ProviderAccountChanges) (ProviderAccount, error)
 	ReplaceProviderAccountCredential(context.Context, uuid.UUID, uint64, CredentialMaterial) (ProviderAccount, error)
 	SetProviderAccountValidation(context.Context, uuid.UUID, uint64, time.Time, ValidationStatus, time.Time, string) (ProviderAccount, error)
 	DeleteProviderAccount(context.Context, uuid.UUID) (ProviderAccount, error)
 
 	ReplaceZoneIndex(context.Context, uuid.UUID, uint64, time.Time, []ZoneIndexEntry, time.Time) error
 	InvalidateZoneIndex(context.Context, uuid.UUID, time.Time) error
-	UpsertZoneIndex(context.Context, uuid.UUID, ZoneIndexEntry, time.Time) (ZoneIndexEntry, error)
+	MarkZoneDeleted(context.Context, uuid.UUID, uuid.UUID, uint64, time.Time, time.Time) error
+	UpsertZoneIndex(context.Context, uuid.UUID, uint64, time.Time, ZoneIndexEntry, time.Time) (ZoneIndexEntry, error)
 	ListZones(context.Context, ZoneQuery) (ZonePageData, error)
 	GetZone(context.Context, uuid.UUID) (ZoneIndexEntry, error)
 

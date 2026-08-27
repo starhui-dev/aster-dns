@@ -110,6 +110,10 @@ func (*Factory) Capabilities() core.Capabilities {
 				},
 			},
 			{
+				Namespace: Type, Scope: core.ExtensionScopeRecordSet, Key: "default", Label: "System default NS record set",
+				Type: core.DescriptorFieldBoolean, ReadOnly: true,
+			},
+			{
 				Namespace: Type, Scope: core.ExtensionScopeRecordEntry, Key: "line", Label: "Routing line",
 				Type: core.DescriptorFieldString,
 			},

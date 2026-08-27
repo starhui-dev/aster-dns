@@ -141,6 +141,9 @@ func (p *Provider) GetZone(ctx context.Context, zoneID string) (core.Zone, error
 	if err != nil {
 		return core.Zone{}, err
 	}
+	if value(response.Id) != zoneID {
+		return core.Zone{}, p.providerPayloadError(operationGetZone, zoneMetadata, errors.New("Huawei Cloud returned a different zone ID"))
+	}
 	nameserverResponse, _, err := readCall(p, ctx, operationGetZone, func(client *dns.DnsClient) (*model.ShowPublicZoneNameServerResponse, error) {
 		return client.ShowPublicZoneNameServer(&model.ShowPublicZoneNameServerRequest{ZoneId: zoneID})
 	})
@@ -185,6 +188,9 @@ func (p *Provider) ListRecordSets(ctx context.Context, zoneID string, pageReques
 	}
 	items := make([]core.RecordSet, len(source))
 	for index := range source {
+		if value(source[index].ZoneId) != zoneID {
+			return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, metadata, errors.New("Huawei Cloud returned a record set for a different zone"))
+		}
 		items[index], err = mapQueryRecordSet(source[index])
 		if err != nil {
 			return core.Page[core.RecordSet]{}, p.providerPayloadError(operationListRecordSets, metadata, err)
@@ -214,6 +220,9 @@ func (p *Provider) getRecordSet(ctx context.Context, zoneID, recordSetID, operat
 	})
 	if err != nil {
 		return core.RecordSet{}, "", err
+	}
+	if value(response.Id) != recordSetID || value(response.ZoneId) != zoneID {
+		return core.RecordSet{}, "", p.providerPayloadError(operation, metadata, errors.New("Huawei Cloud returned a different record set identity"))
 	}
 	recordSet, zoneName, err := mapShowRecordSet(response)
 	if err != nil {
@@ -337,8 +346,11 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 }
 
 func nextMarkerCursor(links *model.PageLink, ids []string, scope string) (string, error) {
-	if links == nil || links.Next == nil || strings.TrimSpace(*links.Next) == "" || len(ids) == 0 {
+	if links == nil || links.Next == nil || strings.TrimSpace(*links.Next) == "" {
 		return "", nil
+	}
+	if len(ids) == 0 {
+		return "", errors.New("Huawei Cloud pagination returned an empty page with a next link")
 	}
 	return encodeMarkerCursor(scope, ids[len(ids)-1])
 }

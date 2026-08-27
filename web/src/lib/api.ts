@@ -93,7 +93,11 @@ function readCookie(name: string): string | null {
   for (const part of document.cookie.split(";")) {
     const value = part.trim();
     if (value.startsWith(prefix)) {
-      return decodeURIComponent(value.slice(prefix.length));
+      try {
+        return decodeURIComponent(value.slice(prefix.length));
+      } catch {
+        return null;
+      }
     }
   }
   return null;

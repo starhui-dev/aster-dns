@@ -1,6 +1,8 @@
 import { A } from "@solidjs/router";
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
+import { useAuth } from "../app/AuthContext";
+
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError } from "../lib/api";
@@ -15,6 +17,14 @@ import {
 } from "../lib/dns";
 
 export default function ZonesPage() {
+  const auth = useAuth();
+  const canMutate = () => {
+    const state = auth.state();
+    return (
+      state.kind === "authenticated" &&
+      (state.session.user.role === "admin" || state.session.user.role === "operator")
+    );
+  };
   const [zones, setZones] = createSignal<Zone[]>([]);
   const [providers, setProviders] = createSignal<ProviderTypeDefinition[]>([]);
   const [accounts, setAccounts] = createSignal<ProviderAccount[]>([]);
@@ -255,13 +265,15 @@ export default function ZonesPage() {
                       </td>
                       <td class="px-3 py-4 text-right">
                         <div class="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            disabled={busyZone() === zone.id || !zone.account_enabled}
-                            onClick={() => refresh(zone)}
-                          >
-                            Refresh
-                          </Button>
+                          <Show when={canMutate()}>
+                            <Button
+                              size="sm"
+                              disabled={busyZone() === zone.id || !zone.account_enabled}
+                              onClick={() => refresh(zone)}
+                            >
+                              Refresh
+                            </Button>
+                          </Show>
                           <A
                             class="inline-flex min-h-8 items-center rounded-md border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover"
                             href={`/zones/${zone.id}/records`}

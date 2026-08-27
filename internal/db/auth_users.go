@@ -88,7 +88,7 @@ func (s *AuthStore) InsertUser(ctx context.Context, user auth.User) error {
 	return nil
 }
 
-func (s *AuthStore) UpdateUser(ctx context.Context, id uuid.UUID, changes auth.UserChanges) (auth.User, error) {
+func (s *AuthStore) UpdateUser(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, changes auth.UserChanges) (auth.User, error) {
 	var role any
 	if changes.Role != nil {
 		role = string(*changes.Role)
@@ -113,21 +113,29 @@ func (s *AuthStore) UpdateUser(ctx context.Context, id uuid.UUID, changes auth.U
 			password_enabled = COALESCE($6::boolean, password_enabled),
 			totp_required = COALESCE($7::boolean, totp_required),
 			updated_at = now()
-		WHERE id = $1
+		WHERE id = $1 AND updated_at = $8
 		RETURNING id, COALESCE(webauthn_user_handle, ''::bytea), username, display_name, role,
 			COALESCE(password_hash, ''), password_enabled, totp_required, disabled_at, created_at, updated_at`,
-		id, displayName, role, changes.SetPasswordHash, changes.PasswordHash, passwordEnabled, totpRequired,
+		id, displayName, role, changes.SetPasswordHash, changes.PasswordHash, passwordEnabled, totpRequired, expectedUpdatedAt,
 	)
-	return scanUser(row)
+	user, err := scanUser(row)
+	if errors.Is(err, auth.ErrNotFound) {
+		return auth.User{}, auth.ErrConflict
+	}
+	return user, err
 }
 
-func (s *AuthStore) SetUserDisabled(ctx context.Context, id uuid.UUID, disabledAt *time.Time) (auth.User, error) {
+func (s *AuthStore) SetUserDisabled(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, disabledAt *time.Time) (auth.User, error) {
 	row := s.q.QueryRow(ctx, `
 		UPDATE users SET disabled_at = $2, updated_at = now()
-		WHERE id = $1
+		WHERE id = $1 AND updated_at = $3
 		RETURNING id, COALESCE(webauthn_user_handle, ''::bytea), username, display_name, role,
-			COALESCE(password_hash, ''), password_enabled, totp_required, disabled_at, created_at, updated_at`, id, disabledAt)
-	return scanUser(row)
+			COALESCE(password_hash, ''), password_enabled, totp_required, disabled_at, created_at, updated_at`, id, disabledAt, expectedUpdatedAt)
+	user, err := scanUser(row)
+	if errors.Is(err, auth.ErrNotFound) {
+		return auth.User{}, auth.ErrConflict
+	}
+	return user, err
 }
 
 func (s *AuthStore) InsertPasskey(ctx context.Context, passkey auth.Passkey) error {
@@ -181,7 +189,7 @@ func (s *AuthStore) DeletePasskey(ctx context.Context, userID, passkeyID uuid.UU
 		RETURNING id, user_id, name, credential_data, created_at, last_used_at`, passkeyID, userID))
 }
 
-func (s *AuthStore) UpdatePasskey(ctx context.Context, passkey auth.Passkey) error {
+func (s *AuthStore) UpdatePasskey(ctx context.Context, passkey auth.Passkey, expectedSignCount uint32) error {
 	credentialData, err := passkey.MarshalCredential()
 	if err != nil {
 		return err
@@ -194,14 +202,22 @@ func (s *AuthStore) UpdatePasskey(ctx context.Context, passkey auth.Passkey) err
 			backed_up = $6,
 			credential_data = $7,
 			last_used_at = $8
-		WHERE id = $1 AND user_id = $2`,
+		WHERE id = $1 AND user_id = $2 AND sign_count = $9
+		`,
 		passkey.ID, passkey.UserID, passkey.Credential.PublicKey, passkey.Credential.Authenticator.SignCount,
-		passkey.Credential.Flags.BackupEligible, passkey.Credential.Flags.BackupState, credentialData, passkey.LastUsedAt,
+		passkey.Credential.Flags.BackupEligible, passkey.Credential.Flags.BackupState, credentialData, passkey.LastUsedAt, expectedSignCount,
 	)
 	if err != nil {
 		return mapAuthStoreError("update passkey", err)
 	}
 	if command.RowsAffected() != 1 {
+		var exists bool
+		if checkErr := s.q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM passkey_credentials WHERE id = $1 AND user_id = $2)`, passkey.ID, passkey.UserID).Scan(&exists); checkErr != nil {
+			return mapAuthStoreError("check passkey sign count", checkErr)
+		}
+		if exists {
+			return auth.ErrConflict
+		}
 		return auth.ErrNotFound
 	}
 	return nil

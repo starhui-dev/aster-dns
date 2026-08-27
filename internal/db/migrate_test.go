@@ -11,7 +11,7 @@ import (
 func TestEmbeddedMigrationMatchesLatestVersion(t *testing.T) {
 	t.Parallel()
 
-	if migrations.LatestVersion != 4 {
+	if migrations.LatestVersion != 5 {
 		t.Fatalf("latest migration version = %d, update this contract test", migrations.LatestVersion)
 	}
 	content, err := migrations.Files.ReadFile("000001_initial_schema.up.sql")
@@ -56,6 +56,19 @@ func TestEmbeddedMigrationMatchesLatestVersion(t *testing.T) {
 	for _, fragment := range []string{"BEFORE UPDATE OR DELETE ON audit_events", "BEFORE TRUNCATE ON audit_events", "audit_events are append-only"} {
 		if !strings.Contains(string(immutabilityContent), fragment) {
 			t.Errorf("audit immutability migration does not contain %q", fragment)
+		}
+	}
+	referencesContent, err := migrations.Files.ReadFile("000005_audit_reference_snapshots.up.sql")
+	if err != nil {
+		t.Fatalf("read audit reference migration: %v", err)
+	}
+	for _, fragment := range []string{
+		"DROP CONSTRAINT audit_events_actor_user_id_fkey",
+		"DROP CONSTRAINT audit_events_provider_account_id_fkey",
+		"DROP CONSTRAINT audit_events_zone_id_fkey",
+	} {
+		if !strings.Contains(string(referencesContent), fragment) {
+			t.Errorf("audit reference migration does not contain %q", fragment)
 		}
 	}
 }

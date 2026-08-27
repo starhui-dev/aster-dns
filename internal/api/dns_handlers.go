@@ -281,7 +281,7 @@ func (h dnsHandler) deleteRecordSet(w http.ResponseWriter, r *http.Request) {
 		writeProviderError(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": true, "refetch_required": true})
 }
 
 func (h dnsHandler) batchRecordSets(w http.ResponseWriter, r *http.Request) {

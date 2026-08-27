@@ -177,6 +177,26 @@ func TestDNSRolePermissionMatrix(t *testing.T) {
 	}
 }
 
+func TestDNSAPIDeleteReturnsRefetchReceipt(t *testing.T) {
+	fakeProvider := fake.NewProvider()
+	if err := fakeProvider.SetZones([]provider.Zone{{ID: "zone-api", Name: "example.com", Status: "active"}}); err != nil {
+		t.Fatal(err)
+	}
+	fixture := newAPIDNSFixture(t, fakeProvider)
+	router, token, csrf := fixture.router(t, auth.RoleOperator)
+	response := serveDNSRequest(router, token, csrf, http.MethodPost, "/api/v1/zones/"+fixture.repository.zone.ID.String()+"/recordsets", map[string]any{
+		"name": "delete", "type": "A", "ttl": 300, "entries": []map[string]any{{"value": "192.0.2.70"}},
+	}, true)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	record := decodeRecordSetEnvelope(t, response.Body.Bytes())
+	response = serveDNSDeleteRequest(router, token, csrf, "/api/v1/zones/"+fixture.repository.zone.ID.String()+"/recordsets/"+record.ID, record.Fingerprint)
+	if response.Code != http.StatusOK || !stringsContainAll(response.Body.String(), `"deleted":true`, `"refetch_required":true`) {
+		t.Fatalf("delete receipt status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestProviderCredentialMutationRemainsAdminOnly(t *testing.T) {
 	repository := &apiProviderRepository{}
 	registry, err := provider.NewRegistry(fake.NewFactory())
@@ -244,7 +264,7 @@ func (r *apiDNSRepository) GetZone(_ context.Context, zoneID uuid.UUID) (provide
 	return r.zone, nil
 }
 
-func (r *apiDNSRepository) UpsertZoneIndex(_ context.Context, _ uuid.UUID, zone providerservice.ZoneIndexEntry, fetchedAt time.Time) (providerservice.ZoneIndexEntry, error) {
+func (r *apiDNSRepository) UpsertZoneIndex(_ context.Context, _ uuid.UUID, _ uint64, _ time.Time, zone providerservice.ZoneIndexEntry, fetchedAt time.Time) (providerservice.ZoneIndexEntry, error) {
 	zone.ProviderAccountID = r.account.ID
 	zone.ProviderType = r.account.ProviderType
 	zone.AccountName = r.account.Name
@@ -366,6 +386,20 @@ func serveDNSRequest(router http.Handler, token, csrf, method, path string, body
 		request.Header.Set("X-CSRF-Token", csrf)
 		request.AddCookie(&http.Cookie{Name: "__Host-aster_csrf", Value: csrf})
 	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	return response
+}
+
+func serveDNSDeleteRequest(router http.Handler, token, csrf, path, fingerprint string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(http.MethodDelete, path, nil)
+	request.Host = "dns.example.test"
+	request.Header.Set("X-Request-ID", "req_dns_api")
+	request.Header.Set("Origin", "https://dns.example.test")
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("If-Match", fingerprint)
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_session", Value: token})
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_csrf", Value: csrf})
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	return response

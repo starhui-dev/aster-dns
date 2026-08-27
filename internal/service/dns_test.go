@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/starhui-dev/aster-dns/internal/audit"
 	"github.com/starhui-dev/aster-dns/internal/provider"
 	"github.com/starhui-dev/aster-dns/internal/provider/fake"
@@ -83,6 +84,71 @@ func TestDNSRecordCacheReturnsMarkedStaleFallback(t *testing.T) {
 	}
 	if _, err = fixture.dns.ListRecordSets(context.Background(), fixture.zone.ID, RecordSetListInput{Refresh: true}); !provider.IsErrorCode(err, provider.ErrTimeout) {
 		t.Fatalf("forced refresh error = %v", err)
+	}
+}
+
+func TestDNSRefreshMissingZoneTombstonesIndex(t *testing.T) {
+	t.Parallel()
+	fixture := newDNSFixture(t, nil)
+	if _, err := fixture.dns.ListRecordSets(context.Background(), fixture.zone.ID, RecordSetListInput{}); err != nil {
+		t.Fatalf("prime record cache: %v", err)
+	}
+	fixture.provider.SetError(fake.OperationGetZone, provider.NewError(provider.ErrNotFound, "get_zone", "request-zone-missing", 0, errors.New("zone missing")))
+	if _, err := fixture.dns.RefreshZone(context.Background(), fixture.actor, fixture.zone.ID, fixture.metadata); !provider.IsErrorCode(err, provider.ErrNotFound) {
+		t.Fatalf("refresh missing zone error = %v", err)
+	}
+	if _, err := fixture.repository.GetZone(context.Background(), fixture.zone.ID); !errors.Is(err, ErrZoneNotFound) {
+		t.Fatalf("missing zone remained indexed: %v", err)
+	}
+	if _, cached := fixture.dns.cachedRecordSets(fixture.zone.ID, fixture.account.ID, fixture.account.CredentialRevision, fixture.account.UpdatedAt); cached {
+		t.Fatal("missing zone retained its record cache")
+	}
+	found := false
+	for _, event := range fixture.repository.audits {
+		if event.Action == "zone.refresh" && event.Result == audit.ResultFailed {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("missing zone audit = %#v", fixture.repository.audits)
+	}
+}
+
+func TestZoneSyncInvalidatesRecordCacheAfterSuccessfulSync(t *testing.T) {
+	t.Parallel()
+	fixture := newDNSFixture(t, []provider.RecordSet{{
+		ID: "set-1", Name: "www.example.com", Type: provider.RecordTypeA, TTL: 300,
+		Entries: []provider.RecordEntry{{ID: "entry-1", Value: "192.0.2.10"}},
+	}})
+	if _, err := fixture.dns.ListRecordSets(context.Background(), fixture.zone.ID, RecordSetListInput{}); err != nil {
+		t.Fatalf("prime record cache: %v", err)
+	}
+	current, err := fixture.provider.GetRecordSet(context.Background(), fixture.zone.ProviderZoneID, "set-1")
+	if err != nil {
+		t.Fatalf("get provider record: %v", err)
+	}
+	_, err = fixture.provider.UpdateRecordSet(context.Background(), fixture.zone.ProviderZoneID, "set-1", provider.UpdateRecordSetInput{
+		Desired: provider.CreateRecordSetInput{
+			Name: current.Name, Type: current.Type, TTL: current.TTL,
+			Entries: []provider.RecordEntry{{ID: "entry-1", Value: "192.0.2.20"}},
+		},
+		Precondition: provider.Precondition{ExpectedFingerprint: current.Fingerprint, ProviderVersion: current.ProviderVersion},
+	})
+	if err != nil {
+		t.Fatalf("external provider update: %v", err)
+	}
+	zoneSync, err := NewZoneSyncService(fixture.repository, fixture.dns.clients)
+	if err != nil {
+		t.Fatalf("new zone sync: %v", err)
+	}
+	zoneSync.SetCacheInvalidator(fixture.dns)
+	if _, err = zoneSync.SyncAccount(context.Background(), fixture.actor, fixture.account.ID, fixture.metadata); err != nil {
+		t.Fatalf("sync zones: %v", err)
+	}
+	refreshed, err := fixture.dns.ListRecordSets(context.Background(), fixture.zone.ID, RecordSetListInput{})
+	if err != nil || len(refreshed.Items) != 1 || refreshed.Items[0].Entries[0].Value != "192.0.2.20" {
+		t.Fatalf("record cache after zone sync = %#v, %v", refreshed, err)
 	}
 }
 
@@ -209,6 +275,40 @@ func TestDNSZoneAndAuditPagination(t *testing.T) {
 	}
 	if _, err = fixture.dns.GetAuditEvent(context.Background(), events.Items[0].ID); err != nil {
 		t.Fatalf("get audit event: %v", err)
+	}
+}
+
+func TestDNSAccountInvalidationCancelsInFlightFetch(t *testing.T) {
+	t.Parallel()
+
+	dns := &DNSService{recordCache: make(map[uuid.UUID]recordCacheState)}
+	zoneID := mustUUIDv7(t)
+	accountID := mustUUIDv7(t)
+	generation := dns.beginRecordFetch(zoneID, accountID)
+
+	dns.InvalidateAccount(accountID)
+	dns.storeRecordFetch(zoneID, generation, recordCacheEntry{
+		accountID: accountID, credentialRevision: 1, fetchedAt: time.Now().UTC(),
+		recordSets: []provider.RecordSet{{ID: "stale"}},
+	})
+	if _, ok := dns.cachedRecordSets(zoneID, accountID, 1, time.Time{}); ok {
+		t.Fatal("account invalidation allowed an in-flight fetch to repopulate the cache")
+	}
+}
+
+func TestDNSRecordCacheRejectsAccountVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	dns := &DNSService{recordCache: make(map[uuid.UUID]recordCacheState)}
+	zoneID := mustUUIDv7(t)
+	accountID := mustUUIDv7(t)
+	accountVersion := time.Now().UTC()
+	dns.storeRecordFetch(zoneID, dns.beginRecordFetch(zoneID, accountID), recordCacheEntry{
+		accountID: accountID, accountUpdatedAt: accountVersion, credentialRevision: 1,
+		fetchedAt: accountVersion, recordSets: []provider.RecordSet{{ID: "old"}},
+	})
+	if _, ok := dns.cachedRecordSets(zoneID, accountID, 1, accountVersion.Add(time.Nanosecond)); ok {
+		t.Fatal("cache entry from an older account version was accepted")
 	}
 }
 

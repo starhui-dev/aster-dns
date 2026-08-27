@@ -60,6 +60,18 @@ func TestProviderErrorResponsePreservesSafeRequestAndRetryMetadata(t *testing.T)
 	}
 }
 
+func TestProviderCredentialErrorsAreUpstreamFailures(t *testing.T) {
+	t.Parallel()
+	for _, code := range []provider.ErrorCode{provider.ErrAuthentication, provider.ErrForbidden} {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/provider-accounts/id/validate", nil)
+		response := httptest.NewRecorder()
+		writeProviderError(response, request, provider.NewError(code, "validate_credentials", "", 0, nil))
+		if response.Code != http.StatusBadGateway {
+			t.Errorf("code %q status = %d, want %d", code, response.Code, http.StatusBadGateway)
+		}
+	}
+}
+
 type apiProviderRepository struct {
 	providerservice.ProviderRepository
 	accounts []providerservice.ProviderAccount

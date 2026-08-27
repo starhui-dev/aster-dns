@@ -118,7 +118,7 @@ func (s *ProviderStore) GetProviderAccountCredential(ctx context.Context, accoun
 	return account, material, err
 }
 
-func (s *ProviderStore) UpdateProviderAccount(ctx context.Context, accountID uuid.UUID, changes service.ProviderAccountChanges) (service.ProviderAccount, error) {
+func (s *ProviderStore) UpdateProviderAccount(ctx context.Context, accountID uuid.UUID, expectedUpdatedAt time.Time, changes service.ProviderAccountChanges) (service.ProviderAccount, error) {
 	var options any
 	if len(changes.Options) != 0 {
 		options = []byte(changes.Options)
@@ -133,11 +133,15 @@ func (s *ProviderStore) UpdateProviderAccount(ctx context.Context, accountID uui
 			last_validated_at = CASE WHEN $6 THEN NULL ELSE last_validated_at END,
 			last_validation_error_code = CASE WHEN $6 THEN NULL ELSE last_validation_error_code END,
 			updated_at = now()
-		WHERE id = $1
+		WHERE id = $1 AND updated_at = $7
 		RETURNING `+providerAccountColumns,
-		accountID, changes.Name, changes.Description, changes.Enabled, options, changes.ResetValidation,
+		accountID, changes.Name, changes.Description, changes.Enabled, options, changes.ResetValidation, expectedUpdatedAt,
 	)
-	return scanProviderAccount(row)
+	account, err := scanProviderAccount(row)
+	if errors.Is(err, service.ErrProviderAccountNotFound) {
+		return service.ProviderAccount{}, service.ErrProviderAccountConflict
+	}
+	return account, err
 }
 
 func (s *ProviderStore) ReplaceProviderAccountCredential(ctx context.Context, accountID uuid.UUID, expectedRevision uint64, material service.CredentialMaterial) (service.ProviderAccount, error) {
@@ -271,7 +275,30 @@ func (s *ProviderStore) InvalidateZoneIndex(ctx context.Context, accountID uuid.
 	return nil
 }
 
-func (s *ProviderStore) UpsertZoneIndex(ctx context.Context, accountID uuid.UUID, zone service.ZoneIndexEntry, fetchedAt time.Time) (service.ZoneIndexEntry, error) {
+func (s *ProviderStore) MarkZoneDeleted(ctx context.Context, zoneID, accountID uuid.UUID, expectedRevision uint64, expectedUpdatedAt, deletedAt time.Time) error {
+	if expectedRevision > math.MaxInt64 {
+		return service.ErrInvalidProviderInput
+	}
+	command, err := s.q.Exec(ctx, `
+		UPDATE zones
+		SET deleted_from_provider_at = COALESCE(deleted_from_provider_at, $5), updated_at = $5
+		WHERE id = $1 AND provider_account_id = $2 AND deleted_from_provider_at IS NULL
+		  AND EXISTS (
+			SELECT 1 FROM provider_accounts
+			WHERE id = $2 AND credential_revision = $3 AND updated_at = $4
+		  )`, zoneID, accountID, int64(expectedRevision), expectedUpdatedAt, deletedAt)
+	if err != nil {
+		return mapProviderStoreError("mark zone deleted", err)
+	}
+	if command.RowsAffected() == 1 {
+		return nil
+	}
+	return service.ErrProviderAccountConflict
+}
+func (s *ProviderStore) UpsertZoneIndex(ctx context.Context, accountID uuid.UUID, expectedRevision uint64, expectedUpdatedAt time.Time, zone service.ZoneIndexEntry, fetchedAt time.Time) (service.ZoneIndexEntry, error) {
+	if expectedRevision > math.MaxInt64 {
+		return service.ZoneIndexEntry{}, service.ErrInvalidProviderInput
+	}
 	metadata := zone.Metadata
 	if len(metadata) == 0 {
 		metadata = json.RawMessage(`{}`)
@@ -280,7 +307,9 @@ func (s *ProviderStore) UpsertZoneIndex(ctx context.Context, accountID uuid.UUID
 		INSERT INTO zones (
 			id, provider_account_id, provider_zone_id, name, status, metadata,
 			fetched_at, last_seen_at, deleted_from_provider_at, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6::jsonb, $7, $7, NULL, $7, $7)
+		) SELECT $1, $2, $3, $4, NULLIF($5, ''), $6::jsonb, $7, $7, NULL, $7, $7
+		FROM provider_accounts
+		WHERE id = $2 AND credential_revision = $8 AND updated_at = $9
 		ON CONFLICT (provider_account_id, provider_zone_id) DO UPDATE SET
 			name = EXCLUDED.name,
 			status = EXCLUDED.status,
@@ -290,7 +319,7 @@ func (s *ProviderStore) UpsertZoneIndex(ctx context.Context, accountID uuid.UUID
 			deleted_from_provider_at = NULL,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id, provider_account_id, provider_zone_id, name, COALESCE(status, ''), metadata, fetched_at, last_seen_at`,
-		zone.ID, accountID, zone.ProviderZoneID, zone.Name, zone.Status, []byte(metadata), fetchedAt,
+		zone.ID, accountID, zone.ProviderZoneID, zone.Name, zone.Status, []byte(metadata), fetchedAt, int64(expectedRevision), expectedUpdatedAt,
 	)
 	var result service.ZoneIndexEntry
 	var rawMetadata []byte
@@ -298,6 +327,9 @@ func (s *ProviderStore) UpsertZoneIndex(ctx context.Context, accountID uuid.UUID
 		&result.ID, &result.ProviderAccountID, &result.ProviderZoneID, &result.Name, &result.Status,
 		&rawMetadata, &result.FetchedAt, &result.LastSeenAt,
 	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return service.ZoneIndexEntry{}, service.ErrProviderAccountConflict
+		}
 		return service.ZoneIndexEntry{}, mapZoneStoreError("upsert zone index", err)
 	}
 	result.Metadata = json.RawMessage(rawMetadata)

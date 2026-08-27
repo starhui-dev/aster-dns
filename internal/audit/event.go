@@ -51,6 +51,11 @@ func SanitizeMap(input map[string]any) map[string]any {
 	return output
 }
 
+// SanitizeText redacts credential-like values from untrusted audit scalar fields.
+func SanitizeText(value string) string {
+	return sensitiveValuePattern.ReplaceAllString(value, `${1}[REDACTED]`)
+}
+
 var (
 	sensitiveValuePattern = regexp.MustCompile(`(?i)((?:authorization|cookie|password|secret|token|credential|signature|access[_-]?key|api[_-]?key)[^:=\r\n]{0,24}[:=][ \t]*)(?:bearer[ \t]+|basic[ \t]+)?(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
 	nonAlphanumericKey    = regexp.MustCompile(`[^a-zA-Z0-9]`)
@@ -68,7 +73,7 @@ func sanitizeValue(value any) any {
 		return "[REDACTED_INVALID_JSON]"
 	}
 	if text, ok := value.(string); ok {
-		return sensitiveValuePattern.ReplaceAllString(text, `${1}[REDACTED]`)
+		return SanitizeText(text)
 	}
 	return sanitizeReflectValue(reflect.ValueOf(value))
 }
@@ -130,7 +135,7 @@ func sanitizeReflectValue(value reflect.Value) any {
 		}
 		return result
 	case reflect.String:
-		return sensitiveValuePattern.ReplaceAllString(value.String(), `${1}[REDACTED]`)
+		return SanitizeText(value.String())
 	default:
 		if !value.CanInterface() {
 			return nil

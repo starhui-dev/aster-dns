@@ -18,7 +18,7 @@ This checklist records only checks run for the current release candidate. A pass
 - [x] Frontend format check: `make frontend-format-check`
 - [x] Frontend lint: `make frontend-lint`
 - [x] TypeScript strict typecheck: `make frontend-typecheck`
-- [x] Backend and frontend tests: `make test` (all Go packages; 4 frontend files / 12 tests)
+- [x] Backend and frontend tests: `make test` (all Go packages; 4 frontend files / 13 tests)
 - [x] Selected Go race detector: `go test -race ./internal/provider/... ./internal/service ./internal/api ./internal/auth ./internal/audit ./internal/httpx`
 - [x] Production builds: `make build`
 - [x] Container build: `docker build --tag aster-dns:release-candidate --build-arg VERSION=release-candidate --build-arg COMMIT=local .`

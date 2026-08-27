@@ -77,6 +77,11 @@ type Passkey struct {
 	LastUsedAt *time.Time
 }
 
+type PasskeyUpdate struct {
+	Passkey           Passkey
+	ExpectedSignCount uint32
+}
+
 func (p Passkey) MarshalCredential() ([]byte, error) {
 	encoded, err := p.Credential.MarshalMsg(nil)
 	if err != nil {

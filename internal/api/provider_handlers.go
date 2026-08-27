@@ -305,7 +305,9 @@ func writeProviderError(w http.ResponseWriter, r *http.Request, err error) {
 
 func providerHTTPStatus(code provider.ErrorCode) int {
 	switch code {
-	case provider.ErrAuthentication, provider.ErrForbidden, provider.ErrValidation, provider.ErrUnsupported:
+	case provider.ErrAuthentication, provider.ErrForbidden:
+		return http.StatusBadGateway
+	case provider.ErrValidation, provider.ErrUnsupported:
 		return http.StatusUnprocessableEntity
 	case provider.ErrNotFound:
 		return http.StatusNotFound

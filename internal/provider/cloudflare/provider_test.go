@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudflare/cloudflare-go/v7/dns"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 	"github.com/starhui-dev/aster-dns/internal/provider/contracttest"
 )
@@ -613,6 +614,7 @@ func TestProxyAndAutomaticTTLValidation(t *testing.T) {
 }
 
 func TestRateLimitHeadersAndErrorMapping(t *testing.T) {
+
 	fixture := newCloudflareFixture(t)
 	fixture.failNext(http.MethodGet, "/zones", fixtureFailure{
 		Status: http.StatusTooManyRequests, Code: 10000, Message: "rate limited", RequestID: "cf-ray-rate-limit", RetryAfter: "12",
@@ -624,6 +626,33 @@ func TestRateLimitHeadersAndErrorMapping(t *testing.T) {
 	}
 	if providerError.Code != core.ErrRateLimited || providerError.ProviderRequestID != "cf-ray-rate-limit" || providerError.RetryAfter != 12*time.Second {
 		t.Fatalf("rate limit mapping = %#v", providerError)
+	}
+}
+func TestStructuredCAAAndSRVDataRoundTrip(t *testing.T) {
+	t.Parallel()
+	caa, err := parseRecordResponse(core.RecordTypeCAA, dns.RecordResponse{Data: dns.CAARecordData{Flags: 128, Tag: "issue", Value: "ca.example"}})
+	if err != nil || caa.Flags == nil || *caa.Flags != 128 || caa.Tag == nil || *caa.Tag != "issue" || caa.Value != "ca.example" {
+		t.Fatalf("CAA data = %#v, %v", caa, err)
+	}
+	srv, err := parseRecordResponse(core.RecordTypeSRV, dns.RecordResponse{Data: dns.SRVRecordData{Priority: 1, Weight: 5, Port: 443, Target: "service.example.com"}})
+	if err != nil || srv.Priority == nil || *srv.Priority != 1 || srv.Weight == nil || *srv.Weight != 5 || srv.Port == nil || *srv.Port != 443 || srv.Target == nil || *srv.Target != "service.example.com" {
+		t.Fatalf("SRV data = %#v, %v", srv, err)
+	}
+	body, err := newRecordBody(core.CreateRecordSetInput{Name: "caa.example.com", Type: core.RecordTypeCAA, TTL: 300}, recordOptions{}, caa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil || !strings.Contains(string(encoded), `"data":{"flags":128,"tag":"issue","value":"ca.example"}`) || strings.Contains(string(encoded), `"content"`) {
+		t.Fatalf("CAA body = %s, %v", encoded, err)
+	}
+}
+
+func TestCAAUsesDNSDecimalEscapes(t *testing.T) {
+	t.Parallel()
+	entry, err := parseRecordContent(core.RecordTypeCAA, `0 issue "\065"`, 0)
+	if err != nil || entry.Value != "A" {
+		t.Fatalf("CAA decimal escape value = %q, %v", entry.Value, err)
 	}
 }
 

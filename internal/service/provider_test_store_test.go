@@ -79,12 +79,15 @@ func (r *memoryProviderRepository) GetProviderAccountCredential(_ context.Contex
 	return cloneProviderAccount(account), cloneCredentialMaterial(credential), nil
 }
 
-func (r *memoryProviderRepository) UpdateProviderAccount(_ context.Context, accountID uuid.UUID, changes ProviderAccountChanges) (ProviderAccount, error) {
+func (r *memoryProviderRepository) UpdateProviderAccount(_ context.Context, accountID uuid.UUID, expectedUpdatedAt time.Time, changes ProviderAccountChanges) (ProviderAccount, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	account, exists := r.accounts[accountID]
 	if !exists {
 		return ProviderAccount{}, ErrProviderAccountNotFound
+	}
+	if !account.UpdatedAt.Equal(expectedUpdatedAt) {
+		return ProviderAccount{}, ErrProviderAccountConflict
 	}
 	if changes.Name != nil {
 		account.Name = *changes.Name
@@ -173,11 +176,18 @@ func (r *memoryProviderRepository) ReplaceZoneIndex(_ context.Context, accountID
 	if account.CredentialRevision != expectedRevision || !account.UpdatedAt.Equal(expectedUpdatedAt) {
 		return ErrProviderAccountConflict
 	}
+	existingIDs := make(map[string]uuid.UUID, len(r.zones[accountID]))
+	for _, existing := range r.zones[accountID] {
+		existingIDs[existing.ProviderZoneID] = existing.ID
+	}
 	account.LastZoneSyncAt = new(fetchedAt)
 	account.UpdatedAt = fetchedAt
 	r.accounts[accountID] = account
 	cloned := make([]ZoneIndexEntry, len(zones))
 	for index, zone := range zones {
+		if existingID, ok := existingIDs[zone.ProviderZoneID]; ok {
+			zone.ID = existingID
+		}
 		zone.ProviderAccountID = accountID
 		zone.ProviderType = account.ProviderType
 		zone.AccountName = account.Name
@@ -190,6 +200,29 @@ func (r *memoryProviderRepository) ReplaceZoneIndex(_ context.Context, accountID
 	}
 	r.zones[accountID] = cloned
 	return nil
+
+}
+
+func (r *memoryProviderRepository) MarkZoneDeleted(_ context.Context, zoneID, accountID uuid.UUID, expectedRevision uint64, expectedUpdatedAt, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	account, exists := r.accounts[accountID]
+	if !exists {
+		return ErrProviderAccountNotFound
+	}
+	if account.CredentialRevision != expectedRevision || !account.UpdatedAt.Equal(expectedUpdatedAt) {
+		return ErrProviderAccountConflict
+	}
+	zones := r.zones[accountID]
+	for index := range zones {
+		if zones[index].ID != zoneID {
+			continue
+		}
+		copy(zones[index:], zones[index+1:])
+		r.zones[accountID] = zones[:len(zones)-1]
+		return nil
+	}
+	return ErrZoneNotFound
 }
 
 func (r *memoryProviderRepository) InvalidateZoneIndex(_ context.Context, accountID uuid.UUID, _ time.Time) error {
@@ -205,7 +238,7 @@ func (r *memoryProviderRepository) InvalidateZoneIndex(_ context.Context, accoun
 	return nil
 }
 
-func (r *memoryProviderRepository) UpsertZoneIndex(_ context.Context, accountID uuid.UUID, zone ZoneIndexEntry, fetchedAt time.Time) (ZoneIndexEntry, error) {
+func (r *memoryProviderRepository) UpsertZoneIndex(_ context.Context, accountID uuid.UUID, expectedRevision uint64, expectedUpdatedAt time.Time, zone ZoneIndexEntry, fetchedAt time.Time) (ZoneIndexEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	account, exists := r.accounts[accountID]
@@ -213,6 +246,9 @@ func (r *memoryProviderRepository) UpsertZoneIndex(_ context.Context, accountID 
 		return ZoneIndexEntry{}, ErrProviderAccountNotFound
 	}
 	zone.ProviderAccountID = accountID
+	if account.CredentialRevision != expectedRevision || !account.UpdatedAt.Equal(expectedUpdatedAt) {
+		return ZoneIndexEntry{}, ErrProviderAccountConflict
+	}
 	zone.ProviderType = account.ProviderType
 	zone.AccountName = account.Name
 	zone.AccountEnabled = account.Enabled

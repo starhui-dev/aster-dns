@@ -94,7 +94,7 @@ export function ExtensionSummary(props: {
     props.descriptors
       .filter((field) => field.scope === props.scope && descriptorApplies(field, props.recordType))
       .map((field) => ({ field, value: props.extensions?.[field.namespace]?.[field.key] }))
-      .filter((item) => item.value !== undefined && item.value !== "" && item.value !== false);
+      .filter((item) => item.value !== undefined && item.value !== "" && item.value !== null);
   return (
     <Show when={values().length > 0}>
       <dl class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">

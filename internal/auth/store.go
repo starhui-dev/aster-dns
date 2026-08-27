@@ -18,13 +18,13 @@ type Store interface {
 	GetUserByCredential(context.Context, []byte, []byte) (User, error)
 	ListUsers(context.Context) ([]User, error)
 	InsertUser(context.Context, User) error
-	UpdateUser(context.Context, uuid.UUID, UserChanges) (User, error)
-	SetUserDisabled(context.Context, uuid.UUID, *time.Time) (User, error)
+	UpdateUser(context.Context, uuid.UUID, time.Time, UserChanges) (User, error)
+	SetUserDisabled(context.Context, uuid.UUID, time.Time, *time.Time) (User, error)
 
 	InsertPasskey(context.Context, Passkey) error
 	ListPasskeys(context.Context, uuid.UUID) ([]Passkey, error)
 	DeletePasskey(context.Context, uuid.UUID, uuid.UUID) (Passkey, error)
-	UpdatePasskey(context.Context, Passkey) error
+	UpdatePasskey(context.Context, Passkey, uint32) error
 	CountPasskeys(context.Context, uuid.UUID) (int, error)
 
 	InsertSession(context.Context, Session) error

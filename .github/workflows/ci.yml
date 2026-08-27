@@ -26,6 +26,8 @@ jobs:
           --health-retries 30
     env:
       APP_DATABASE_URL: postgres://aster_dns:ci-database-only@127.0.0.1:5432/aster_dns?sslmode=disable
+      MIGRATION_TEST_DATABASE_URL: postgres://aster_dns:ci-database-only@127.0.0.1:5432/aster_dns?sslmode=disable
+      MIGRATION_TEST_ALLOW_RESET: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7

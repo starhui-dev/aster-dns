@@ -35,6 +35,7 @@ type recordGroup struct {
 	key             recordGroupKey
 	entries         []core.RecordEntry
 	providerVersion string
+	defaultNS       bool
 }
 
 func mapDomain(source *dnspod.DomainListItem) (core.Zone, error) {
@@ -109,6 +110,7 @@ func groupRecords(zoneName string, source []*dnspod.RecordListItem) ([]core.Reco
 			groups[key] = group
 		}
 		group.entries = append(group.entries, mapped)
+		group.defaultNS = group.defaultNS || (record.DefaultNS != nil && *record.DefaultNS)
 		if version > group.providerVersion {
 			group.providerVersion = version
 		}
@@ -122,11 +124,16 @@ func groupRecords(zoneName string, source []*dnspod.RecordListItem) ([]core.Reco
 		if err != nil {
 			return nil, err
 		}
+		var defaultNS *bool
+		if group.defaultNS {
+			value := true
+			defaultNS = &value
+		}
 		recordSet, err := core.NormalizeRecordSet(zoneName, core.RecordSet{
 			ID: id, Name: group.key.name, Type: group.key.recordType, TTL: group.key.ttl,
 			Entries: group.entries,
 			Extensions: core.RecordSetExtensions{Tencent: &core.TencentRecordSetExtensions{
-				Status: aggregateTencentStatus(group.entries),
+				Status: aggregateTencentStatus(group.entries), Default: defaultNS,
 			}},
 			ProviderVersion: group.providerVersion,
 		})
@@ -205,9 +212,12 @@ func mapRecord(zoneName string, source *dnspod.RecordListItem, recordType core.R
 }
 
 func parseRecordValue(recordType core.RecordType, value string, mx uint64) (core.RecordEntry, error) {
+	if recordType == core.RecordTypeTXT {
+		return core.RecordEntry{Value: value}, nil
+	}
 	value = strings.TrimSpace(value)
 	switch recordType {
-	case core.RecordTypeA, core.RecordTypeAAAA, core.RecordTypeTXT:
+	case core.RecordTypeA, core.RecordTypeAAAA:
 		return core.RecordEntry{Value: value}, nil
 	case core.RecordTypeCNAME, core.RecordTypeNS:
 		return core.RecordEntry{Target: stringPointer(value)}, nil
@@ -313,6 +323,9 @@ func validateTencentInput(input core.CreateRecordSetInput, fallback routing) (ro
 		return routing{}, errors.New("record set contains extensions for another provider")
 	}
 
+	if input.Extensions.Tencent != nil && input.Extensions.Tencent.Default != nil {
+		return routing{}, errors.New("Tencent Cloud system default flag is read-only")
+	}
 	result := routing{
 		line: strings.TrimSpace(fallback.line), lineID: strings.TrimSpace(fallback.lineID), status: strings.TrimSpace(fallback.status),
 	}

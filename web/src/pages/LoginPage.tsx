@@ -186,7 +186,14 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
             <Button type="submit" variant="primary" disabled={busy()}>
               Verify code
             </Button>
-            <Button onClick={() => setTOTPToken(null)}>Start over</Button>
+            <Button
+              onClick={() => {
+                setTOTPToken(null);
+                setTOTPCode("");
+              }}
+            >
+              Start over
+            </Button>
           </div>
         </form>
       </Panel>

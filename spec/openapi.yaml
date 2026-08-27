@@ -864,7 +864,16 @@ paths:
           description: Expected canonical record-set fingerprint. Quotes are accepted.
           schema: { type: string }
       responses:
-        '204': { description: Deleted and related record cache invalidated }
+        '200':
+          description: Deleted; the client must refetch the Provider-backed record list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted, refetch_required]
+                properties:
+                  deleted: { type: boolean, const: true }
+                  refetch_required: { type: boolean, const: true }
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
   /api/v1/audit-events:
