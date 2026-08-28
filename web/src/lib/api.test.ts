@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { apiRequest, redactClientValue } from "./api";
+import { ApiError, apiRequest, apiErrorMessage, redactClientValue } from "./api";
 
 describe("apiRequest", () => {
   afterEach(() => {
@@ -33,6 +33,22 @@ describe("apiRequest", () => {
       requestId: "req_contract",
       status: 404,
     });
+  });
+
+  it("localizes only the generic API fallback message", () => {
+    const generic = new ApiError("The API request failed.", {
+      code: "request_failed",
+      requestId: null,
+      status: 503,
+    });
+    const upstream = new ApiError("Provider unavailable.", {
+      code: "upstream",
+      requestId: "req_upstream",
+      status: 502,
+    });
+
+    expect(apiErrorMessage(generic, "请求失败，请稍后重试。")).toBe("请求失败，请稍后重试。");
+    expect(apiErrorMessage(upstream, "请求失败，请稍后重试。")).toBe("Provider unavailable.");
   });
 
   it("adds the in-memory session CSRF cookie to mutations", async () => {

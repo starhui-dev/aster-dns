@@ -6,7 +6,7 @@ import { useI18n } from "../app/i18n";
 
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
-import { ApiError } from "../lib/api";
+import { ApiError, apiErrorMessage } from "../lib/api";
 import {
   listProviderAccounts,
   listProviderTypes,
@@ -339,7 +339,10 @@ function errorState(
   t: (key: string, values?: Record<string, string | number>) => string,
 ): { message: string; requestId?: string } {
   if (error instanceof ApiError) {
-    return { message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) };
+    return {
+      message: apiErrorMessage(error, t("zones.requestFailedMessage")),
+      ...(error.requestId ? { requestId: error.requestId } : {}),
+    };
   }
   return { message: error instanceof Error ? error.message : t("zones.requestFailedMessage") };
 }

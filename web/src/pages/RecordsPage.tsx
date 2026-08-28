@@ -23,7 +23,7 @@ import {
 } from "../components/ProviderFields";
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
-import { ApiError, redactClientValue } from "../lib/api";
+import { ApiError, apiErrorMessage, redactClientValue } from "../lib/api";
 import {
   batchRecordSets,
   createRecordSet,
@@ -1169,6 +1169,9 @@ function errorState(
   t: (key: string, values?: Record<string, string | number>) => string,
 ): { message: string; requestId?: string } {
   if (error instanceof ApiError)
-    return { message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) };
+    return {
+      message: apiErrorMessage(error, t("records.requestFailedMessage")),
+      ...(error.requestId ? { requestId: error.requestId } : {}),
+    };
   return { message: error instanceof Error ? error.message : t("records.requestFailedMessage") };
 }

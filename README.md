@@ -5,9 +5,9 @@
 
 [中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)
 
-Aster DNS 是一个自托管、同源的 DNS 管理控制平面，支持 Huawei Cloud DNS、Alibaba Cloud DNS、Tencent Cloud DNSPod 和 Cloudflare DNS。Provider API 是 Zone 与 Record 的事实来源。PostgreSQL 仅保存平台状态、Zone 索引、短期缓存元数据、加密凭据、会话和审计事件；它不是 desired-state Record 数据库。
+Aster DNS 是一个自托管的 DNS 管理平台，支持 Huawei Cloud DNS、Alibaba Cloud DNS、Tencent Cloud DNSPod 和 Cloudflare DNS。域名和解析记录以服务商接口中的数据为准。PostgreSQL 只保存平台状态、域名索引、短期缓存信息、加密凭据、会话和审计事件，不作为记录的目标状态数据库。
 
-四个官方 Provider 适配器、统一 DNS 服务/API、基于能力驱动的 SolidJS 控制台、Passkey 优先认证和可配置的 Argon2id 密码登录、TOTP、opaque session、RBAC、CSRF/Origin 防护、不可变审计事件和生产加固均已实现。单元测试、fixture 测试和一致性测试不代表已执行真实 Provider 账号 mutation；真实集成证据请参阅 [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md)。
+四家官方服务商适配器、统一 DNS 服务和接口、按服务商能力展示功能的 SolidJS 控制台、通行密钥优先的登录方式、可选的 Argon2id 密码登录、动态验证码、角色权限、跨站请求伪造和来源校验、不可修改的审计记录以及生产环境安全措施均已实现。单元测试、测试数据和一致性测试不代表执行过真实服务商账号的修改操作；真实集成测试结果请参阅 [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md)。
 
 ## 技术栈
 

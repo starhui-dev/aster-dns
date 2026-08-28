@@ -6,6 +6,8 @@ import App from "./App";
 describe("App", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.localStorage.removeItem("aster-dns-language");
+    window.localStorage.removeItem("aster-dns-theme");
     window.history.replaceState({}, "", "/");
   });
 
@@ -113,6 +115,58 @@ describe("App", () => {
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
     expect(screen.getByLabelText("Confirm password")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Register a Passkey" })).toBeInTheDocument();
+  });
+  it("localizes authentication failures", async () => {
+    window.localStorage.setItem("aster-dns-language", "zh-CN");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith("/auth/session")) {
+          return jsonResponse(
+            {
+              error: {
+                code: "authentication_failed",
+                message: "Authentication failed.",
+                request_id: "req_unauthenticated",
+              },
+            },
+            401,
+          );
+        }
+        if (path.endsWith("/auth/bootstrap")) {
+          return jsonResponse({
+            required: false,
+            configured: false,
+            password_login_enabled: true,
+          });
+        }
+        if (path.endsWith("/auth/login/password")) {
+          return jsonResponse(
+            {
+              error: {
+                code: "authentication_failed",
+                message: "Authentication failed.",
+                request_id: "req_password_failed",
+              },
+            },
+            401,
+          );
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }),
+    );
+
+    render(() => <App />);
+
+    expect(await screen.findByRole("heading", { name: "登录" })).toBeInTheDocument();
+    fireEvent.input(screen.getByLabelText("用户名"), { target: { value: "zhenxin" } });
+    fireEvent.input(screen.getByLabelText("密码"), { target: { value: "wrong-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "使用密码登录" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("登录失败，请检查登录信息后重试。");
+    expect(alert).toHaveTextContent("请求编号: req_password_failed");
   });
 
   it("links cross-account zones to their record management routes", async () => {

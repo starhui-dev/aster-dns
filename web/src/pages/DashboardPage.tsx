@@ -4,7 +4,7 @@ import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-j
 import { useI18n } from "../app/i18n";
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, PageHeader, Panel } from "../components/ui/Layout";
-import { ApiError } from "../lib/api";
+import { ApiError, apiErrorMessage } from "../lib/api";
 import {
   listAuditEvents,
   listProviderAccounts,
@@ -300,6 +300,9 @@ function errorState(
   t: (key: string, values?: Record<string, string | number>) => string,
 ): { message: string; requestId?: string } {
   if (error instanceof ApiError)
-    return { message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) };
+    return {
+      message: apiErrorMessage(error, t("dashboard.requestFailedMessage")),
+      ...(error.requestId ? { requestId: error.requestId } : {}),
+    };
   return { message: error instanceof Error ? error.message : t("dashboard.requestFailedMessage") };
 }

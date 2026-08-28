@@ -4,7 +4,7 @@ import { useI18n } from "../app/i18n";
 import { useAuth } from "../app/AuthContext";
 import { Button } from "../components/ui/Button";
 import { Alert, Field, PageHeader, Panel } from "../components/ui/Layout";
-import { ApiError } from "../lib/api";
+import { ApiError, apiErrorMessage } from "../lib/api";
 import {
   confirmTOTP,
   deletePasskey,
@@ -365,9 +365,10 @@ function errorMessage(
   t: (key: string, values?: Record<string, string | number>) => string,
 ): string {
   if (error instanceof ApiError) {
+    const message = apiErrorMessage(error, t("auth.requestFailedMessage"));
     return error.requestId === null
-      ? error.message
-      : `${error.message} ${t("settings.requestId")}: ${error.requestId}`;
+      ? message
+      : `${message} ${t("settings.requestId")}: ${error.requestId}`;
   }
   return error instanceof Error ? error.message : t("settings.requestFailed");
 }

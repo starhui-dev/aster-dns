@@ -7,6 +7,11 @@ import { Alert } from "../components/ui/Layout";
 import BootstrapPage from "../pages/BootstrapPage";
 import LoginPage from "../pages/LoginPage";
 import { useAuth } from "./AuthContext";
+function authErrorMessage(message: string, t: (key: string) => string): string {
+  if (message === "The API request failed.") return t("auth.requestFailedMessage");
+  if (message === "Authentication initialization failed.") return t("auth.genericFailure");
+  return message;
+}
 
 export default function AuthGate(props: ParentProps) {
   const auth = useAuth();
@@ -39,7 +44,7 @@ export default function AuthGate(props: ParentProps) {
             description={t("auth.unavailable.description")}
           >
             <Alert variant="danger" title={t("auth.connectionFailed")}>
-              <p>{state().message}</p>
+              <p>{authErrorMessage(state().message, t)}</p>
               {state().requestId !== null && (
                 <p class="mt-2 font-mono text-xs">
                   {t("auth.requestId")}: {state().requestId}

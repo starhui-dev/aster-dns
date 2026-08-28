@@ -32,6 +32,11 @@ export class ApiError extends Error {
     this.details = options.details;
   }
 }
+export function apiErrorMessage(error: ApiError, fallback: string): string {
+  return error.code === "request_failed" && error.message === "The API request failed."
+    ? fallback
+    : error.message;
+}
 
 export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const normalizedPath = path === "" ? "" : path.startsWith("/") ? path : `/${path}`;

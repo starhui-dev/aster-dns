@@ -2,7 +2,7 @@ import { Match, Switch, createMemo, createSignal, onCleanup, onMount } from "sol
 import { useI18n } from "../app/i18n";
 
 import { Alert, Badge, PageHeader, Panel } from "../components/ui/Layout";
-import { ApiError, apiRequest } from "../lib/api";
+import { ApiError, apiErrorMessage, apiRequest } from "../lib/api";
 
 interface APIOverview {
   name: string;
@@ -40,7 +40,11 @@ export default function FoundationPage() {
           return;
         }
         if (error instanceof ApiError) {
-          setConnection({ kind: "error", message: error.message, requestId: error.requestId });
+          setConnection({
+            kind: "error",
+            message: apiErrorMessage(error, t("foundation.apiUnavailableLabel")),
+            requestId: error.requestId,
+          });
           return;
         }
         setConnection({

@@ -5,7 +5,7 @@ import { useI18n } from "../app/i18n";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/ui/Button";
 import { Alert, Field } from "../components/ui/Layout";
-import { ApiError } from "../lib/api";
+import { ApiError, apiErrorMessage } from "../lib/api";
 import { bootstrapAdmin, bootstrapAdminWithPassword, type BootstrapStatus } from "../lib/auth";
 
 type BootstrapMethod = "password" | "passkey";
@@ -227,10 +227,15 @@ export default function BootstrapPage(props: { status: BootstrapStatus }) {
 
 function authErrorMessage(error: unknown, translate: (key: string) => string): string {
   if (error instanceof ApiError) {
-    if (error.code === "origin_denied") return translate("auth.originDenied");
+    const message =
+      error.code === "authentication_failed"
+        ? translate("auth.authenticationFailed")
+        : error.code === "origin_denied"
+          ? translate("auth.originDenied")
+          : apiErrorMessage(error, translate("auth.requestFailedMessage"));
     return error.requestId === null
-      ? error.message
-      : `${error.message} ${translate("auth.requestId")}: ${error.requestId}`;
+      ? message
+      : `${message} ${translate("auth.requestId")}: ${error.requestId}`;
   }
   return error instanceof Error ? error.message : translate("auth.genericFailure");
 }
