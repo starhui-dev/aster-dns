@@ -10,6 +10,7 @@ import {
 } from "solid-js";
 
 import { useAuth } from "../app/AuthContext";
+import { useI18n } from "../app/i18n";
 import { DescriptorFields, type FieldValues } from "../components/ProviderFields";
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
@@ -36,6 +37,7 @@ interface EditorState {
 
 export default function ProviderAccountsPage(props: { accountId?: string } = {}) {
   const auth = useAuth();
+  const { t } = useI18n();
   const [providers, setProviders] = createSignal<ProviderTypeDefinition[]>([]);
   const [accounts, setAccounts] = createSignal<ProviderAccount[]>([]);
   const [loading, setLoading] = createSignal(true);
@@ -62,7 +64,7 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
       setAccounts(accountList.provider_accounts);
       if (clearError) setError(null);
     } catch (caught) {
-      setError(errorState(caught));
+      setError(errorState(caught, t));
     } finally {
       setLoading(false);
     }
@@ -103,7 +105,7 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
       await operation();
       setNotice(success);
     } catch (caught) {
-      setError(errorState(caught));
+      setError(errorState(caught, t));
     } finally {
       await load(undefined, false);
       setBusy(false);
@@ -119,13 +121,13 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
   return (
     <div class="space-y-6">
       <PageHeader
-        eyebrow="DNS providers"
-        title="Provider accounts"
-        description="Accounts expose safe health and sync state. Credentials are accepted only by dedicated admin mutations and are never returned."
+        eyebrow={t("provider.eyebrow")}
+        title={t("provider.title")}
+        description={t("provider.description")}
         actions={
           <Show when={isAdmin()}>
             <Button variant="primary" onClick={() => setEditor({ mode: "create" })}>
-              Add provider account
+              {t("provider.add")}
             </Button>
           </Show>
         }
@@ -133,20 +135,19 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
 
       <Show when={error()}>
         {(value) => (
-          <Alert variant="danger" title="Provider request failed" role="alert">
+          <Alert variant="danger" title={t("provider.requestFailed")} role="alert">
             {value().message}
             <Show when={value().requestId}>
-              <span class="mt-2 block font-mono text-xs">Request {value().requestId}</span>
+              <span class="mt-2 block font-mono text-xs">
+                {t("provider.request", { id: value().requestId ?? "" })}
+              </span>
             </Show>
           </Alert>
         )}
       </Show>
       <Show when={notice()}>{(value) => <Alert variant="success">{value()}</Alert>}</Show>
       <Show when={!isAdmin()}>
-        <Alert title="Read-only account access">
-          Your role can inspect provider health and zone coverage. Credential management is
-          restricted to administrators by the API.
-        </Alert>
+        <Alert title={t("provider.readOnlyTitle")}>{t("provider.readOnlyMessage")}</Alert>
       </Show>
 
       <Show
@@ -154,7 +155,7 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
         fallback={
           <Panel>
             <p class="text-sm text-muted-foreground" aria-live="polite">
-              Loading provider accounts…
+              {t("provider.loading")}
             </p>
           </Panel>
         }
@@ -164,7 +165,7 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
             each={accounts()}
             fallback={
               <Panel>
-                <p class="text-sm text-muted-foreground">No provider accounts configured.</p>
+                <p class="text-sm text-muted-foreground">{t("provider.none")}</p>
               </Panel>
             }
           >
@@ -178,34 +179,48 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
                   edit={() => setEditor({ mode: "edit", account })}
                   replaceCredentials={() => setEditor({ mode: "credentials", account })}
                   validate={() =>
-                    void run(async () => {
-                      await validateProviderAccount(account.id);
-                    }, `${account.name} validated.`)
+                    void run(
+                      async () => {
+                        await validateProviderAccount(account.id);
+                      },
+                      t("provider.validated", { name: account.name }),
+                    )
                   }
                   sync={() =>
-                    void run(async () => {
-                      const result = await syncProviderZones(account.id);
-                      setNotice(`${account.name} synchronized ${result.zone_count} zones.`);
-                    }, `${account.name} zones synchronized.`)
+                    void run(
+                      async () => {
+                        const result = await syncProviderZones(account.id);
+                        setNotice(
+                          t("provider.synced", { name: account.name, count: result.zone_count }),
+                        );
+                      },
+                      t("provider.zonesSynced", { name: account.name }),
+                    )
                   }
                   toggle={() => {
                     if (
                       account.enabled &&
-                      !window.confirm(`Disable provider account “${account.name}”?`)
+                      !window.confirm(t("provider.confirmDisable", { name: account.name }))
                     )
                       return;
                     void run(
                       async () => {
                         await updateProviderAccount(account.id, { enabled: !account.enabled });
                       },
-                      `${account.name} ${account.enabled ? "disabled" : "enabled"}.`,
+                      t(account.enabled ? "provider.disabled" : "provider.enabled", {
+                        name: account.name,
+                      }),
                     );
                   }}
                   remove={() => {
-                    if (!window.confirm(`Delete provider account “${account.name}”?`)) return;
-                    void run(async () => {
-                      await deleteProviderAccount(account.id);
-                    }, `${account.name} deleted.`);
+                    if (!window.confirm(t("provider.confirmDelete", { name: account.name })))
+                      return;
+                    void run(
+                      async () => {
+                        await deleteProviderAccount(account.id);
+                      },
+                      t("provider.deleted", { name: account.name }),
+                    );
                   }}
                 />
               </div>
@@ -228,7 +243,7 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
               busy={busy()}
               close={() => setEditor(null)}
               saved={handleEditorSaved}
-              failed={(caught) => setError(errorState(caught))}
+              failed={(caught) => setError(errorState(caught, t))}
               setBusy={setBusy}
             />
           )}
@@ -250,6 +265,7 @@ function AccountCard(props: {
   toggle: () => void;
   remove: () => void;
 }) {
+  const { t } = useI18n();
   const validationTone = () => {
     if (props.account.validation_status === "valid") return "success" as const;
     if (
@@ -273,52 +289,60 @@ function AccountCard(props: {
         </div>
         <div class="flex flex-wrap gap-2">
           <Badge tone={props.account.enabled ? "success" : "neutral"}>
-            {props.account.enabled ? "Enabled" : "Disabled"}
+            {props.account.enabled ? t("provider.enabledLabel") : t("provider.disabledLabel")}
           </Badge>
-          <Badge tone={validationTone()}>{props.account.validation_status}</Badge>
+          <Badge tone={validationTone()}>
+            {validationStatusLabel(props.account.validation_status, t)}
+          </Badge>
         </div>
       </div>
       <dl class="mt-5 grid gap-3 text-sm sm:grid-cols-2">
-        <Metric label="Zones" value={String(props.account.zone_count)} />
+        <Metric label={t("provider.metric.zones")} value={String(props.account.zone_count)} />
         <Metric
-          label="Credentials"
+          label={t("provider.metric.credentials")}
           value={
             props.account.credential_configured
-              ? `Configured · revision ${props.account.credential_revision}`
-              : "Not configured"
+              ? t("provider.metric.configured", { revision: props.account.credential_revision })
+              : t("provider.metric.notConfigured")
           }
         />
-        <Metric label="Last validation" value={formatDate(props.account.last_validated_at)} />
-        <Metric label="Last zone sync" value={formatDate(props.account.last_zone_sync_at)} />
+        <Metric
+          label={t("provider.metric.lastValidation")}
+          value={formatDate(props.account.last_validated_at, t("provider.never"))}
+        />
+        <Metric
+          label={t("provider.metric.lastZoneSync")}
+          value={formatDate(props.account.last_zone_sync_at, t("provider.never"))}
+        />
       </dl>
       <Show when={props.account.last_validation_error_code}>
         <Alert class="mt-4" variant="warning">
-          Validation state: {props.account.last_validation_error_code}
+          {t("provider.validationState", { code: props.account.last_validation_error_code ?? "" })}
         </Alert>
       </Show>
       <Show when={props.admin}>
         <div class="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
           <Button size="sm" disabled={props.busy} onClick={props.edit}>
-            Edit
+            {t("provider.edit")}
           </Button>
           <Button size="sm" disabled={props.busy} onClick={props.replaceCredentials}>
-            Replace credentials
+            {t("provider.replaceCredentials")}
           </Button>
           <Button
             size="sm"
             disabled={props.busy || !props.account.credential_configured}
             onClick={props.validate}
           >
-            Validate
+            {t("provider.validate")}
           </Button>
           <Button size="sm" disabled={props.busy || !props.account.enabled} onClick={props.sync}>
-            Sync zones
+            {t("provider.syncZones")}
           </Button>
           <Button size="sm" disabled={props.busy} onClick={props.toggle}>
-            {props.account.enabled ? "Disable" : "Enable"}
+            {props.account.enabled ? t("provider.disable") : t("provider.enable")}
           </Button>
           <Button size="sm" variant="danger" disabled={props.busy} onClick={props.remove}>
-            Delete
+            {t("provider.delete")}
           </Button>
         </div>
       </Show>
@@ -335,6 +359,7 @@ function ProviderAccountEditor(props: {
   failed: (error: unknown) => void;
   setBusy: (busy: boolean) => void;
 }) {
+  const { t } = useI18n();
   const initial = untrack(() => {
     const providerType = props.state.account?.provider_type ?? props.providers[0]?.type ?? "";
     const definition = props.providers.find((provider) => provider.type === providerType);
@@ -360,9 +385,10 @@ function ProviderAccountEditor(props: {
   );
   const title = () => {
     if (props.state.mode === "credentials")
-      return `Replace credentials · ${props.state.account?.name}`;
-    if (props.state.mode === "edit") return `Edit ${props.state.account?.name}`;
-    return "Add provider account";
+      return t("provider.titleReplace", { name: props.state.account?.name ?? "" });
+    if (props.state.mode === "edit")
+      return t("provider.titleEdit", { name: props.state.account?.name ?? "" });
+    return t("provider.titleAdd");
   };
   onCleanup(() => setCredentials({}));
   const closeEditor = () => {
@@ -378,7 +404,7 @@ function ProviderAccountEditor(props: {
         if (props.state.mode === "credentials" && props.state.account !== undefined) {
           await replaceProviderCredentials(props.state.account.id, compactValues(credentials()));
           setCredentials({});
-          await props.saved(`${props.state.account.name} credentials replaced.`);
+          await props.saved(t("provider.savedCredentials", { name: props.state.account.name }));
           return;
         }
         if (props.state.mode === "edit" && props.state.account !== undefined) {
@@ -388,7 +414,7 @@ function ProviderAccountEditor(props: {
             enabled: enabled(),
             options: compactValues(options()),
           });
-          await props.saved(`${name()} updated.`);
+          await props.saved(t("provider.savedAccount", { name: name() }));
           return;
         }
         await createProviderAccount({
@@ -400,7 +426,7 @@ function ProviderAccountEditor(props: {
           credentials: compactValues(credentials()),
         });
         setCredentials({});
-        await props.saved(`${name()} created.`);
+        await props.saved(t("provider.createdAccount", { name: name() }));
       } catch (caught) {
         setCredentials({});
         props.failed(caught);
@@ -415,7 +441,7 @@ function ProviderAccountEditor(props: {
     <form onSubmit={submit}>
       <header class="flex items-start justify-between gap-4 border-b border-border p-5 sm:p-6">
         <div>
-          <p class="text-xs font-semibold text-primary">Provider configuration</p>
+          <p class="text-xs font-semibold text-primary">{t("provider.configuration")}</p>
           <h2 id="provider-account-editor-title" class="mt-1 text-xl font-semibold">
             {title()}
           </h2>
@@ -423,16 +449,16 @@ function ProviderAccountEditor(props: {
         <Button
           size="sm"
           variant="ghost"
-          aria-label="Close provider editor"
+          aria-label={t("provider.closeEditor")}
           disabled={props.busy}
           onClick={closeEditor}
         >
-          Close
+          {t("provider.close")}
         </Button>
       </header>
       <div class="space-y-5 p-5 sm:p-6">
         <Show when={props.state.mode === "create"}>
-          <Field label="Provider" for="provider-type">
+          <Field label={t("provider.field.provider")} for="provider-type">
             <select
               id="provider-type"
               class="text-input"
@@ -453,7 +479,7 @@ function ProviderAccountEditor(props: {
 
         <Show when={props.state.mode !== "credentials"}>
           <div class="grid gap-4 sm:grid-cols-2">
-            <Field label="Account name" for="provider-account-name">
+            <Field label={t("provider.field.accountName")} for="provider-account-name">
               <input
                 id="provider-account-name"
                 class="text-input"
@@ -463,7 +489,7 @@ function ProviderAccountEditor(props: {
                 onInput={(event) => setName(event.currentTarget.value)}
               />
             </Field>
-            <Field label="Enabled" for="provider-account-enabled">
+            <Field label={t("provider.field.enabled")} for="provider-account-enabled">
               <label class="flex min-h-10 items-center gap-3 rounded-md border border-input bg-surface px-3">
                 <input
                   id="provider-account-enabled"
@@ -471,11 +497,13 @@ function ProviderAccountEditor(props: {
                   checked={enabled()}
                   onChange={(event) => setEnabled(event.currentTarget.checked)}
                 />
-                <span>{enabled() ? "Provider calls enabled" : "Account disabled"}</span>
+                <span>
+                  {enabled() ? t("provider.callsEnabled") : t("provider.accountDisabled")}
+                </span>
               </label>
             </Field>
           </div>
-          <Field label="Description" for="provider-account-description">
+          <Field label={t("provider.field.description")} for="provider-account-description">
             <textarea
               id="provider-account-description"
               class="text-input min-h-24"
@@ -486,7 +514,7 @@ function ProviderAccountEditor(props: {
           </Field>
           <Show when={(selectedProvider()?.account_options.length ?? 0) > 0}>
             <div>
-              <h3 class="mb-3 text-sm font-semibold">Account options</h3>
+              <h3 class="mb-3 text-sm font-semibold">{t("provider.accountOptions")}</h3>
               <DescriptorFields
                 fields={selectedProvider()?.account_options ?? []}
                 values={options()}
@@ -499,10 +527,8 @@ function ProviderAccountEditor(props: {
 
         <Show when={props.state.mode === "create" || props.state.mode === "credentials"}>
           <div>
-            <h3 class="mb-1 text-sm font-semibold">Credentials</h3>
-            <p class="mb-3 text-xs text-muted-foreground">
-              Values are sent once to the server. Saved secrets are never refilled into this form.
-            </p>
+            <h3 class="mb-1 text-sm font-semibold">{t("provider.credentials")}</h3>
+            <p class="mb-3 text-xs text-muted-foreground">{t("provider.credentialsHint")}</p>
             <DescriptorFields
               fields={selectedProvider()?.credential_fields ?? []}
               values={credentials()}
@@ -514,10 +540,12 @@ function ProviderAccountEditor(props: {
       </div>
       <footer class="flex flex-wrap justify-end gap-2 border-t border-border p-5 sm:p-6">
         <Button disabled={props.busy} onClick={closeEditor}>
-          Cancel
+          {t("provider.cancel")}
         </Button>
         <Button type="submit" variant="primary" disabled={props.busy}>
-          {props.state.mode === "credentials" ? "Replace credentials" : "Save account"}
+          {props.state.mode === "credentials"
+            ? t("provider.replaceCredentials")
+            : t("provider.saveAccount")}
         </Button>
       </footer>
     </form>
@@ -552,16 +580,24 @@ function compactValues(values: FieldValues): Record<string, unknown> {
   return result;
 }
 
-function formatDate(value?: string): string {
-  if (value === undefined) return "Never";
+function formatDate(value: string | undefined, neverLabel: string): string {
+  if (value === undefined) return neverLabel;
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(value),
   );
 }
 
-function errorState(error: unknown): { message: string; requestId?: string } {
+function validationStatusLabel(status: string, t: (key: string) => string): string {
+  const key = `provider.status.${status}`;
+  return t(key);
+}
+
+function errorState(
+  error: unknown,
+  t: (key: string, values?: Record<string, string | number>) => string,
+): { message: string; requestId?: string } {
   if (error instanceof ApiError) {
     return { message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) };
   }
-  return { message: error instanceof Error ? error.message : "Provider request failed." };
+  return { message: error instanceof Error ? error.message : t("provider.requestFailedMessage") };
 }

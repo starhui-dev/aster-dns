@@ -1,5 +1,6 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
+import { useI18n } from "../app/i18n";
 import { useAuth } from "../app/AuthContext";
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
@@ -15,6 +16,7 @@ import {
 } from "../lib/auth";
 
 export default function UsersPage() {
+  const { t } = useI18n();
   const auth = useAuth();
   const [users, setUsers] = createSignal<AuthUser[]>([]);
   const [username, setUsername] = createSignal("");
@@ -39,7 +41,7 @@ export default function UsersPage() {
       setUsers((await listUsers(signal)).users);
       setError(null);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     }
   };
 
@@ -55,7 +57,7 @@ export default function UsersPage() {
     try {
       await operation();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setBusy(false);
     }
@@ -85,9 +87,9 @@ export default function UsersPage() {
   return (
     <div class="space-y-6">
       <PageHeader
-        eyebrow="Administration"
-        title="Users and roles"
-        description="Authorization is enforced by the API for admin, operator, and viewer roles."
+        eyebrow={t("users.eyebrow")}
+        title={t("users.title")}
+        description={t("users.description")}
       />
 
       <Show when={error() !== null}>
@@ -96,24 +98,26 @@ export default function UsersPage() {
 
       <Show when={enrollment()}>
         {(value) => (
-          <Alert variant="warning" title={`Enrollment token for ${value().username} — shown once`}>
+          <Alert
+            variant="warning"
+            title={t("users.enrollmentTitle", { username: value().username })}
+          >
             <code class="block break-all rounded-md border border-warning/20 bg-surface/70 p-3 text-xs">
               {value().token}
             </code>
-            <p class="mt-2 text-xs">Expires {formatDate(value().expiresAt)}.</p>
+            <p class="mt-2 text-xs">
+              {t("users.expires", { date: formatDate(value().expiresAt) })}
+            </p>
             <Button class="mt-3" size="sm" onClick={() => setEnrollment(null)}>
-              Dismiss
+              {t("users.dismiss")}
             </Button>
           </Alert>
         )}
       </Show>
 
-      <Panel
-        title="Create user"
-        description="New users enroll a Passkey with a one-time token. An initial password is optional when fallback login is enabled."
-      >
+      <Panel title={t("users.create")} description={t("users.createDescription")}>
         <form class="grid gap-4 md:grid-cols-2" onSubmit={submitCreateUser}>
-          <Field label="Username" for="create-username">
+          <Field label={t("users.username")} for="create-username">
             <input
               id="create-username"
               class="text-input"
@@ -122,7 +126,7 @@ export default function UsersPage() {
               onInput={(event) => setUsername(event.currentTarget.value)}
             />
           </Field>
-          <Field label="Display name" for="create-display-name">
+          <Field label={t("users.displayName")} for="create-display-name">
             <input
               id="create-display-name"
               class="text-input"
@@ -130,20 +134,20 @@ export default function UsersPage() {
               onInput={(event) => setDisplayName(event.currentTarget.value)}
             />
           </Field>
-          <Field label="Role" for="create-role">
+          <Field label={t("users.role")} for="create-role">
             <select
               id="create-role"
               class="text-input"
               value={role()}
               onChange={(event) => setRole(event.currentTarget.value as Role)}
             >
-              <option value="viewer">Viewer</option>
-              <option value="operator">Operator</option>
-              <option value="admin">Admin</option>
+              <option value="viewer">{t("role.viewer")}</option>
+              <option value="operator">{t("role.operator")}</option>
+              <option value="admin">{t("role.admin")}</option>
             </select>
           </Field>
           <Show when={currentSession()?.password_login_enabled}>
-            <Field label="Initial password (optional)" for="create-password">
+            <Field label={t("users.initialPassword")} for="create-password">
               <input
                 id="create-password"
                 class="text-input"
@@ -158,17 +162,17 @@ export default function UsersPage() {
           </Show>
           <div class="md:col-span-2">
             <Button type="submit" variant="primary" disabled={busy()}>
-              Create user
+              {t("users.createButton")}
             </Button>
           </div>
         </form>
       </Panel>
 
-      <Panel title="Existing users" description={`${users().length} user accounts`}>
+      <Panel title={t("users.existing")} description={t("users.count", { count: users().length })}>
         <div class="space-y-3">
           <For
             each={users()}
-            fallback={<p class="text-sm text-muted-foreground">No users found.</p>}
+            fallback={<p class="text-sm text-muted-foreground">{t("users.none")}</p>}
           >
             {(user) => (
               <UserRow
@@ -197,6 +201,7 @@ function UserRow(props: {
   reload: () => Promise<void>;
   showEnrollment: (token: string, expiresAt: string) => void;
 }) {
+  const { t } = useI18n();
   const [selectedRole, setSelectedRole] = createSignal<Role>();
   const role = () => selectedRole() ?? props.user.role;
   const isCurrent = () => props.user.id === props.currentUserID;
@@ -225,10 +230,7 @@ function UserRow(props: {
   const toggleDisabled = () => {
     const id = props.user.id;
     const disabled = props.user.disabled_at === undefined;
-    if (
-      disabled &&
-      !window.confirm(`Disable user “${props.user.username}” and revoke active sessions?`)
-    )
+    if (disabled && !window.confirm(t("users.confirmDisable", { username: props.user.username })))
       return;
     const reload = props.reload;
     const run = props.run;
@@ -246,15 +248,15 @@ function UserRow(props: {
             <p class="font-medium text-foreground">
               {props.user.display_name || props.user.username}
             </p>
-            <Badge>{props.user.role}</Badge>
+            <Badge>{t(`role.${props.user.role}`)}</Badge>
             <Show when={props.user.disabled_at !== undefined}>
-              <Badge tone="danger">Disabled</Badge>
+              <Badge tone="danger">{t("users.disabled")}</Badge>
             </Show>
           </div>
           <p class="mt-1 truncate text-sm text-muted-foreground">{props.user.username}</p>
         </div>
         <div class="flex flex-wrap items-end gap-2">
-          <Field label="Role" for={`role-${props.user.id}`}>
+          <Field label={t("users.role")} for={`role-${props.user.id}`}>
             <select
               id={`role-${props.user.id}`}
               class="text-input min-w-32"
@@ -262,26 +264,26 @@ function UserRow(props: {
               disabled={props.busy || isCurrent()}
               onChange={(event) => setSelectedRole(event.currentTarget.value as Role)}
             >
-              <option value="viewer">Viewer</option>
-              <option value="operator">Operator</option>
-              <option value="admin">Admin</option>
+              <option value="viewer">{t("role.viewer")}</option>
+              <option value="operator">{t("role.operator")}</option>
+              <option value="admin">{t("role.admin")}</option>
             </select>
           </Field>
           <Button
             disabled={props.busy || isCurrent() || role() === props.user.role}
             onClick={saveRole}
           >
-            Save role
+            {t("users.saveRole")}
           </Button>
           <Button disabled={props.busy} onClick={createEnrollment}>
-            New enrollment token
+            {t("users.newEnrollment")}
           </Button>
           <Button
             variant={props.user.disabled_at === undefined ? "danger" : "secondary"}
             disabled={props.busy || isCurrent()}
             onClick={toggleDisabled}
           >
-            {props.user.disabled_at === undefined ? "Disable" : "Enable"}
+            {props.user.disabled_at === undefined ? t("users.disable") : t("users.enable")}
           </Button>
         </div>
       </div>
@@ -295,11 +297,14 @@ function formatDate(value: string): string {
   );
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage(
+  error: unknown,
+  t: (key: string, values?: Record<string, string | number>) => string,
+): string {
   if (error instanceof ApiError) {
     return error.requestId === null
       ? error.message
-      : `${error.message} Request ID: ${error.requestId}`;
+      : `${error.message} ${t("users.requestId")}: ${error.requestId}`;
   }
-  return error instanceof Error ? error.message : "The user operation failed.";
+  return error instanceof Error ? error.message : t("users.requestFailed");
 }

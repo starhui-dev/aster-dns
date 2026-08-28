@@ -2,6 +2,7 @@ import { A } from "@solidjs/router";
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import { useAuth } from "../app/AuthContext";
+import { useI18n } from "../app/i18n";
 
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
@@ -17,6 +18,7 @@ import {
 } from "../lib/dns";
 
 export default function ZonesPage() {
+  const { t } = useI18n();
   const auth = useAuth();
   const canMutate = () => {
     const state = auth.state();
@@ -67,7 +69,7 @@ export default function ZonesPage() {
       setTotal(result.total);
       setError(null);
     } catch (caught) {
-      setError(errorState(caught));
+      setError(errorState(caught, t));
     } finally {
       setLoading(false);
     }
@@ -80,7 +82,7 @@ export default function ZonesPage() {
         await loadCatalog(controller.signal);
         await loadZones(controller.signal, "");
       } catch (caught) {
-        setError(errorState(caught));
+        setError(errorState(caught, t));
         setLoading(false);
       }
     };
@@ -101,17 +103,17 @@ export default function ZonesPage() {
       .then((result) =>
         setZones((current) => current.map((item) => (item.id === zone.id ? result.zone : item))),
       )
-      .catch((caught) => setError(errorState(caught)))
+      .catch((caught) => setError(errorState(caught, t)))
       .finally(() => setBusyZone(undefined));
   };
 
   return (
     <div class="space-y-6">
       <PageHeader
-        eyebrow="Global DNS index"
-        title="Zones"
-        description={`${total()} indexed zones across all enabled and disabled provider accounts.`}
-        actions={<Button onClick={() => void loadZones()}>Reload index</Button>}
+        eyebrow={t("zones.eyebrow")}
+        title={t("zones.title")}
+        description={t("zones.description", { total: total() })}
+        actions={<Button onClick={() => void loadZones()}>{t("zones.reload")}</Button>}
       />
 
       <Show when={error()}>
@@ -119,7 +121,9 @@ export default function ZonesPage() {
           <Alert variant="danger" role="alert">
             {value().message}
             <Show when={value().requestId}>
-              <span class="mt-2 block font-mono text-xs">Request {value().requestId}</span>
+              <span class="mt-2 block font-mono text-xs">
+                {t("zones.request", { id: value().requestId ?? "" })}
+              </span>
             </Show>
           </Alert>
         )}
@@ -127,54 +131,54 @@ export default function ZonesPage() {
 
       <Panel compact>
         <form class="grid gap-3 md:grid-cols-2 xl:grid-cols-5" onSubmit={applyFilters}>
-          <Field label="Search" for="zone-search">
+          <Field label={t("zones.search")} for="zone-search">
             <input
               id="zone-search"
               class="text-input"
               type="search"
-              placeholder="example.com"
+              placeholder={t("zones.searchPlaceholder")}
               value={query()}
               onInput={(event) => setQuery(event.currentTarget.value)}
             />
           </Field>
-          <Field label="Provider" for="zone-provider-filter">
+          <Field label={t("zones.provider")} for="zone-provider-filter">
             <select
               id="zone-provider-filter"
               class="text-input"
               value={providerType()}
               onChange={(event) => setProviderType(event.currentTarget.value)}
             >
-              <option value="">All providers</option>
+              <option value="">{t("zones.allProviders")}</option>
               <For each={providers()}>
                 {(provider) => <option value={provider.type}>{provider.display_name}</option>}
               </For>
             </select>
           </Field>
-          <Field label="Account" for="zone-account-filter">
+          <Field label={t("zones.account")} for="zone-account-filter">
             <select
               id="zone-account-filter"
               class="text-input"
               value={accountID()}
               onChange={(event) => setAccountID(event.currentTarget.value)}
             >
-              <option value="">All accounts</option>
+              <option value="">{t("zones.allAccounts")}</option>
               <For each={accounts()}>
                 {(account) => <option value={account.id}>{account.name}</option>}
               </For>
             </select>
           </Field>
-          <Field label="Status" for="zone-status-filter">
+          <Field label={t("zones.status")} for="zone-status-filter">
             <input
               id="zone-status-filter"
               class="text-input"
-              placeholder="Provider status"
+              placeholder={t("zones.statusPlaceholder")}
               value={status()}
               onInput={(event) => setStatus(event.currentTarget.value)}
             />
           </Field>
           <div class="flex items-end gap-2">
             <Button type="submit" variant="primary" disabled={loading()}>
-              Apply filters
+              {t("zones.applyFilters")}
             </Button>
             <Button
               disabled={loading()}
@@ -187,7 +191,7 @@ export default function ZonesPage() {
                 void loadZones(undefined, "");
               }}
             >
-              Reset
+              {t("zones.reset")}
             </Button>
           </div>
         </form>
@@ -198,7 +202,7 @@ export default function ZonesPage() {
           when={!loading()}
           fallback={
             <p class="p-2 text-sm text-muted-foreground" aria-live="polite">
-              Loading zones…
+              {t("zones.loading")}
             </p>
           }
         >
@@ -206,11 +210,11 @@ export default function ZonesPage() {
             <table class="w-full min-w-[56rem] border-collapse text-left text-sm">
               <thead>
                 <tr class="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-                  <th class="px-3 py-3 font-semibold">Zone</th>
-                  <th class="px-3 py-3 font-semibold">Provider account</th>
-                  <th class="px-3 py-3 font-semibold">Status</th>
-                  <th class="px-3 py-3 font-semibold">Freshness</th>
-                  <th class="px-3 py-3 text-right font-semibold">Actions</th>
+                  <th class="px-3 py-3 font-semibold">{t("zones.column.zone")}</th>
+                  <th class="px-3 py-3 font-semibold">{t("zones.column.account")}</th>
+                  <th class="px-3 py-3 font-semibold">{t("zones.column.status")}</th>
+                  <th class="px-3 py-3 font-semibold">{t("zones.column.freshness")}</th>
+                  <th class="px-3 py-3 text-right font-semibold">{t("zones.column.actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -219,7 +223,7 @@ export default function ZonesPage() {
                   fallback={
                     <tr>
                       <td class="px-3 py-8 text-center text-muted-foreground" colSpan={5}>
-                        No zones match the current filters.
+                        {t("zones.empty")}
                       </td>
                     </tr>
                   }
@@ -248,16 +252,20 @@ export default function ZonesPage() {
                       <td class="px-3 py-4">
                         <div class="flex flex-wrap gap-2">
                           <Badge tone={zone.account_enabled ? "success" : "neutral"}>
-                            {zone.account_enabled ? zone.status || "Active" : "Account disabled"}
+                            {zone.account_enabled
+                              ? localizedStatus(zone.status || "active", "zones.statusValue", t)
+                              : t("zones.accountDisabled")}
                           </Badge>
                           <Show when={zone.validation_status !== "valid"}>
-                            <Badge tone="warning">{zone.validation_status}</Badge>
+                            <Badge tone="warning">
+                              {localizedStatus(zone.validation_status, "zones.statusValue", t)}
+                            </Badge>
                           </Show>
                         </div>
                       </td>
                       <td class="px-3 py-4">
                         <Badge tone={zone.stale ? "warning" : "success"}>
-                          {zone.stale ? "Stale" : "Fresh"}
+                          {zone.stale ? t("zones.stale") : t("zones.fresh")}
                         </Badge>
                         <p class="mt-1 text-xs text-muted-foreground">
                           {formatDate(zone.fetched_at)}
@@ -271,14 +279,14 @@ export default function ZonesPage() {
                               disabled={busyZone() === zone.id || !zone.account_enabled}
                               onClick={() => refresh(zone)}
                             >
-                              Refresh
+                              {t("zones.refresh")}
                             </Button>
                           </Show>
                           <A
                             class="inline-flex min-h-8 items-center rounded-md border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover"
                             href={`/zones/${zone.id}/records`}
                           >
-                            Records
+                            {t("zones.records")}
                           </A>
                         </div>
                       </td>
@@ -300,11 +308,20 @@ export default function ZonesPage() {
             void loadZones(undefined, next);
           }}
         >
-          Next page
+          {t("zones.nextPage")}
         </Button>
       </div>
     </div>
   );
+}
+function localizedStatus(
+  value: string,
+  prefix: string,
+  t: (key: string, values?: Record<string, string | number>) => string,
+): string {
+  const key = `${prefix}.${value}`;
+  const translated = t(key);
+  return translated === key ? value : translated;
 }
 
 function providerLabel(providers: ProviderTypeDefinition[], type: string): string {
@@ -317,9 +334,12 @@ function formatDate(value: string): string {
   );
 }
 
-function errorState(error: unknown): { message: string; requestId?: string } {
+function errorState(
+  error: unknown,
+  t: (key: string, values?: Record<string, string | number>) => string,
+): { message: string; requestId?: string } {
   if (error instanceof ApiError) {
     return { message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) };
   }
-  return { message: error instanceof Error ? error.message : "Zone request failed." };
+  return { message: error instanceof Error ? error.message : t("zones.requestFailedMessage") };
 }

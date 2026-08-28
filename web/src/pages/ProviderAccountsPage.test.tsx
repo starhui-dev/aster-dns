@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { I18nProvider } from "../app/i18n";
 import { AuthProvider } from "../app/AuthContext";
 import ProviderAccountsPage from "./ProviderAccountsPage";
 
@@ -13,9 +14,11 @@ describe("ProviderAccountsPage", () => {
     vi.stubGlobal("fetch", vi.fn(providerAccountsFetch));
 
     render(() => (
-      <AuthProvider>
-        <ProviderAccountsPage />
-      </AuthProvider>
+      <I18nProvider>
+        <AuthProvider>
+          <ProviderAccountsPage />
+        </AuthProvider>
+      </I18nProvider>
     ));
 
     expect(await screen.findByRole("heading", { name: "Production DNS" })).toBeInTheDocument();

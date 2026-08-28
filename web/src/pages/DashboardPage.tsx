@@ -1,6 +1,7 @@
 import { A } from "@solidjs/router";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
+import { useI18n } from "../app/i18n";
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError } from "../lib/api";
@@ -14,6 +15,7 @@ import {
 } from "../lib/dns";
 
 export default function DashboardPage() {
+  const { t } = useI18n();
   const [accounts, setAccounts] = createSignal<ProviderAccount[]>([]);
   const [zones, setZones] = createSignal<Zone[]>([]);
   const [events, setEvents] = createSignal<AuditEvent[]>([]);
@@ -63,7 +65,7 @@ export default function DashboardPage() {
       setEvents(auditResult.audit_events);
       setError(undefined);
     } catch (caught) {
-      setError(errorState(caught));
+      setError(errorState(caught, t));
     } finally {
       setLoading(false);
     }
@@ -78,12 +80,12 @@ export default function DashboardPage() {
   return (
     <div class="space-y-6">
       <PageHeader
-        eyebrow="Operations overview"
-        title="DNS control plane"
-        description="Live Provider health, zone-index freshness, and recent DNS mutations."
+        eyebrow={t("dashboard.eyebrow")}
+        title={t("dashboard.title")}
+        description={t("dashboard.description")}
         actions={
           <Button disabled={loading()} onClick={() => void load()}>
-            Refresh dashboard
+            {t("dashboard.refresh")}
           </Button>
         }
       />
@@ -93,48 +95,52 @@ export default function DashboardPage() {
           <Alert variant="danger" role="alert">
             {value().message}
             <Show when={value().requestId}>
-              <span class="mt-2 block font-mono text-xs">Request {value().requestId}</span>
+              <span class="mt-2 block font-mono text-xs">
+                {t("dashboard.request", { id: value().requestId ?? "" })}
+              </span>
             </Show>
           </Alert>
         )}
       </Show>
 
-      <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="DNS platform metrics">
+      <section class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label={t("dashboard.metrics")}>
         <Metric
-          label="Provider accounts"
+          label={t("dashboard.providerAccounts")}
           value={accounts().length}
-          hint={`${accounts().filter((account) => account.enabled).length} enabled`}
+          hint={t("dashboard.enabled", {
+            count: accounts().filter((account) => account.enabled).length,
+          })}
         />
         <Metric
-          label="Indexed zones"
+          label={t("dashboard.indexedZones")}
           value={zoneTotal()}
-          hint={`${new Set(zones().map((zone) => zone.provider_type)).size} providers`}
+          hint={t("dashboard.providers", {
+            count: new Set(zones().map((zone) => zone.provider_type)).size,
+          })}
         />
         <Metric
-          label="Stale syncs"
+          label={t("dashboard.staleSyncs")}
           value={staleAccounts().length}
-          hint="Older than 15 minutes"
+          hint={t("dashboard.olderThan")}
           danger={staleAccounts().length > 0}
         />
         <Metric
-          label="Recent failures"
+          label={t("dashboard.recentFailures")}
           value={failures().length}
-          hint="Last 20 audit events"
+          hint={t("dashboard.lastAudit")}
           danger={failures().length > 0}
         />
       </section>
 
       <div class="grid gap-5 xl:grid-cols-2">
         <Panel
-          title="Provider health"
-          description="Validation and latest zone-sync state for every account."
+          title={t("dashboard.providerHealth")}
+          description={t("dashboard.providerHealthDescription")}
         >
           <div class="space-y-3">
             <For
               each={accounts()}
-              fallback={
-                <p class="text-sm text-muted-foreground">No Provider accounts configured.</p>
-              }
+              fallback={<p class="text-sm text-muted-foreground">{t("dashboard.noAccounts")}</p>}
             >
               {(account) => {
                 const stale = () =>
@@ -158,24 +164,24 @@ export default function DashboardPage() {
                           <p class="font-medium">{account.name}</p>
                           <Badge tone="primary">{account.provider_type}</Badge>
                           <Badge tone={healthy() ? "success" : "danger"}>
-                            {healthy() ? "Healthy" : "Needs attention"}
+                            {healthy() ? t("dashboard.healthy") : t("dashboard.needsAttention")}
                           </Badge>
                           <Show when={stale()}>
-                            <Badge tone="warning">Stale sync</Badge>
+                            <Badge tone="warning">{t("dashboard.staleSync")}</Badge>
                           </Show>
                         </div>
                         <p class="mt-2 text-xs text-muted-foreground">
-                          {account.zone_count} zones ·{" "}
+                          {t("dashboard.zoneCount", { count: account.zone_count })} ·{" "}
                           {account.last_zone_sync_at
-                            ? `Synced ${formatDate(account.last_zone_sync_at)}`
-                            : "Never synced"}
+                            ? t("dashboard.synced", { date: formatDate(account.last_zone_sync_at) })
+                            : t("dashboard.neverSynced")}
                         </p>
                         <Show when={recentSyncFailure()}>
                           {(failure) => (
                             <p class="mt-2 text-sm text-danger-foreground">
-                              Latest observed sync failed:{" "}
-                              {failure().error_code ?? "provider error"}. Request{" "}
-                              {failure().request_id}
+                              {t("dashboard.latestSyncFailed")}{" "}
+                              {failure().error_code ?? t("dashboard.providerError")}.{" "}
+                              {t("dashboard.request", { id: failure().request_id })}
                             </p>
                           )}
                         </Show>
@@ -184,7 +190,7 @@ export default function DashboardPage() {
                         class="text-sm font-semibold text-primary hover:underline"
                         href={`/accounts/${account.id}`}
                       >
-                        Manage
+                        {t("dashboard.manage")}
                       </A>
                     </div>
                   </article>
@@ -195,13 +201,13 @@ export default function DashboardPage() {
         </Panel>
 
         <Panel
-          title="Recent DNS mutations"
-          description="Latest record create, update, delete, and batch audit events."
+          title={t("dashboard.recentMutations")}
+          description={t("dashboard.recentMutationsDescription")}
         >
           <div class="space-y-3">
             <For
               each={mutations().slice(0, 8)}
-              fallback={<p class="text-sm text-muted-foreground">No recent DNS mutations.</p>}
+              fallback={<p class="text-sm text-muted-foreground">{t("dashboard.noMutations")}</p>}
             >
               {(event) => (
                 <article class="flex flex-col gap-2 rounded-md border border-border bg-surface-subtle p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -209,12 +215,15 @@ export default function DashboardPage() {
                     <div class="flex flex-wrap items-center gap-2">
                       <p class="font-medium">{event.action}</p>
                       <Badge tone={event.result === "succeeded" ? "success" : "danger"}>
-                        {event.result}
+                        {event.result === "succeeded"
+                          ? t("dashboard.succeeded")
+                          : t("dashboard.failed")}
                       </Badge>
                     </div>
                     <p class="mt-1 truncate text-xs text-muted-foreground">
-                      {event.zone_id || event.resource_id || "DNS record"} ·{" "}
-                      {event.actor_username || "System"} · {formatDate(event.occurred_at)}
+                      {event.zone_id || event.resource_id || t("dashboard.dnsRecord")} ·{" "}
+                      {event.actor_username || t("dashboard.system")} ·{" "}
+                      {formatDate(event.occurred_at)}
                     </p>
                   </div>
                   <code class="text-xs text-muted-foreground">{event.request_id}</code>
@@ -226,18 +235,16 @@ export default function DashboardPage() {
             class="mt-4 inline-block text-sm font-semibold text-primary hover:underline"
             href="/audit"
           >
-            View audit history
+            {t("dashboard.viewAudit")}
           </A>
         </Panel>
       </div>
 
-      <Panel title="Quick entry" description="Jump directly into the indexed zone inventory.">
+      <Panel title={t("dashboard.quickEntry")} description={t("dashboard.quickEntryDescription")}>
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <For
             each={zones().slice(0, 6)}
-            fallback={
-              <p class="text-sm text-muted-foreground">Sync a Provider account to index zones.</p>
-            }
+            fallback={<p class="text-sm text-muted-foreground">{t("dashboard.syncToIndex")}</p>}
           >
             {(zone) => (
               <A
@@ -259,8 +266,7 @@ export default function DashboardPage() {
 
       <Show when={unhealthy().length > 0}>
         <Alert variant="warning">
-          {unhealthy().length} Provider account(s) are disabled or failed validation. Open Provider
-          Accounts for safe details and request IDs.
+          {t("dashboard.unhealthy", { count: unhealthy().length })} {t("dashboard.unhealthyDetail")}
         </Alert>
       </Show>
     </div>
@@ -289,8 +295,11 @@ function formatDate(value: string): string {
   );
 }
 
-function errorState(error: unknown): { message: string; requestId?: string } {
+function errorState(
+  error: unknown,
+  t: (key: string, values?: Record<string, string | number>) => string,
+): { message: string; requestId?: string } {
   if (error instanceof ApiError)
     return { message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) };
-  return { message: error instanceof Error ? error.message : "Dashboard request failed." };
+  return { message: error instanceof Error ? error.message : t("dashboard.requestFailedMessage") };
 }

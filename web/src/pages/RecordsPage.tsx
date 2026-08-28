@@ -12,6 +12,7 @@ import {
   untrack,
 } from "solid-js";
 
+import { useI18n } from "../app/i18n";
 import { useAuth } from "../app/AuthContext";
 import {
   ExtensionFields,
@@ -54,6 +55,7 @@ interface ConflictState {
 
 export default function RecordsPage() {
   const params = useParams<{ zoneId: string }>();
+  const { t } = useI18n();
   const auth = useAuth();
   const [zone, setZone] = createSignal<Zone>();
   const [providers, setProviders] = createSignal<ProviderTypeDefinition[]>([]);
@@ -137,8 +139,8 @@ export default function RecordsPage() {
     } catch (caught) {
       if (generation !== loadGeneration) return;
       setStale(true);
-      setWarning({ message: "Provider refresh failed. The displayed snapshot is untrusted." });
-      setError(errorState(caught));
+      setWarning({ message: t("records.refreshFailed") });
+      setError(errorState(caught, t));
     } finally {
       if (generation === loadGeneration) setLoading(false);
     }
@@ -182,7 +184,7 @@ export default function RecordsPage() {
         return;
       }
     }
-    setError(errorState(caught));
+    setError(errorState(caught, t));
   };
 
   const executeDelete = async (record: RecordSet) => {
@@ -190,7 +192,7 @@ export default function RecordsPage() {
     setError(null);
     try {
       await deleteRecordSet(params.zoneId, record.id, record.fingerprint);
-      setNotice(`${record.name} ${record.type} deleted.`);
+      setNotice(t("records.deleted", { name: record.name, type: record.type }));
       await load(true);
     } catch (caught) {
       handleMutationError(caught, "delete", record.id);
@@ -201,7 +203,10 @@ export default function RecordsPage() {
 
   const remove = (record: RecordSet) => {
     const summary = record.entries.map(entryLabel).join("; ");
-    if (!window.confirm(`Delete ${record.name} ${record.type} (${summary})?`)) return;
+    if (
+      !window.confirm(t("records.confirmDelete", { name: record.name, type: record.type, summary }))
+    )
+      return;
     void executeDelete(record);
   };
 
@@ -225,7 +230,7 @@ export default function RecordsPage() {
       setBatchConfirmation("");
       await load(true);
     } catch (caught) {
-      setError(errorState(caught));
+      setError(errorState(caught, t));
     } finally {
       setBusy(false);
     }
@@ -244,7 +249,7 @@ export default function RecordsPage() {
       if (state.kind === "delete") {
         await deleteRecordSet(params.zoneId, state.recordID, state.current.fingerprint);
         setConflict(undefined);
-        setNotice("Record deleted using the refreshed provider fingerprint.");
+        setNotice(t("records.deletedWithFingerprint"));
         await load(true);
         return;
       }
@@ -255,7 +260,7 @@ export default function RecordsPage() {
         provider_version: state.current.provider_version,
       });
       setConflict(undefined);
-      setNotice("Changes reapplied against the current provider state.");
+      setNotice(t("records.reapplied"));
       await load(true);
     } catch (caught) {
       handleMutationError(caught, state.kind, state.recordID, state.pending);
@@ -288,7 +293,7 @@ export default function RecordsPage() {
       if (state.mode === "edit" && state.record !== undefined) {
         handleMutationError(caught, "update", state.record.id, input);
       } else {
-        setError(errorState(caught));
+        setError(errorState(caught, t));
       }
       const dialog = untrack(editorDialog);
       queueMicrotask(() => {
@@ -308,22 +313,24 @@ export default function RecordsPage() {
     <div class="space-y-6">
       <PageHeader
         eyebrow={
-          zone() ? `${zone()?.provider_account_name} · ${zone()?.provider_type}` : "DNS records"
+          zone()
+            ? `${zone()?.provider_account_name} · ${zone()?.provider_type}`
+            : t("records.eyebrow")
         }
-        title={zone()?.name ?? "Zone records"}
+        title={zone()?.name ?? t("records.title")}
         description={
           fetchedAt()
-            ? `Provider state fetched ${formatDate(fetchedAt() as string)}${stale() ? " · stale cache" : ""}`
-            : "Loading Provider state…"
+            ? `${t("records.fetched", { date: formatDate(fetchedAt() as string) })}${stale() ? ` · ${t("records.staleCache")}` : ""}`
+            : t("records.loadingProvider")
         }
         actions={
           <>
             <A class="text-sm font-semibold text-primary hover:underline" href="/zones">
-              All zones
+              {t("records.allZones")}
             </A>
             <Show when={canMutate()}>
               <Button disabled={loading() || busy()} onClick={() => void load(true)}>
-                Force refresh
+                {t("records.forceRefresh")}
               </Button>
             </Show>
             <Show when={canMutate()}>
@@ -332,7 +339,7 @@ export default function RecordsPage() {
                 disabled={loading() || busy() || stale()}
                 onClick={() => setEditor({ mode: "create" })}
               >
-                Add record
+                {t("records.addRecord")}
               </Button>
             </Show>
           </>
@@ -344,7 +351,9 @@ export default function RecordsPage() {
           <Alert variant="danger" role="alert">
             {value().message}
             <Show when={value().requestId}>
-              <span class="mt-2 block font-mono text-xs">Request {value().requestId}</span>
+              <span class="mt-2 block font-mono text-xs">
+                {t("records.request", { id: value().requestId ?? "" })}
+              </span>
             </Show>
           </Alert>
         )}
@@ -353,17 +362,17 @@ export default function RecordsPage() {
       <Show when={warning()}>
         {(value) => (
           <Alert variant="warning">
-            {value().message} Cached data is marked stale.
+            {value().message} {t("records.cachedStale")}
             <Show when={value().requestId}>
-              <span class="mt-2 block font-mono text-xs">Request {value().requestId}</span>
+              <span class="mt-2 block font-mono text-xs">
+                {t("records.request", { id: value().requestId ?? "" })}
+              </span>
             </Show>
           </Alert>
         )}
       </Show>
       <Show when={stale() && warning() === undefined}>
-        <Alert variant="warning">
-          This record snapshot is stale. Force refresh before editing.
-        </Alert>
+        <Alert variant="warning">{t("records.staleBeforeEditing")}</Alert>
       </Show>
 
       <Show when={zone()?.metadata.extensions}>
@@ -379,14 +388,15 @@ export default function RecordsPage() {
 
       <Show when={conflict()}>
         {(state) => (
-          <Panel
-            title="Provider conflict"
-            description="The record changed after this page loaded. No overwrite occurred."
-          >
+          <Panel title={t("records.conflictTitle")} description={t("records.conflictDescription")}>
             <div class="grid gap-4 lg:grid-cols-2">
-              <RecordSnapshot title="Current Provider value" value={state().current} />
+              <RecordSnapshot title={t("records.currentProviderValue")} value={state().current} />
               <RecordSnapshot
-                title={state().kind === "delete" ? "Pending operation" : "Pending changes"}
+                title={
+                  state().kind === "delete"
+                    ? t("records.pendingOperation")
+                    : t("records.pendingChanges")
+                }
                 value={state().pending ?? { operation: "delete" }}
               />
             </div>
@@ -397,10 +407,10 @@ export default function RecordsPage() {
                   void load(true);
                 }}
               >
-                Reload
+                {t("records.reload")}
               </Button>
               <Button variant="primary" disabled={busy()} onClick={reapplyConflict}>
-                Reapply against current
+                {t("records.reapply")}
               </Button>
             </div>
           </Panel>
@@ -415,7 +425,7 @@ export default function RecordsPage() {
 
       <Panel compact>
         <form class="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submitFilters}>
-          <Field class="min-w-0 flex-1" label="Filter name or value" for="record-search">
+          <Field class="min-w-0 flex-1" label={t("records.filter")} for="record-search">
             <input
               id="record-search"
               class="text-input"
@@ -424,21 +434,21 @@ export default function RecordsPage() {
               onInput={(event) => setQuery(event.currentTarget.value)}
             />
           </Field>
-          <Field label="Type" for="record-type-filter">
+          <Field label={t("records.type")} for="record-type-filter">
             <select
               id="record-type-filter"
               class="text-input min-w-36"
               value={typeFilter()}
               onChange={(event) => setTypeFilter(event.currentTarget.value)}
             >
-              <option value="">All types</option>
+              <option value="">{t("records.allTypes")}</option>
               <For each={providerDefinition()?.capabilities.supported_record_types ?? []}>
                 {(type) => <option value={type}>{type}</option>}
               </For>
             </select>
           </Field>
           <Button type="submit" variant="primary" disabled={loading()}>
-            Apply
+            {t("records.apply")}
           </Button>
         </form>
       </Panel>
@@ -446,26 +456,28 @@ export default function RecordsPage() {
       <Show when={canMutate() && selectedRecords().length > 0}>
         <Panel compact>
           <div class="flex flex-wrap items-center justify-between gap-3">
-            <p class="text-sm font-medium">{selectedRecords().length} record sets selected</p>
+            <p class="text-sm font-medium">
+              {t("records.selected", { count: selectedRecords().length })}
+            </p>
             <div class="flex gap-2">
               <Button
                 disabled={loading() || busy() || stale() || selectedRecords().length > 100}
                 onClick={() => setBatchMode("ttl_update")}
               >
-                Update TTL
+                {t("records.updateTTL")}
               </Button>
               <Button
                 variant="danger"
                 disabled={loading() || busy() || stale() || selectedRecords().length > 100}
                 onClick={() => setBatchMode("delete")}
               >
-                Batch delete
+                {t("records.batchDelete")}
               </Button>
             </div>
           </div>
           <Show when={selectedRecords().length > 100}>
             <p class="mt-2 text-sm text-danger" role="alert">
-              Select no more than 100 record sets per batch.
+              {t("records.batchLimit")}
             </p>
           </Show>
         </Panel>
@@ -474,7 +486,7 @@ export default function RecordsPage() {
       <Panel compact>
         <Show
           when={!loading()}
-          fallback={<p class="p-3 text-sm text-muted-foreground">Loading record sets…</p>}
+          fallback={<p class="p-3 text-sm text-muted-foreground">{t("records.loadingSets")}</p>}
         >
           <div class="overflow-x-auto">
             <table class="w-full min-w-[68rem] border-collapse text-left text-sm">
@@ -482,15 +494,15 @@ export default function RecordsPage() {
                 <tr class="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
                   <Show when={canMutate()}>
                     <th class="w-10 px-3 py-3">
-                      <span class="sr-only">Select</span>
+                      <span class="sr-only">{t("records.select")}</span>
                     </th>
                   </Show>
-                  <th class="px-3 py-3 font-semibold">Name</th>
-                  <th class="px-3 py-3 font-semibold">Type</th>
-                  <th class="px-3 py-3 font-semibold">Value / entries</th>
-                  <th class="px-3 py-3 font-semibold">TTL</th>
-                  <th class="px-3 py-3 font-semibold">Provider metadata</th>
-                  <th class="px-3 py-3 text-right font-semibold">Actions</th>
+                  <th class="px-3 py-3 font-semibold">{t("records.column.name")}</th>
+                  <th class="px-3 py-3 font-semibold">{t("records.column.type")}</th>
+                  <th class="px-3 py-3 font-semibold">{t("records.column.values")}</th>
+                  <th class="px-3 py-3 font-semibold">{t("records.column.ttl")}</th>
+                  <th class="px-3 py-3 font-semibold">{t("records.column.metadata")}</th>
+                  <th class="px-3 py-3 text-right font-semibold">{t("records.column.actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -499,7 +511,7 @@ export default function RecordsPage() {
                   fallback={
                     <tr>
                       <td class="px-3 py-8 text-center text-muted-foreground" colSpan={7}>
-                        No record sets match.
+                        {t("records.empty")}
                       </td>
                     </tr>
                   }
@@ -511,7 +523,10 @@ export default function RecordsPage() {
                           <td class="px-3 py-4">
                             <input
                               type="checkbox"
-                              aria-label={`Select ${record.name} ${record.type}`}
+                              aria-label={t("records.selectRecord", {
+                                name: record.name,
+                                type: record.type,
+                              })}
                               checked={selected().has(record.id)}
                               onChange={(event) =>
                                 setSelected((current) => {
@@ -551,8 +566,8 @@ export default function RecordsPage() {
                               }
                             >
                               {expanded().has(record.id)
-                                ? "Collapse entries"
-                                : `Expand ${record.entries.length} entries`}
+                                ? t("records.collapseEntries")
+                                : t("records.expandEntries", { count: record.entries.length })}
                             </button>
                           </Show>
                         </td>
@@ -568,7 +583,11 @@ export default function RecordsPage() {
                         <td class="px-3 py-4 text-right">
                           <Show
                             when={canMutate()}
-                            fallback={<span class="text-xs text-muted-foreground">Read only</span>}
+                            fallback={
+                              <span class="text-xs text-muted-foreground">
+                                {t("records.readOnly")}
+                              </span>
+                            }
                           >
                             <div class="flex justify-end gap-2">
                               <Button
@@ -576,7 +595,7 @@ export default function RecordsPage() {
                                 disabled={loading() || busy() || stale()}
                                 onClick={() => setEditor({ mode: "edit", record })}
                               >
-                                Edit
+                                {t("records.edit")}
                               </Button>
                               <Button
                                 size="sm"
@@ -584,7 +603,7 @@ export default function RecordsPage() {
                                 disabled={loading() || busy() || stale()}
                                 onClick={() => remove(record)}
                               >
-                                Delete
+                                {t("records.delete")}
                               </Button>
                             </div>
                           </Show>
@@ -654,16 +673,20 @@ export default function RecordsPage() {
         <form onSubmit={submitBatch}>
           <header class="border-b border-border p-5">
             <h2 id="batch-operation-title" class="text-lg font-semibold">
-              {batchMode() === "delete" ? "Batch delete record sets" : "Batch update TTL"}
+              {batchMode() === "delete"
+                ? t("records.batchDeleteTitle")
+                : t("records.batchTTLTitle")}
             </h2>
             <p id="batch-operation-description" class="mt-1 text-sm text-muted-foreground">
-              {selectedRecords().length} record sets in {zone()?.name}. Results are reported item by
-              item.
+              {t("records.batchDescription", {
+                count: selectedRecords().length,
+                name: zone()?.name ?? "",
+              })}
             </p>
           </header>
           <div class="space-y-4 p-5">
             <Show when={batchMode() === "ttl_update"}>
-              <Field label="New TTL (seconds)" for="batch-ttl">
+              <Field label={t("records.newTTL")} for="batch-ttl">
                 <input
                   id="batch-ttl"
                   class="text-input"
@@ -677,10 +700,11 @@ export default function RecordsPage() {
               </Field>
             </Show>
             <Show when={batchMode() === "delete"}>
-              <Alert variant="warning">
-                This deletes real Provider records. The operation is not transactional across items.
-              </Alert>
-              <Field label={`Type ${zone()?.name} to confirm`} for="batch-confirmation">
+              <Alert variant="warning">{t("records.batchWarning")}</Alert>
+              <Field
+                label={t("records.confirmZone", { name: zone()?.name ?? "" })}
+                for="batch-confirmation"
+              >
                 <input
                   id="batch-confirmation"
                   class="text-input"
@@ -694,7 +718,7 @@ export default function RecordsPage() {
           </div>
           <footer class="flex justify-end gap-2 border-t border-border p-5">
             <Button disabled={busy()} onClick={() => setBatchMode(undefined)}>
-              Cancel
+              {t("records.cancel")}
             </Button>
             <Button
               type="submit"
@@ -703,7 +727,7 @@ export default function RecordsPage() {
                 busy() || (batchMode() === "delete" && batchConfirmation() !== zone()?.name)
               }
             >
-              Apply to {selectedRecords().length} items
+              {t("records.applyItems", { count: selectedRecords().length })}
             </Button>
           </footer>
         </form>
@@ -719,6 +743,7 @@ function RecordEditor(props: {
   close: () => void;
   save: (input: RecordSetInput) => void;
 }) {
+  const { t } = useI18n();
   const initial = untrack(() => {
     const record = props.state.record;
     const descriptors = props.capabilities.extension_fields;
@@ -746,13 +771,7 @@ function RecordEditor(props: {
   const changeType = (nextType: string) => {
     if (nextType === recordType()) return;
     const hasValues = entries().some((entry) => entryLabel(entry) !== "");
-    if (
-      hasValues &&
-      !window.confirm(
-        "Changing record type clears incompatible entry and Provider fields. Continue?",
-      )
-    )
-      return;
+    if (hasValues && !window.confirm(t("records.confirmTypeChange"))) return;
     setRecordType(nextType);
     setEntries([{}]);
     setEntryExtensions([{}]);
@@ -795,18 +814,23 @@ function RecordEditor(props: {
     <form onSubmit={submit}>
       <header class="flex items-start justify-between gap-4 border-b border-border p-5 sm:p-6">
         <div>
-          <p class="text-xs font-semibold text-primary">DNS semantic editor</p>
+          <p class="text-xs font-semibold text-primary">{t("records.semanticEditor")}</p>
           <h2 id="record-editor-title" class="mt-1 text-xl font-semibold">
-            {props.state.mode === "create" ? "Create record set" : "Edit record set"}
+            {props.state.mode === "create" ? t("records.createSet") : t("records.editSet")}
           </h2>
         </div>
-        <Button size="sm" variant="ghost" aria-label="Close record editor" onClick={props.close}>
-          Close
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={t("records.closeEditor")}
+          onClick={props.close}
+        >
+          {t("records.close")}
         </Button>
       </header>
       <div class="space-y-5 p-5 sm:p-6">
         <div class="grid gap-4 sm:grid-cols-3">
-          <Field label="Name" for="record-name" hint="Use @ for the zone apex.">
+          <Field label={t("records.name")} for="record-name" hint={t("records.nameHint")}>
             <input
               id="record-name"
               class="text-input"
@@ -815,7 +839,7 @@ function RecordEditor(props: {
               onInput={(event) => setName(event.currentTarget.value)}
             />
           </Field>
-          <Field label="Type" for="record-type">
+          <Field label={t("records.type")} for="record-type">
             <select
               id="record-type"
               class="text-input"
@@ -827,7 +851,7 @@ function RecordEditor(props: {
               </For>
             </select>
           </Field>
-          <Field label="TTL (seconds)" for="record-ttl">
+          <Field label={t("records.ttl")} for="record-ttl">
             <input
               id="record-ttl"
               class="text-input"
@@ -843,7 +867,7 @@ function RecordEditor(props: {
 
         <div>
           <div class="mb-3 flex items-center justify-between gap-3">
-            <h3 class="text-sm font-semibold">Entries</h3>
+            <h3 class="text-sm font-semibold">{t("records.entries")}</h3>
             <Button
               size="sm"
               onClick={() => {
@@ -851,7 +875,7 @@ function RecordEditor(props: {
                 setEntryExtensions((current) => [...current, {}]);
               }}
             >
-              Add entry
+              {t("records.addEntry")}
             </Button>
           </div>
           <div class="space-y-4">
@@ -859,7 +883,9 @@ function RecordEditor(props: {
               {(entry, index) => (
                 <div class="rounded-md border border-border bg-surface-subtle p-4">
                   <div class="flex items-start justify-between gap-3">
-                    <p class="text-xs font-semibold text-muted-foreground">Entry {index() + 1}</p>
+                    <p class="text-xs font-semibold text-muted-foreground">
+                      {t("records.entry", { index: index() + 1 })}
+                    </p>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -873,7 +899,7 @@ function RecordEditor(props: {
                         );
                       }}
                     >
-                      Remove
+                      {t("records.remove")}
                     </Button>
                   </div>
                   <EntryFields
@@ -913,10 +939,10 @@ function RecordEditor(props: {
       </div>
       <footer class="flex justify-end gap-2 border-t border-border p-5 sm:p-6">
         <Button disabled={props.busy} onClick={props.close}>
-          Cancel
+          {t("records.cancel")}
         </Button>
         <Button type="submit" variant="primary" disabled={props.busy}>
-          Save record set
+          {t("records.saveSet")}
         </Button>
       </footer>
     </form>
@@ -929,13 +955,14 @@ function EntryFields(props: {
   idPrefix: string;
   update: (changes: Partial<RecordEntry>) => void;
 }) {
+  const { t } = useI18n();
   return (
     <Switch
       fallback={
         <div class="mt-3">
           <TextField
             id={`${props.idPrefix}-value`}
-            label={props.type === "TXT" ? "Text value" : "Value"}
+            label={props.type === "TXT" ? t("records.textValue") : t("records.value")}
             value={props.entry.value}
             update={(value) => props.update({ value })}
           />
@@ -946,13 +973,13 @@ function EntryFields(props: {
         <div class="mt-3 grid gap-3 sm:grid-cols-[9rem_1fr]">
           <NumberField
             id={`${props.idPrefix}-priority`}
-            label="Priority"
+            label={t("records.priority")}
             value={props.entry.priority}
             update={(priority) => props.update({ priority })}
           />
           <TextField
             id={`${props.idPrefix}-target`}
-            label="Mail server"
+            label={t("records.mailServer")}
             value={props.entry.target}
             update={(target) => props.update({ target })}
           />
@@ -962,25 +989,25 @@ function EntryFields(props: {
         <div class="mt-3 grid gap-3 sm:grid-cols-4">
           <NumberField
             id={`${props.idPrefix}-priority`}
-            label="Priority"
+            label={t("records.priority")}
             value={props.entry.priority}
             update={(priority) => props.update({ priority })}
           />
           <NumberField
             id={`${props.idPrefix}-weight`}
-            label="Weight"
+            label={t("records.weight")}
             value={props.entry.weight}
             update={(weight) => props.update({ weight })}
           />
           <NumberField
             id={`${props.idPrefix}-port`}
-            label="Port"
+            label={t("records.port")}
             value={props.entry.port}
             update={(port) => props.update({ port })}
           />
           <TextField
             id={`${props.idPrefix}-target`}
-            label="Target"
+            label={t("records.target")}
             value={props.entry.target}
             update={(target) => props.update({ target })}
           />
@@ -990,20 +1017,20 @@ function EntryFields(props: {
         <div class="mt-3 grid gap-3 sm:grid-cols-[7rem_10rem_1fr]">
           <NumberField
             id={`${props.idPrefix}-flags`}
-            label="Flags"
+            label={t("records.flags")}
             value={props.entry.flags}
             maximum={255}
             update={(flags) => props.update({ flags })}
           />
           <TextField
             id={`${props.idPrefix}-tag`}
-            label="Tag"
+            label={t("records.tag")}
             value={props.entry.tag}
             update={(tag) => props.update({ tag })}
           />
           <TextField
             id={`${props.idPrefix}-value`}
-            label="Value"
+            label={t("records.value")}
             value={props.entry.value}
             update={(value) => props.update({ value })}
           />
@@ -1013,7 +1040,7 @@ function EntryFields(props: {
         <div class="mt-3">
           <TextField
             id={`${props.idPrefix}-target`}
-            label="Target"
+            label={t("records.target")}
             value={props.entry.target}
             update={(target) => props.update({ target })}
           />
@@ -1066,10 +1093,14 @@ function NumberField(props: {
 }
 
 function BatchResultPanel(props: { result: BatchResult; dismiss: () => void }) {
+  const { t } = useI18n();
   return (
     <Panel
-      title="Batch result"
-      description={`${props.result.succeeded} succeeded · ${props.result.failed} failed`}
+      title={t("records.batchResult")}
+      description={t("records.batchSummary", {
+        succeeded: props.result.succeeded,
+        failed: props.result.failed,
+      })}
     >
       <div class="space-y-2">
         <For each={props.result.items}>
@@ -1078,12 +1109,12 @@ function BatchResultPanel(props: { result: BatchResult; dismiss: () => void }) {
               <code class="break-all text-xs">{item.id}</code>
               <div class="text-sm">
                 <Badge tone={item.status === "succeeded" ? "success" : "danger"}>
-                  {item.status}
+                  {recordStatusLabel(item.status, t)}
                 </Badge>
                 <Show when={item.error}>
                   {(error) => (
                     <p class="mt-1 text-xs text-danger-foreground">
-                      {error().message} · Request {error().request_id}
+                      {error().message} · {t("records.request", { id: error().request_id })}
                     </p>
                   )}
                 </Show>
@@ -1093,7 +1124,7 @@ function BatchResultPanel(props: { result: BatchResult; dismiss: () => void }) {
         </For>
       </div>
       <Button class="mt-4" onClick={props.dismiss}>
-        Dismiss
+        {t("records.dismiss")}
       </Button>
     </Panel>
   );
@@ -1119,15 +1150,25 @@ function entryLabel(entry: RecordEntry): string {
     return `${entry.flags} ${entry.tag ?? ""} ${entry.value ?? ""}`.trim();
   return entry.target ?? entry.value ?? "";
 }
+function recordStatusLabel(
+  status: string,
+  t: (key: string, values?: Record<string, string | number>) => string,
+): string {
+  const key = `records.status.${status}`;
+  const translated = t(key);
+  return translated === key ? status : translated;
+}
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
     new Date(value),
   );
 }
-
-function errorState(error: unknown): { message: string; requestId?: string } {
+function errorState(
+  error: unknown,
+  t: (key: string, values?: Record<string, string | number>) => string,
+): { message: string; requestId?: string } {
   if (error instanceof ApiError)
     return { message: error.message, ...(error.requestId ? { requestId: error.requestId } : {}) };
-  return { message: error instanceof Error ? error.message : "Record request failed." };
+  return { message: error instanceof Error ? error.message : t("records.requestFailedMessage") };
 }

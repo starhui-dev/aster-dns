@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
+import { useI18n } from "../app/i18n";
 import { useAuth } from "../app/AuthContext";
 import { Button } from "../components/ui/Button";
 import { Alert, Field, PageHeader, Panel } from "../components/ui/Layout";
@@ -21,6 +22,7 @@ import {
 } from "../lib/auth";
 
 export default function SettingsPage() {
+  const { t } = useI18n();
   const auth = useAuth();
   const [passkeys, setPasskeys] = createSignal<Passkey[]>([]);
   const [sessions, setSessions] = createSignal<SessionInfo[]>([]);
@@ -49,7 +51,7 @@ export default function SettingsPage() {
       setSessions(sessionResult.sessions);
       setError(null);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setLoading(false);
     }
@@ -69,7 +71,7 @@ export default function SettingsPage() {
       await operation();
       setNotice(success);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setBusy(false);
     }
@@ -82,7 +84,7 @@ export default function SettingsPage() {
       setPasskeyName("");
       await auth.acceptLogin(response);
       await load();
-    }, "Passkey registered.");
+    }, t("settings.passkeyRegistered"));
   };
 
   const submitPassword = (event: SubmitEvent) => {
@@ -93,7 +95,7 @@ export default function SettingsPage() {
       setNewPassword("");
       await auth.acceptLogin(response);
       await load();
-    }, "Password fallback updated and other sessions revoked.");
+    }, t("settings.passwordUpdated"));
   };
 
   const submitTOTP = (event: SubmitEvent) => {
@@ -105,15 +107,15 @@ export default function SettingsPage() {
       setProvisioningURI(null);
       await auth.acceptLogin(response);
       await load();
-    }, "TOTP enabled and other sessions revoked.");
+    }, t("settings.totpEnabled"));
   };
 
   return (
     <div class="space-y-6">
       <PageHeader
-        eyebrow="Security"
-        title="Authentication settings"
-        description="Manage Passkeys, password fallback, TOTP, and active server-side sessions."
+        eyebrow={t("settings.eyebrow")}
+        title={t("settings.title")}
+        description={t("settings.description")}
       />
 
       <Show when={error() !== null}>
@@ -123,12 +125,9 @@ export default function SettingsPage() {
         <Alert variant="success">{notice()}</Alert>
       </Show>
 
-      <Panel
-        title="Passkeys"
-        description="Multiple Passkeys are supported. Private key material never reaches this server."
-      >
+      <Panel title={t("settings.passkeys")} description={t("settings.passkeysDescription")}>
         <form class="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submitPasskey}>
-          <Field class="min-w-0 flex-1" label="New Passkey name" for="new-passkey-name">
+          <Field class="min-w-0 flex-1" label={t("settings.newPasskeyName")} for="new-passkey-name">
             <input
               id="new-passkey-name"
               class="text-input"
@@ -138,42 +137,45 @@ export default function SettingsPage() {
             />
           </Field>
           <Button type="submit" variant="primary" disabled={busy()}>
-            Register Passkey
+            {t("settings.registerPasskey")}
           </Button>
         </form>
         <div class="mt-5 space-y-3">
           <Show
             when={!loading()}
-            fallback={<p class="text-sm text-muted-foreground">Loading Passkeys…</p>}
+            fallback={<p class="text-sm text-muted-foreground">{t("settings.loadingPasskeys")}</p>}
           >
             <For
               each={passkeys()}
-              fallback={<p class="text-sm text-muted-foreground">No Passkeys registered.</p>}
+              fallback={<p class="text-sm text-muted-foreground">{t("settings.noPasskeys")}</p>}
             >
               {(passkey) => (
                 <article class="flex flex-col gap-3 rounded-md border border-border bg-surface-subtle p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p class="font-medium text-foreground">{passkey.name}</p>
                     <p class="mt-1 text-xs text-muted-foreground">
-                      Created {formatDate(passkey.created_at)}
+                      {t("settings.created", { date: formatDate(passkey.created_at) })}
                       {passkey.last_used_at === undefined
-                        ? " · Never used"
-                        : ` · Last used ${formatDate(passkey.last_used_at)}`}
+                        ? ` · ${t("settings.neverUsed")}`
+                        : ` · ${t("settings.lastUsed", { date: formatDate(passkey.last_used_at) })}`}
                     </p>
                   </div>
                   <Button
                     variant="danger"
                     disabled={busy()}
                     onClick={() => {
-                      if (!window.confirm(`Delete Passkey “${passkey.name}”?`)) return;
+                      if (
+                        !window.confirm(t("settings.confirmDeletePasskey", { name: passkey.name }))
+                      )
+                        return;
                       void run(async () => {
                         const response = await deletePasskey(passkey.id);
                         await auth.acceptLogin(response);
                         await load();
-                      }, "Passkey deleted and other sessions revoked.");
+                      }, t("settings.passkeyDeleted"));
                     }}
                   >
-                    Delete
+                    {t("settings.delete")}
                   </Button>
                 </article>
               )}
@@ -184,11 +186,11 @@ export default function SettingsPage() {
 
       <Show when={session()?.password_login_enabled}>
         <Panel
-          title="Password fallback"
-          description="Passwords are hashed with Argon2id. Passkey remains the preferred method."
+          title={t("settings.passwordFallback")}
+          description={t("settings.passwordDescription")}
         >
           <form class="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submitPassword}>
-            <Field class="min-w-0 flex-1" label="New password" for="new-password">
+            <Field class="min-w-0 flex-1" label={t("settings.newPassword")} for="new-password">
               <input
                 id="new-password"
                 class="text-input"
@@ -202,7 +204,9 @@ export default function SettingsPage() {
               />
             </Field>
             <Button type="submit" disabled={busy()}>
-              {session()?.user.password_enabled ? "Replace password" : "Enable password"}
+              {session()?.user.password_enabled
+                ? t("settings.replacePassword")
+                : t("settings.enablePassword")}
             </Button>
           </form>
           <Show when={session()?.user.password_enabled}>
@@ -211,24 +215,21 @@ export default function SettingsPage() {
               variant="danger"
               disabled={busy()}
               onClick={() => {
-                if (!window.confirm("Disable password fallback and revoke other sessions?")) return;
+                if (!window.confirm(t("settings.confirmDisablePassword"))) return;
                 void run(async () => {
                   const response = await deletePassword();
                   await auth.acceptLogin(response);
                   await load();
-                }, "Password fallback disabled and other sessions revoked.");
+                }, t("settings.passwordDisabled"));
               }}
             >
-              Disable password fallback
+              {t("settings.disablePassword")}
             </Button>
           </Show>
         </Panel>
       </Show>
 
-      <Panel
-        title="Authenticator app (TOTP)"
-        description="The seed is encrypted at rest. Setup is enabled only after a valid confirmation code."
-      >
+      <Panel title={t("settings.totp")} description={t("settings.totpDescription")}>
         <Show
           when={!session()?.user.totp_required}
           fallback={
@@ -236,16 +237,16 @@ export default function SettingsPage() {
               variant="danger"
               disabled={busy()}
               onClick={() => {
-                if (!window.confirm("Disable TOTP and revoke other sessions?")) return;
+                if (!window.confirm(t("settings.confirmDisableTOTP"))) return;
                 void run(async () => {
                   const response = await deleteTOTP();
                   await auth.acceptLogin(response);
                   setProvisioningURI(null);
                   await load();
-                }, "TOTP disabled and other sessions revoked.");
+                }, t("settings.totpDisabled"));
               }}
             >
-              Disable TOTP
+              {t("settings.disableTOTP")}
             </Button>
           }
         >
@@ -258,21 +259,21 @@ export default function SettingsPage() {
                   void run(async () => {
                     const result = await setupTOTP();
                     setProvisioningURI(result.provisioning_uri);
-                  }, "TOTP setup created. Confirm it before leaving this page.")
+                  }, t("settings.totpSetupCreated"))
                 }
               >
-                Start TOTP setup
+                {t("settings.startTOTP")}
               </Button>
             }
           >
             <div class="space-y-4">
-              <Alert variant="warning" title="Provisioning URI — shown once">
+              <Alert variant="warning" title={t("settings.provisioningURI")}>
                 <code class="block break-all text-xs">{provisioningURI()}</code>
               </Alert>
               <form class="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submitTOTP}>
                 <Field
                   class="min-w-0 flex-1"
-                  label="Six-digit confirmation code"
+                  label={t("settings.confirmationCode")}
                   for="totp-confirmation-code"
                 >
                   <input
@@ -288,7 +289,7 @@ export default function SettingsPage() {
                   />
                 </Field>
                 <Button type="submit" variant="primary" disabled={busy()}>
-                  Confirm TOTP
+                  {t("settings.confirmTOTP")}
                 </Button>
               </form>
             </div>
@@ -296,38 +297,37 @@ export default function SettingsPage() {
         </Show>
       </Panel>
 
-      <Panel
-        title="Active sessions"
-        description="Session tokens are opaque; only hashes are stored in PostgreSQL."
-      >
+      <Panel title={t("settings.sessions")} description={t("settings.sessionsDescription")}>
         <div class="mb-4 flex justify-end">
           <Button
             disabled={busy()}
             onClick={() => {
-              if (!window.confirm("Revoke all other sessions?")) return;
+              if (!window.confirm(t("settings.confirmRevokeOther"))) return;
               void run(async () => {
                 await revokeOtherSessions();
                 await load();
-              }, "Other sessions revoked.");
+              }, t("settings.otherSessionsRevoked"));
             }}
           >
-            Revoke other sessions
+            {t("settings.revokeOther")}
           </Button>
         </div>
         <div class="space-y-3">
           <For
             each={sessions()}
-            fallback={<p class="text-sm text-muted-foreground">No active sessions.</p>}
+            fallback={<p class="text-sm text-muted-foreground">{t("settings.noSessions")}</p>}
           >
             {(item) => (
               <article class="flex flex-col gap-3 rounded-md border border-border bg-surface-subtle p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div class="min-w-0">
                   <p class="font-medium text-foreground">
-                    {item.current ? "Current session" : item.user_agent || "Unknown client"}
+                    {item.current
+                      ? t("settings.currentSession")
+                      : item.user_agent || t("settings.unknownClient")}
                   </p>
                   <p class="mt-1 break-words text-xs text-muted-foreground">
-                    {item.auth_method} · {item.ip || "IP unavailable"} · Last seen{" "}
-                    {formatDate(item.last_seen_at)}
+                    {item.auth_method} · {item.ip || t("settings.ipUnavailable")} ·{" "}
+                    {t("settings.lastSeen", { date: formatDate(item.last_seen_at) })}
                   </p>
                 </div>
                 <Show when={!item.current}>
@@ -335,14 +335,14 @@ export default function SettingsPage() {
                     variant="danger"
                     disabled={busy()}
                     onClick={() => {
-                      if (!window.confirm("Revoke this session?")) return;
+                      if (!window.confirm(t("settings.confirmRevokeSession"))) return;
                       void run(async () => {
                         await revokeSession(item.id);
                         await load();
-                      }, "Session revoked.");
+                      }, t("settings.sessionRevoked"));
                     }}
                   >
-                    Revoke
+                    {t("settings.revoke")}
                   </Button>
                 </Show>
               </article>
@@ -360,11 +360,14 @@ function formatDate(value: string): string {
   );
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage(
+  error: unknown,
+  t: (key: string, values?: Record<string, string | number>) => string,
+): string {
   if (error instanceof ApiError) {
     return error.requestId === null
       ? error.message
-      : `${error.message} Request ID: ${error.requestId}`;
+      : `${error.message} ${t("settings.requestId")}: ${error.requestId}`;
   }
-  return error instanceof Error ? error.message : "The security operation failed.";
+  return error instanceof Error ? error.message : t("settings.requestFailed");
 }

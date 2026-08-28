@@ -1,4 +1,5 @@
 import { Match, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { useI18n } from "../app/i18n";
 
 import { Alert, Badge, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError, apiRequest } from "../lib/api";
@@ -17,6 +18,7 @@ type ConnectionState =
   | { kind: "error"; message: string; requestId: string | null };
 
 export default function FoundationPage() {
+  const { t } = useI18n();
   const [connection, setConnection] = createSignal<ConnectionState>({ kind: "loading" });
   const connected = createMemo(() => {
     const current = connection();
@@ -43,7 +45,7 @@ export default function FoundationPage() {
         }
         setConnection({
           kind: "error",
-          message: "The API could not be reached.",
+          message: t("foundation.apiUnavailableLabel"),
           requestId: null,
         });
       }
@@ -58,57 +60,54 @@ export default function FoundationPage() {
   return (
     <div class="space-y-6">
       <PageHeader
-        eyebrow="System"
-        title="Control plane status"
-        description="Live platform state. Provider capabilities come from the server registry; account, zone, and record metrics appear only after real account synchronization."
+        eyebrow={t("foundation.eyebrow")}
+        title={t("foundation.title")}
+        description={t("foundation.description")}
       />
 
       <div class="grid gap-4 lg:grid-cols-3">
-        <Panel title="API connection" compact>
+        <Panel title={t("foundation.apiConnection")} compact>
           <Switch>
             <Match when={connection().kind === "loading"}>
               <p class="text-sm text-muted-foreground" aria-live="polite">
-                Checking the same-origin API…
+                {t("foundation.checking")}
               </p>
             </Match>
             <Match when={connected()}>
-              <Badge tone="success">API connected</Badge>
+              <Badge tone="success">{t("foundation.apiConnected")}</Badge>
               <p class="mt-3 text-xs text-muted-foreground">
                 {connected()?.overview.api_version} · {connected()?.overview.version}
               </p>
             </Match>
             <Match when={failed()}>
-              <Badge tone="danger">API unavailable</Badge>
+              <Badge tone="danger">{t("foundation.apiUnavailableLabel")}</Badge>
               <p class="mt-3 text-sm text-danger-foreground">{failed()?.message}</p>
               {failed()?.requestId && (
                 <p class="mt-2 font-mono text-xs text-muted-foreground">
-                  Request {failed()?.requestId}
+                  {t("foundation.request", { id: failed()?.requestId ?? "" })}
                 </p>
               )}
             </Match>
           </Switch>
         </Panel>
 
-        <Panel title="Authentication" compact>
-          <Badge tone="success">Server enforced</Badge>
+        <Panel title={t("foundation.authentication")} compact>
+          <Badge tone="success">{t("foundation.serverEnforced")}</Badge>
           <p class="mt-3 text-sm leading-6 text-muted-foreground">
-            Opaque sessions, Passkeys, optional password and TOTP, RBAC, CSRF protection, and
-            security audit events are active.
+            {t("foundation.authDescription")}
           </p>
         </Panel>
 
-        <Panel title="Provider integration" compact>
-          <Badge tone="success">Capability driven</Badge>
+        <Panel title={t("foundation.providerIntegration")} compact>
+          <Badge tone="success">{t("foundation.capabilityDriven")}</Badge>
           <p class="mt-3 text-sm leading-6 text-muted-foreground">
-            Production adapters publish credential schemas, RRSet granularity, record types, and
-            vendor extensions through the authenticated provider catalog.
+            {t("foundation.providerDescription")}
           </p>
         </Panel>
       </div>
 
-      <Alert variant="success" title="Authentication security active">
-        The API—not hidden UI controls—is the authorization authority. Configure another
-        authentication method before removing the last usable Passkey or password.
+      <Alert variant="success" title={t("foundation.securityActive")}>
+        {t("foundation.securityDescription")}
       </Alert>
     </div>
   );

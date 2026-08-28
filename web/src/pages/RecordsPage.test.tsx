@@ -2,6 +2,7 @@ import { Route, Router } from "@solidjs/router";
 import { fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { I18nProvider } from "../app/i18n";
 import { AuthProvider } from "../app/AuthContext";
 import type { RecordSet } from "../lib/dns";
 import RecordsPage from "./RecordsPage";
@@ -46,19 +47,24 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+function renderRecordsPage() {
+  return render(() => (
+    <I18nProvider>
+      <AuthProvider>
+        <Router>
+          <Route path="/zones/:zoneId/records" component={RecordsPage} />
+        </Router>
+      </AuthProvider>
+    </I18nProvider>
+  ));
+}
 
 describe("RecordsPage", () => {
   it("runs create, update, and delete through a fake Provider API", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
 
-    render(() => (
-      <AuthProvider>
-        <Router>
-          <Route path="/zones/:zoneId/records" component={RecordsPage} />
-        </Router>
-      </AuthProvider>
-    ));
+    renderRecordsPage();
 
     expect(await screen.findByRole("heading", { name: "example.com" })).toBeInTheDocument();
     expect(screen.getByText("192.0.2.10")).toBeInTheDocument();
@@ -100,13 +106,7 @@ describe("RecordsPage", () => {
     createShouldFail = true;
     vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
 
-    render(() => (
-      <AuthProvider>
-        <Router>
-          <Route path="/zones/:zoneId/records" component={RecordsPage} />
-        </Router>
-      </AuthProvider>
-    ));
+    renderRecordsPage();
 
     expect(await screen.findByRole("heading", { name: "example.com" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add record" }));
@@ -124,13 +124,7 @@ describe("RecordsPage", () => {
     updateShouldConflict = true;
     vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
 
-    render(() => (
-      <AuthProvider>
-        <Router>
-          <Route path="/zones/:zoneId/records" component={RecordsPage} />
-        </Router>
-      </AuthProvider>
-    ));
+    renderRecordsPage();
 
     expect(await screen.findByRole("heading", { name: "example.com" })).toBeInTheDocument();
     const row = screen.getByText("api.example.com").closest("tr");
@@ -154,13 +148,7 @@ describe("RecordsPage", () => {
   it("renders per-item partial batch results and request diagnostics", async () => {
     vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
 
-    render(() => (
-      <AuthProvider>
-        <Router>
-          <Route path="/zones/:zoneId/records" component={RecordsPage} />
-        </Router>
-      </AuthProvider>
-    ));
+    renderRecordsPage();
 
     expect(await screen.findByRole("heading", { name: "example.com" })).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Select api.example.com A"));
@@ -183,13 +171,7 @@ describe("RecordsPage", () => {
     listShouldFail = true;
     vi.stubGlobal("fetch", vi.fn(fakeProviderFetch));
 
-    render(() => (
-      <AuthProvider>
-        <Router>
-          <Route path="/zones/:zoneId/records" component={RecordsPage} />
-        </Router>
-      </AuthProvider>
-    ));
+    renderRecordsPage();
 
     expect(await screen.findByText("Provider unavailable.")).toBeInTheDocument();
     expect(screen.getByText("Request req_record_list")).toBeInTheDocument();
