@@ -1,6 +1,9 @@
 import { Route, Router, useParams } from "@solidjs/router";
 import { ErrorBoundary, Show } from "solid-js";
 
+import { I18nProvider, useI18n } from "./i18n";
+import { ThemeProvider } from "./theme";
+
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/ui/Button";
 import { Alert, PageHeader, Panel } from "../components/ui/Layout";
@@ -14,26 +17,29 @@ import ZonesPage from "../pages/ZonesPage";
 import AppShell from "./AppShell";
 import { AuthProvider, useAuth } from "./AuthContext";
 import AuthGate from "./AuthGate";
-
 export default function App() {
   return (
-    <ErrorBoundary fallback={(error, reset) => <AppError error={error} reset={reset} />}>
-      <AuthProvider>
-        <AuthGate>
-          <Router root={AppShell}>
-            <Route path="/" component={DashboardPage} />
-            <Route path="/zones" component={ZonesPage} />
-            <Route path="/zones/:zoneId/records" component={RecordsPage} />
-            <Route path="/accounts" component={ProviderAccountsPage} />
-            <Route path="/accounts/:accountId" component={ProviderAccountDetailPage} />
-            <Route path="/audit" component={AuditPage} />
-            <Route path="/settings" component={SettingsPage} />
-            <Route path="/users" component={AdminUsersPage} />
-            <Route path="*404" component={NotFoundPage} />
-          </Router>
-        </AuthGate>
-      </AuthProvider>
-    </ErrorBoundary>
+    <ThemeProvider>
+      <I18nProvider>
+        <ErrorBoundary fallback={(error, reset) => <AppError error={error} reset={reset} />}>
+          <AuthProvider>
+            <AuthGate>
+              <Router root={AppShell}>
+                <Route path="/" component={DashboardPage} />
+                <Route path="/zones" component={ZonesPage} />
+                <Route path="/zones/:zoneId/records" component={RecordsPage} />
+                <Route path="/accounts" component={ProviderAccountsPage} />
+                <Route path="/accounts/:accountId" component={ProviderAccountDetailPage} />
+                <Route path="/audit" component={AuditPage} />
+                <Route path="/settings" component={SettingsPage} />
+                <Route path="/users" component={AdminUsersPage} />
+                <Route path="*404" component={NotFoundPage} />
+              </Router>
+            </AuthGate>
+          </AuthProvider>
+        </ErrorBoundary>
+      </I18nProvider>
+    </ThemeProvider>
   );
 }
 
@@ -55,40 +61,43 @@ function AdminUsersPage() {
 }
 
 function NotAuthorizedPage() {
+  const { t } = useI18n();
   return (
     <Panel>
-      <Alert variant="danger">You are not authorized to view this page.</Alert>
+      <Alert variant="danger">{t("auth.unauthorized")}</Alert>
     </Panel>
   );
 }
 
 function NotFoundPage() {
+  const { t } = useI18n();
   return (
     <div class="space-y-6">
       <PageHeader
         eyebrow="404"
-        title="Page not found"
-        description="This route is not part of the current application shell."
+        title={t("auth.notFound")}
+        description={t("auth.notFoundDescription")}
       />
       <Panel>
-        <Alert variant="warning">Use the primary navigation to return to an available page.</Alert>
+        <Alert variant="warning">{t("auth.notFoundMessage")}</Alert>
       </Panel>
     </div>
   );
 }
 
 function AppError(props: { error: unknown; reset: () => void }) {
+  const { t } = useI18n();
   return (
     <AuthLayout
-      eyebrow="Application error"
-      title="The console could not render"
-      description="An unexpected client-side error interrupted the current view."
+      eyebrow={t("app.error.eyebrow")}
+      title={t("app.error.title")}
+      description={t("app.error.description")}
     >
       <Alert variant="danger">
-        {props.error instanceof Error ? props.error.message : "An unexpected UI error occurred."}
+        {props.error instanceof Error ? props.error.message : t("app.error.message")}
       </Alert>
       <Button class="mt-5" variant="primary" onClick={() => props.reset()}>
-        Try again
+        {t("app.tryAgain")}
       </Button>
     </AuthLayout>
   );

@@ -1,4 +1,4 @@
-import { render, screen } from "@solidjs/testing-library";
+import { render, screen, fireEvent } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
@@ -17,6 +17,28 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "DNS control plane" })).toBeInTheDocument();
     expect(screen.getByText("Indexed zones")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Users" })).toBeInTheDocument();
+  });
+
+  it("switches the authenticated shell language", async () => {
+    vi.stubGlobal("fetch", vi.fn(authenticatedFetch));
+
+    render(() => <App />);
+
+    expect(await screen.findByRole("link", { name: "Dashboard" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-CN" } });
+    expect(await screen.findByRole("link", { name: "仪表盘" })).toBeInTheDocument();
+  });
+
+  it("applies an explicit theme selection to the document", async () => {
+    vi.stubGlobal("fetch", vi.fn(authenticatedFetch));
+
+    render(() => <App />);
+
+    await screen.findByRole("heading", { name: "DNS control plane" });
+    const selector = screen.getByLabelText("Theme");
+    fireEvent.change(selector, { target: { value: "dark" } });
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(selector).toHaveValue("dark");
   });
 
   it("renders Passkey-first login with optional password fallback", async () => {
@@ -52,6 +74,45 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue with Passkey" })).toBeInTheDocument();
     expect(screen.getByText("Password fallback")).toBeInTheDocument();
+  });
+
+  it("renders password-first bootstrap choices when password login is enabled", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith("/auth/session")) {
+          return jsonResponse(
+            {
+              error: {
+                code: "authentication_failed",
+                message: "Authentication failed.",
+                request_id: "req_unauthenticated",
+              },
+            },
+            401,
+          );
+        }
+        if (path.endsWith("/auth/bootstrap")) {
+          return jsonResponse({
+            required: true,
+            configured: true,
+            password_login_enabled: true,
+          });
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      }),
+    );
+
+    render(() => <App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Create the first administrator" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Create with password" })).toBeChecked();
+    expect(screen.getByLabelText("Password")).toBeInTheDocument();
+    expect(screen.getByLabelText("Confirm password")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Register a Passkey" })).toBeInTheDocument();
   });
 
   it("links cross-account zones to their record management routes", async () => {

@@ -1,37 +1,85 @@
-import { createEffect, createSignal } from "solid-js";
+import {
+  createComponent,
+  createContext,
+  createEffect,
+  createSignal,
+  onCleanup,
+  onMount,
+  useContext,
+  type ParentProps,
+} from "solid-js";
 
-export type Theme = "light" | "dark";
+export type ThemeMode = "system" | "light" | "dark";
+export type ResolvedTheme = "light" | "dark";
+
+type ThemeContextValue = {
+  mode: () => ThemeMode;
+  theme: () => ResolvedTheme;
+  setMode: (mode: ThemeMode) => void;
+};
 
 const storageKey = "aster-dns-theme";
+const systemPreference = "(prefers-color-scheme: dark)";
+const ThemeContext = createContext<ThemeContextValue>();
 
-export function createThemeController() {
-  const [theme, setTheme] = createSignal<Theme>(readInitialTheme());
+export function ThemeProvider(props: ParentProps) {
+  const initialMode = readInitialMode();
+  const [mode, setMode] = createSignal<ThemeMode>(initialMode);
+  const [theme, setTheme] = createSignal<ResolvedTheme>(resolveTheme(initialMode));
 
-  createEffect(() => {
-    const current = theme();
-    document.documentElement.dataset.theme = current;
-    document.documentElement.style.colorScheme = current;
+  const applyTheme = () => {
+    const resolved = resolveTheme(mode());
+    setTheme(resolved);
+    document.documentElement.dataset.theme = resolved;
+    document.documentElement.style.colorScheme = resolved;
     try {
-      window.localStorage.setItem(storageKey, current);
+      window.localStorage.setItem(storageKey, mode());
     } catch {
       // Theme persistence is optional when storage is unavailable.
     }
+  };
+
+  createEffect(() => {
+    mode();
+    applyTheme();
   });
 
-  return {
-    theme,
-    toggle: () => setTheme((current) => (current === "light" ? "dark" : "light")),
-  };
+  onMount(() => {
+    const media = window.matchMedia?.(systemPreference);
+    if (media === undefined) return;
+    const handleChange = () => {
+      if (mode() === "system") applyTheme();
+    };
+    media.addEventListener?.("change", handleChange);
+    onCleanup(() => media.removeEventListener?.("change", handleChange));
+  });
+  const value: ThemeContextValue = { mode, theme, setMode };
+
+  return createComponent(ThemeContext.Provider, {
+    value,
+    get children() {
+      return props.children;
+    },
+  });
 }
 
-function readInitialTheme(): Theme {
+export function useTheme(): ThemeContextValue {
+  const context = useContext(ThemeContext);
+  if (context === undefined) throw new Error("ThemeProvider is missing.");
+  return context;
+}
+
+function resolveTheme(mode: ThemeMode): ResolvedTheme {
+  if (mode !== "system") return mode;
+  return window.matchMedia?.(systemPreference).matches ? "dark" : "light";
+}
+
+function readInitialMode(): ThemeMode {
   try {
     const saved = window.localStorage.getItem(storageKey);
-    if (saved === "light" || saved === "dark") {
-      return saved;
-    }
+    if (saved === "system" || saved === "light" || saved === "dark") return saved;
   } catch {
-    // Fall back to the operating system preference.
+    // Fall back to system preference.
   }
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return "system";
 }

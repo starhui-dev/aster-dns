@@ -114,6 +114,7 @@ func load(lookup lookupEnv) (Config, error) {
 			ConnectTimeout:    5 * time.Second,
 		},
 		Auth: AuthConfig{
+			PasswordLoginEnabled:   true,
 			SessionIdleTTL:         30 * time.Minute,
 			SessionAbsoluteTTL:     24 * time.Hour,
 			SessionRefreshInterval: time.Minute,

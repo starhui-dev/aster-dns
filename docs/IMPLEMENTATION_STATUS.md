@@ -4,7 +4,7 @@ Updated: 2026-08-28
 
 ## Outcome
 
-The authentication, authorization, Provider core, four production adapters, unified DNS application services/APIs, short-lived record cache, immutable audit queries, and SolidJS Web console are implemented end to end. Authentication is Passkey-first. There is no hard-coded or generated default administrator password.
+The authentication, authorization, Provider core, four production adapters, unified DNS application services/APIs, short-lived record cache, immutable audit queries, and SolidJS Web console are implemented end to end. Authentication is Passkey-first with configurable password login; the first administrator can choose either method during bootstrap. There is no hard-coded or generated default administrator password.
 
 Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS are registered production adapters using their official SDK/API surfaces. The Provider remains the DNS source of truth; PostgreSQL stores platform data, encrypted credentials, the Zone index, cache metadata, and audit history. The browser consumes capability descriptors and never receives stored Provider credential material.
 
@@ -154,10 +154,10 @@ Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS ar
 
 - A bootstrap secret must be supplied explicitly as `APP_BOOTSTRAP_TOKEN`, encoded as an unpadded base64url value containing exactly 32 random bytes.
 - Configuration stores only the SHA-256 bootstrap-token hash in memory.
-- Bootstrap is available only while the database contains no users and requires a valid WebAuthn registration ceremony.
-- The first administrator, Passkey credential, consumed challenge, initial session, and audit event are committed atomically.
+- Bootstrap is available only while the database contains no users and requires the explicit token plus either a WebAuthn registration ceremony or a valid Argon2id password.
+- Password bootstrap commits the first administrator, password hash, initial session, and audit event atomically; Passkey bootstrap additionally commits the Passkey and consumed challenge.
 - Concurrent or replayed bootstrap attempts cannot create another first administrator.
-- The runtime bootstrap token can and should be removed after enrollment.
+- The runtime bootstrap token can and should be removed after either bootstrap method succeeds.
 
 ### Users and centralized RBAC
 
@@ -190,7 +190,8 @@ Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS ar
 
 ### Password fallback
 
-- Password login is globally gated by `APP_PASSWORD_LOGIN_ENABLED` and individually enabled per user.
+- Password login is globally gated by `APP_PASSWORD_LOGIN_ENABLED` (enabled by default) and individually enabled per user.
+- The first-administrator bootstrap page offers password or Passkey initialization; password bootstrap never creates a default password and still requires the one-time bootstrap token.
 - Passwords are hashed and verified through `github.com/alexedwards/argon2id` with random salts and centralized parameters.
 - Login uses uniform invalid-credential responses to avoid username enumeration.
 - Per-IP and per-username bounded in-memory rate limits protect password and TOTP login attempts.
@@ -289,8 +290,7 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 | Post-fix release revalidation (2026-08-28) | `make backend-format-check backend-lint backend-test`、`go test -count=1 ./internal/provider/...`、security/race、frontend format/lint/typecheck/tests/build、`make backend-build`、production Docker build、clean PostgreSQL migration、隔离 image runtime health/readiness/root/SIGTERM smoke 均通过；production image user 为 `nonroot:nonroot`，export 未发现 `.env`/secret/test fixture/build-cache 路径。 |
 | Provider concurrency checks | `go test -race ./internal/provider/... ./internal/service ./internal/api ./internal/auth ./internal/audit ./internal/httpx` passed all Provider adapters plus service/API/auth/audit/HTTP hardening paths, including client single-flight, revision invalidation, and the eight-call per-account bound. |
 | Formatting and lint | `make backend-format-check backend-lint frontend-format-check frontend-lint` passed: gofmt clean, `go vet` clean, Prettier clean, and ESLint zero warnings. |
-| Backend tests and build | `make backend-test` passed `go test ./cmd/... ./internal/... ./migrations`; `go build ./cmd/... ./internal/... ./migrations` also passed. |
-| Frontend tests, typecheck, and build | The current release run passed 4 Vitest files / 13 tests, TypeScript strict typecheck, zero-warning ESLint, Prettier, and the Vite production build. Tests cover capability-driven Provider forms, credential state cleanup/storage scans, API diagnostic redaction, cache/conflict/batch behavior, and focus recovery. |
+| Frontend tests, typecheck, and build | The current release run passed 4 Vitest files / 14 tests, TypeScript strict typecheck, zero-warning ESLint, Prettier, and the Vite production build. Tests cover capability-driven Provider forms, credential state cleanup/storage scans, API diagnostic redaction, cache/conflict/batch behavior, focus recovery, and the password-or-Passkey first-admin bootstrap choices. |
 | Unified browser UI acceptance | Real Chromium followed the password + TOTP login, Provider Account create, post-save secret redaction, Validate, Sync Zones, four-account Zone inventory, Zone opening, force refresh, seven record-type creates (A/AAAA/CNAME/TXT/MX/SRV/CAA), multi-entry RRSet, edit/delete, optimistic conflict comparison/reapply, batch partial failure, audit detail, viewer RBAC, CSRF-bearing mutations, Passkey/TOTP/session management, light/dark theme, and keyboard/focus/error paths against a stateful intercepted fake Provider API. Cloudflare proxy, Huawei line/weight/status, DNSPod line/line-ID/weight/status/remark, and Alibaba line/weight/status/remark fields rendered only from descriptors. A 390×844 viewport had no document overflow and kept focus inside mobile navigation. No Provider secret appeared in response state, DOM, audit, localStorage, or sessionStorage. |
 | Acceptance defects fixed | Cross-account Zone links now target the registered `/zones/:zoneId/records` route instead of the 404 `/zones/:zoneId` path. Record create/update server errors now return focus to the still-open editor after the busy submit button is disabled. Both defects have frontend regression tests and were reverified in Chromium. |
 | DNS API and cache tests | `make backend-test` passed DNS service/API tests for cache hit/bypass/stale fallback/invalidation, Provider final state, conflict details, batch delete/TTL partial results, audit list/detail, RBAC, CSRF/Origin, safe errors, and request IDs. |

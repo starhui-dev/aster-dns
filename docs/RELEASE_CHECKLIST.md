@@ -5,7 +5,7 @@ This checklist records only checks run for the current release candidate. A pass
 ## Configuration and security
 
 - [ ] Production secret-manager injection and independent master-key/keyring backup completed for the target environment.
-- [ ] One-time `APP_BOOTSTRAP_TOKEN` was used for first-admin Passkey bootstrap and removed from the target environment.
+- [ ] One-time `APP_BOOTSTRAP_TOKEN` was used for first-admin password or Passkey bootstrap and removed from the target environment.
 - [x] Production configuration requires `APP_ENV=production` with HTTPS `APP_PUBLIC_URL`; trusted proxy and WebAuthn origin behavior are documented and covered by config/auth tests.
 - [x] No real Provider credential, default administrator password, API key, or master key is committed or baked into the image. CI-only/test canaries are test data and are not present in the runtime image.
 - [x] Security headers/CSP and HTTPS-only HSTS behavior are present and tested.

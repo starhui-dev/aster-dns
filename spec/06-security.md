@@ -77,7 +77,8 @@ Credential object 用完后尽量缩短生命周期；Go 无法保证 memory zer
 - 不自行写 hash format；
 - 登录失败统一提示，避免 username enumeration；
 - rate limiting；
-- password fallback 可在系统设置禁用。
+- password fallback 可在系统设置禁用，默认配置开启；
+- 首次管理员 bootstrap 的密码方式必须同时持有一次性 `APP_BOOTSTRAP_TOKEN`，不创建默认密码。
 
 ## 7. Passkey
 

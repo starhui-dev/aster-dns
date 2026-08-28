@@ -75,6 +75,7 @@ func registerAuthRoutes(router chi.Router, service *auth.Service) {
 			public.Use(service.OriginProtection)
 			public.Post("/bootstrap/passkey/options", handler.bootstrapOptions)
 			public.Post("/bootstrap/passkey/verify", handler.bootstrapVerify)
+			public.Post("/bootstrap/password", handler.bootstrapPassword)
 			public.Post("/passkeys/login/options", handler.passkeyLoginOptions)
 			public.Post("/passkeys/login/verify", handler.passkeyLoginVerify)
 			public.Post("/passkeys/enroll/options", handler.enrollmentOptions)
@@ -147,6 +148,29 @@ func (h authHandler) bootstrapVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issued, err := h.service.FinishBootstrap(r.Context(), auth.BootstrapVerifyInput(request), auth.MetadataFromRequest(r))
+	if err != nil {
+		writeAuthError(w, r, err)
+		return
+	}
+	h.writeIssuedSession(w, http.StatusCreated, issued)
+}
+
+func (h authHandler) bootstrapPassword(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		BootstrapToken string `json:"bootstrap_token"`
+		Username       string `json:"username"`
+		DisplayName    string `json:"display_name"`
+		Password       string `json:"password"`
+	}
+	if !decodeAuthJSON(w, r, &request) {
+		return
+	}
+	issued, err := h.service.BootstrapWithPassword(r.Context(), auth.BootstrapPasswordInput{
+		BootstrapToken: request.BootstrapToken,
+		Username:       request.Username,
+		DisplayName:    request.DisplayName,
+		Password:       request.Password,
+	}, auth.MetadataFromRequest(r))
 	if err != nil {
 		writeAuthError(w, r, err)
 		return

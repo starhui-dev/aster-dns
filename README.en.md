@@ -7,7 +7,7 @@
 
 Aster DNS is a self-hosted, same-origin DNS management control plane for Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS. Provider APIs remain the source of truth for Zones and Records. PostgreSQL stores platform state, the Zone index, short-lived cache metadata, encrypted credentials, sessions, and audit events; it is not a desired-state record database.
 
-The four official Provider adapters, unified DNS services/API, capability-driven SolidJS console, Passkey-first authentication, optional Argon2id password fallback, TOTP, opaque sessions, RBAC, CSRF/origin protection, immutable audit events, and production hardening are implemented. Unit, fixture, and conformance coverage does not imply that a real Provider account mutation was executed; see [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md) for gated integration evidence.
+The four official Provider adapters, unified DNS services/API, capability-driven SolidJS console, Passkey-first authentication with configurable Argon2id password login, TOTP, opaque sessions, RBAC, CSRF/origin protection, immutable audit events, and production hardening are implemented. Unit, fixture, and conformance coverage does not imply that a real Provider account mutation was executed; see [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md) for gated integration evidence.
 
 ## Stack
 
@@ -75,7 +75,7 @@ Generate the one-time first-admin token:
 openssl rand 32 | base64 -w0 | tr '+/' '-_' | tr -d '='
 ```
 
-Keep `APP_BOOTSTRAP_TOKEN` only until the first administrator finishes Passkey enrollment. Remove it from the environment and restart the app immediately afterward. The server will not generate a weak fallback or create a default administrator password.
+Keep `APP_BOOTSTRAP_TOKEN` only until the first administrator completes bootstrap. The administrator can choose a password or Passkey; remove the token from the environment and restart the app immediately afterward. The server will not generate a weak fallback or create a default administrator password.
 
 ### 3. Start the Compose stack
 
@@ -99,7 +99,7 @@ docker compose up -d app
 
 ### 4. Complete the one-time admin bootstrap
 
-Open `APP_PUBLIC_URL`. The bootstrap page reports that a first administrator is required, accepts the one-time token, and completes a WebAuthn/Passkey registration ceremony. The server atomically commits the first administrator, Passkey, challenge consumption, session, and audit event. Once a user exists, bootstrap is unavailable. Remove `APP_BOOTSTRAP_TOKEN` after success.
+Open `APP_PUBLIC_URL`. The bootstrap page reports that a first administrator is required, accepts the one-time token, and lets you choose a password or WebAuthn/Passkey. Password bootstrap atomically commits the first administrator, password hash, session, and audit event; Passkey bootstrap also commits the Passkey and challenge consumption. Once a user exists, bootstrap is unavailable. Remove `APP_BOOTSTRAP_TOKEN` after success.
 
 Subsequent users are created by an administrator and enroll through a one-time hashed enrollment token. Roles are `admin`, `operator`, and `viewer`.
 

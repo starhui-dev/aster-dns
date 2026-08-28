@@ -69,6 +69,64 @@ func TestPasskeyChallengeReplayAndRelyingPartyValidation(t *testing.T) {
 	}
 }
 
+func TestPasswordBootstrapCreatesFirstAdministrator(t *testing.T) {
+	service, store, bootstrapToken := newTestService(t, true)
+	const password = "correct horse battery staple"
+
+	issued, err := service.BootstrapWithPassword(context.Background(), BootstrapPasswordInput{
+		BootstrapToken: bootstrapToken,
+		Username:       "Admin",
+		DisplayName:    "Administrator",
+		Password:       password,
+	}, RequestMetadata{RequestID: "req_password_bootstrap", IP: "192.0.2.3"})
+	if err != nil {
+		t.Fatalf("bootstrap with password: %v", err)
+	}
+	if issued.User.Role != RoleAdmin || !issued.User.PasswordEnabled || issued.User.Username != "admin" {
+		t.Fatalf("bootstrap user = %+v", issued.User)
+	}
+	if issued.User.PasswordHash == password || issued.User.PasswordHash == "" {
+		t.Fatal("bootstrap stored an invalid password hash")
+	}
+	matched, err := service.passwords.Verify(password, issued.User.PasswordHash)
+	if err != nil || !matched {
+		t.Fatalf("verify bootstrap password: matched=%v err=%v", matched, err)
+	}
+	if issued.Session.AuthMethod != AuthMethodPassword || len(store.sessions) != 1 || len(store.users) != 1 {
+		t.Fatalf("bootstrap state: method=%q sessions=%d users=%d", issued.Session.AuthMethod, len(store.sessions), len(store.users))
+	}
+	if len(store.audits) != 1 || store.audits[0].Action != "auth.bootstrap.completed" {
+		t.Fatalf("bootstrap audits = %+v", store.audits)
+	}
+	if _, exists := store.audits[0].AfterData["password"]; exists {
+		t.Fatal("bootstrap audit contains a password field")
+	}
+	if _, err = service.BootstrapWithPassword(context.Background(), BootstrapPasswordInput{
+		BootstrapToken: bootstrapToken,
+		Username:       "other-admin",
+		DisplayName:    "Other Administrator",
+		Password:       password,
+	}, RequestMetadata{IP: "192.0.2.3"}); !errors.Is(err, ErrBootstrapUnavailable) {
+		t.Fatalf("second password bootstrap error = %v", err)
+	}
+}
+
+func TestPasswordBootstrapRequiresGlobalPasswordLogin(t *testing.T) {
+	service, store, bootstrapToken := newTestService(t, false)
+	_, err := service.BootstrapWithPassword(context.Background(), BootstrapPasswordInput{
+		BootstrapToken: bootstrapToken,
+		Username:       "admin",
+		DisplayName:    "Administrator",
+		Password:       "correct horse battery staple",
+	}, RequestMetadata{IP: "192.0.2.4"})
+	if !errors.Is(err, ErrPasswordLoginDisabled) {
+		t.Fatalf("disabled password bootstrap error = %v", err)
+	}
+	if len(store.users) != 0 || len(store.sessions) != 0 {
+		t.Fatalf("disabled password bootstrap changed state: users=%d sessions=%d", len(store.users), len(store.sessions))
+	}
+}
+
 func bootstrapWithVirtualPasskey(t *testing.T, service *Service, bootstrapToken string, rp virtualwebauthn.RelyingParty, authenticator *virtualwebauthn.Authenticator, credential virtualwebauthn.Credential) IssuedSession {
 	t.Helper()
 	begin, err := service.BeginBootstrap(context.Background(), BootstrapBeginInput{

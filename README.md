@@ -7,7 +7,7 @@
 
 Aster DNS 是一个自托管、同源的 DNS 管理控制平面，支持 Huawei Cloud DNS、Alibaba Cloud DNS、Tencent Cloud DNSPod 和 Cloudflare DNS。Provider API 是 Zone 与 Record 的事实来源。PostgreSQL 仅保存平台状态、Zone 索引、短期缓存元数据、加密凭据、会话和审计事件；它不是 desired-state Record 数据库。
 
-四个官方 Provider 适配器、统一 DNS 服务/API、基于能力驱动的 SolidJS 控制台、Passkey 优先认证、可选的 Argon2id 密码回退、TOTP、opaque session、RBAC、CSRF/Origin 防护、不可变审计事件和生产加固均已实现。单元测试、fixture 测试和一致性测试不代表已执行真实 Provider 账号 mutation；真实集成证据请参阅 [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md)。
+四个官方 Provider 适配器、统一 DNS 服务/API、基于能力驱动的 SolidJS 控制台、Passkey 优先认证和可配置的 Argon2id 密码登录、TOTP、opaque session、RBAC、CSRF/Origin 防护、不可变审计事件和生产加固均已实现。单元测试、fixture 测试和一致性测试不代表已执行真实 Provider 账号 mutation；真实集成证据请参阅 [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md)。
 
 ## 技术栈
 
@@ -75,7 +75,7 @@ chmod 600 secrets/master-key.b64
 openssl rand 32 | base64 -w0 | tr '+/' '-_' | tr -d '='
 ```
 
-只在首位管理员完成 Passkey 注册前保留 `APP_BOOTSTRAP_TOKEN`。完成后立即从环境中删除并重启应用。服务不会生成弱 fallback，也不会创建默认管理员密码。
+只在首位管理员完成 bootstrap 前保留 `APP_BOOTSTRAP_TOKEN`。管理员可以选择密码或 Passkey 完成初始化；成功后立即从环境中删除 token 并重启应用。服务不会生成弱 fallback，也不会创建默认管理员密码。
 
 ### 3. 启动 Compose 栈
 
@@ -99,7 +99,7 @@ docker compose up -d app
 
 ### 4. 完成一次性管理员 bootstrap
 
-打开 `APP_PUBLIC_URL`。Bootstrap 页面会提示需要首个管理员，接受一次性 token，并完成 WebAuthn/Passkey 注册 ceremony。服务器会原子提交首个管理员、Passkey、challenge 消费、session 和审计事件。用户创建后 bootstrap 即不可用。成功后删除 `APP_BOOTSTRAP_TOKEN`。
+打开 `APP_PUBLIC_URL`。Bootstrap 页面会提示需要首个管理员，接受一次性 token，并让你选择密码或 WebAuthn/Passkey。密码方式会原子提交首个管理员、密码哈希、session 和审计事件；Passkey 方式还会提交 Passkey 与 challenge 消费。用户创建后 bootstrap 即不可用。成功后删除 `APP_BOOTSTRAP_TOKEN`。
 
 后续用户由管理员创建，并通过一次性、哈希化的 enrollment token 完成注册。角色为 `admin`、`operator` 和 `viewer`。
 

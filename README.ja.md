@@ -7,7 +7,7 @@
 
 Aster DNS は、Huawei Cloud DNS、Alibaba Cloud DNS、Tencent Cloud DNSPod、Cloudflare DNS に対応するセルフホスト型・同一オリジンの DNS 管理コントロールプレーンです。Zone と Record の真の情報源は Provider API です。PostgreSQL には、プラットフォームの状態、Zone インデックス、短期間のキャッシュメタデータ、暗号化された認証情報、セッション、監査イベントだけを保存し、desired state の Record データベースとしては使用しません。
 
-4 つの公式 Provider アダプター、統合 DNS サービス/API、capability-driven な SolidJS コンソール、Passkey 優先認証、任意の Argon2id パスワードフォールバック、TOTP、opaque session、RBAC、CSRF/Origin 保護、不変監査イベント、プロダクション向けの強化機能を実装しています。Unit、fixture、conformance のテストカバレッジは、実際の Provider アカウントに対する mutation が実行されたことを意味しません。ゲート付き統合テストの証跡は [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md) を参照してください。
+4 つの公式 Provider アダプター、統合 DNS サービス/API、capability-driven な SolidJS コンソール、設定可能な Argon2id パスワードログインを備えた Passkey 優先認証、TOTP、opaque session、RBAC、CSRF/Origin 保護、不変監査イベント、プロダクション向けの強化機能を実装しています。Unit、fixture、conformance のテストカバレッジは、実際の Provider アカウントに対する mutation が実行されたことを意味しません。ゲート付き統合テストの証跡は [`docs/TEST_MATRIX.md`](docs/TEST_MATRIX.md) を参照してください。
 
 ## 技術スタック
 
@@ -75,7 +75,7 @@ chmod 600 secrets/master-key.b64
 openssl rand 32 | base64 -w0 | tr '+/' '-_' | tr -d '='
 ```
 
-最初の管理者が Passkey の登録を完了するまでだけ `APP_BOOTSTRAP_TOKEN` を保持してください。完了後、直ちに環境から削除してアプリを再起動します。サーバーは弱いフォールバックを生成せず、デフォルトの管理者パスワードも作成しません。
+最初の管理者が bootstrap を完了するまでだけ `APP_BOOTSTRAP_TOKEN` を保持してください。管理者はパスワードまたは Passkey を選択できます。成功後、直ちに token を環境から削除してアプリを再起動します。サーバーは弱いフォールバックを生成せず、デフォルトの管理者パスワードも作成しません。
 
 ### 3. Compose スタックを起動する
 
@@ -99,7 +99,7 @@ docker compose up -d app
 
 ### 4. 一度だけの管理者 bootstrap を完了する
 
-`APP_PUBLIC_URL` を開きます。bootstrap ページには最初の管理者が必要であることが表示され、一度だけの token を受け付け、WebAuthn/Passkey の登録 ceremony を完了します。サーバーは最初の管理者、Passkey、challenge の消費、session、監査イベントをアトミックにコミットします。ユーザーが存在すると bootstrap は利用できません。成功後に `APP_BOOTSTRAP_TOKEN` を削除してください。
+`APP_PUBLIC_URL` を開きます。bootstrap ページには最初の管理者が必要であることが表示され、一度だけの token を受け付け、パスワードまたは WebAuthn/Passkey を選択できます。パスワード方式では最初の管理者、パスワードハッシュ、session、監査イベントをアトミックにコミットし、Passkey 方式では Passkey と challenge の消費もコミットします。ユーザーが存在すると bootstrap は利用できません。成功後に `APP_BOOTSTRAP_TOKEN` を削除してください。
 
 以後のユーザーは管理者が作成し、一度だけ使用するハッシュ化済み enrollment token で登録します。ロールは `admin`、`operator`、`viewer` です。
 

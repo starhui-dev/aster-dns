@@ -2,6 +2,7 @@ import { browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { Show, createSignal } from "solid-js";
 
 import { useAuth } from "../app/AuthContext";
+import { useI18n } from "../app/i18n";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/ui/Button";
 import { Alert, Field, Panel } from "../components/ui/Layout";
@@ -17,6 +18,7 @@ import {
 
 export default function LoginPage(props: { status: BootstrapStatus }) {
   const auth = useAuth();
+  const { t } = useI18n();
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [username, setUsername] = createSignal("");
@@ -41,7 +43,7 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
     try {
       await handleResult(await operation());
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setBusy(false);
     }
@@ -69,9 +71,9 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
 
   return (
     <AuthLayout
-      eyebrow="Aster DNS"
-      title="Sign in"
-      description="Use a Passkey to access the DNS control plane. Password login appears only when enabled by an administrator."
+      eyebrow={t("auth.login.eyebrow")}
+      title={t("auth.login.title")}
+      description={t("auth.login.description")}
       wide
     >
       <Show when={totpToken() === null} fallback={<TOTPForm />}>
@@ -81,21 +83,22 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
           disabled={busy() || !browserSupportsWebAuthn()}
           onClick={() => void run(loginWithPasskey)}
         >
-          {busy() ? "Waiting…" : "Continue with Passkey"}
+          {busy() ? t("auth.creating") : t("auth.continuePasskey")}
         </Button>
         {!browserSupportsWebAuthn() && (
           <Alert class="mt-3" variant="warning">
-            This browser does not support WebAuthn.
+            {t("auth.webAuthnUnsupported")}
           </Alert>
         )}
 
         <Show when={props.status.password_login_enabled}>
           <div class="my-6 flex items-center gap-3 text-xs font-semibold text-muted-foreground">
-            <span class="h-px flex-1 bg-border" /> Password fallback
+            <span class="h-px flex-1 bg-border" />
+            {t("auth.passwordFallback")}
             <span class="h-px flex-1 bg-border" />
           </div>
           <form class="space-y-4" onSubmit={submitPassword}>
-            <Field label="Username" for="login-username">
+            <Field label={t("auth.username")} for="login-username">
               <input
                 id="login-username"
                 class="text-input"
@@ -105,7 +108,7 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
                 onInput={(event) => setUsername(event.currentTarget.value)}
               />
             </Field>
-            <Field label="Password" for="login-password">
+            <Field label={t("auth.password")} for="login-password">
               <input
                 id="login-password"
                 class="text-input"
@@ -117,17 +120,17 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
               />
             </Field>
             <Button class="w-full" type="submit" disabled={busy()}>
-              Sign in with password
+              {t("auth.passwordLogin")}
             </Button>
           </form>
         </Show>
 
         <details class="mt-6 rounded-lg border border-border bg-surface-subtle p-4">
           <summary class="cursor-pointer text-sm font-semibold text-foreground">
-            Register from an enrollment token
+            {t("auth.enrollment")}
           </summary>
           <form class="mt-4 space-y-4" onSubmit={submitEnrollment}>
-            <Field label="Enrollment token" for="enrollment-token">
+            <Field label={t("auth.enrollmentToken")} for="enrollment-token">
               <input
                 id="enrollment-token"
                 class="text-input"
@@ -138,7 +141,7 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
                 onInput={(event) => setEnrollmentToken(event.currentTarget.value)}
               />
             </Field>
-            <Field label="Passkey name" for="enrollment-passkey-name">
+            <Field label={t("auth.passkeyName")} for="enrollment-passkey-name">
               <input
                 id="enrollment-passkey-name"
                 class="text-input"
@@ -148,7 +151,7 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
               />
             </Field>
             <Button class="w-full" type="submit" disabled={busy()}>
-              Register Passkey
+              {t("auth.registerPasskey")}
             </Button>
           </form>
         </details>
@@ -164,12 +167,9 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
 
   function TOTPForm() {
     return (
-      <Panel
-        title="Two-factor verification"
-        description="Enter the six-digit code from your authenticator app."
-      >
+      <Panel title={t("auth.totp.title")} description={t("auth.totp.description")}>
         <form class="space-y-4" onSubmit={submitTOTP}>
-          <Field label="Authentication code" for="totp-code">
+          <Field label={t("auth.totp.code")} for="totp-code">
             <input
               id="totp-code"
               class="text-input"
@@ -184,7 +184,7 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
           </Field>
           <div class="grid gap-2 sm:grid-cols-2">
             <Button type="submit" variant="primary" disabled={busy()}>
-              Verify code
+              {t("auth.totp.verify")}
             </Button>
             <Button
               onClick={() => {
@@ -192,7 +192,7 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
                 setTOTPCode("");
               }}
             >
-              Start over
+              {t("auth.startOver")}
             </Button>
           </div>
         </form>
@@ -201,11 +201,12 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
   }
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage(error: unknown, translate: (key: string) => string): string {
   if (error instanceof ApiError) {
+    if (error.code === "origin_denied") return translate("auth.originDenied");
     return error.requestId === null
       ? error.message
-      : `${error.message} Request ID: ${error.requestId}`;
+      : `${error.message} ${translate("auth.requestId")}: ${error.requestId}`;
   }
-  return error instanceof Error ? error.message : "Authentication failed.";
+  return error instanceof Error ? error.message : translate("auth.genericFailure");
 }

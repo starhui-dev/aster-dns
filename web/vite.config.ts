@@ -11,9 +11,21 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      "/api": backendTarget,
-      "/healthz": backendTarget,
-      "/readyz": backendTarget,
+      "/api": {
+        target: backendTarget,
+        changeOrigin: false,
+        headers: { host: "localhost:5173" },
+      },
+      "/healthz": {
+        target: backendTarget,
+        changeOrigin: false,
+        headers: { host: "localhost:5173" },
+      },
+      "/readyz": {
+        target: backendTarget,
+        changeOrigin: false,
+        headers: { host: "localhost:5173" },
+      },
     },
   },
   build: {

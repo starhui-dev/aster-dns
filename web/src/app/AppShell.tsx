@@ -1,24 +1,25 @@
 import { A, useLocation } from "@solidjs/router";
 import { For, createEffect, createMemo, createSignal, onCleanup, type ParentProps } from "solid-js";
 
+import { AppearanceControls } from "../components/AppearanceControls";
 import { Brand } from "../components/Brand";
 import { Button } from "../components/ui/Button";
+import { useI18n } from "./i18n";
 import { useAuth } from "./AuthContext";
-import { createThemeController } from "./theme";
 
 const primaryNavigation = [
-  { href: "/", label: "Dashboard", end: true },
-  { href: "/zones", label: "Zones", end: false },
-  { href: "/accounts", label: "Provider accounts", end: false },
-  { href: "/audit", label: "Audit logs", end: false },
+  { href: "/", key: "nav.dashboard", end: true },
+  { href: "/zones", key: "nav.zones", end: false },
+  { href: "/accounts", key: "nav.accounts", end: false },
+  { href: "/audit", key: "nav.audit", end: false },
 ] as const;
 
-const settingsNavigation = { href: "/settings", label: "Settings", end: false } as const;
+const settingsNavigation = { href: "/settings", key: "nav.settings", end: false } as const;
 
 export default function AppShell(props: ParentProps) {
   const location = useLocation();
   const auth = useAuth();
-  const theme = createThemeController();
+  const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = createSignal(false);
   const [mobileDialog, setMobileDialog] = createSignal<HTMLDialogElement>();
 
@@ -43,23 +44,27 @@ export default function AppShell(props: ParentProps) {
   const navigation = createMemo(() => [
     ...primaryNavigation,
     ...(session()?.user.role === "admin"
-      ? [{ href: "/users", label: "Users", end: false } as const]
+      ? [{ href: "/users", key: "nav.users", end: false } as const]
       : []),
     settingsNavigation,
   ]);
   const pageTitle = () =>
-    navigation().find((item) =>
-      item.end ? location.pathname === item.href : location.pathname.startsWith(item.href),
-    )?.label ?? "Aster DNS";
+    t(
+      navigation().find((item) =>
+        item.end ? location.pathname === item.href : location.pathname.startsWith(item.href),
+      )?.key ?? "nav.controlPlane",
+    );
 
   return (
     <div class="min-h-screen bg-background text-foreground">
       <div class="mx-auto flex min-h-screen max-w-[1680px]">
         <aside class="hidden w-60 shrink-0 border-r border-sidebar-border bg-sidebar p-5 md:flex md:flex-col">
           <Brand />
-          <NavigationLinks items={navigation()} />
+          <NavigationLinks items={navigation()} onNavigate={() => setMobileOpen(false)} />
           <AccountSummary
-            displayName={session()?.user.display_name || session()?.user.username || "Unknown user"}
+            displayName={
+              session()?.user.display_name || session()?.user.username || t("nav.unknownUser")
+            }
             role={session()?.user.role || "viewer"}
             onSignOut={() => void auth.signOut().catch(() => auth.refresh())}
           />
@@ -68,7 +73,7 @@ export default function AppShell(props: ParentProps) {
         <dialog
           ref={(element) => setMobileDialog(element)}
           class="m-0 h-dvh max-h-none w-screen max-w-none bg-transparent p-0 backdrop:bg-foreground/30"
-          aria-label="Primary navigation"
+          aria-label={t("nav.controlPlane")}
           onClick={(event) => {
             if (event.target === event.currentTarget) setMobileOpen(false);
           }}
@@ -80,16 +85,16 @@ export default function AppShell(props: ParentProps) {
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label="Close navigation"
+                aria-label={t("nav.close")}
                 onClick={() => setMobileOpen(false)}
               >
-                Close
+                {t("nav.close")}
               </Button>
             </div>
             <NavigationLinks items={navigation()} onNavigate={() => setMobileOpen(false)} />
             <AccountSummary
               displayName={
-                session()?.user.display_name || session()?.user.username || "Unknown user"
+                session()?.user.display_name || session()?.user.username || t("nav.unknownUser")
               }
               role={session()?.user.role || "viewer"}
               onSignOut={() => void auth.signOut().catch(() => auth.refresh())}
@@ -105,13 +110,13 @@ export default function AppShell(props: ParentProps) {
                   class="md:hidden"
                   variant="ghost"
                   size="sm"
-                  aria-label="Open navigation"
+                  aria-label={t("nav.open")}
                   onClick={() => setMobileOpen(true)}
                 >
-                  Menu
+                  {t("nav.open")}
                 </Button>
                 <div class="min-w-0">
-                  <p class="text-xs font-medium text-muted-foreground">DNS control plane</p>
+                  <p class="text-xs font-medium text-muted-foreground">{t("nav.controlPlane")}</p>
                   <h1 class="truncate text-base font-semibold text-foreground">{pageTitle()}</h1>
                 </div>
               </div>
@@ -119,14 +124,7 @@ export default function AppShell(props: ParentProps) {
                 <span class="hidden max-w-48 truncate text-sm text-muted-foreground sm:block">
                   {session()?.user.display_name || session()?.user.username}
                 </span>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  aria-label={`Switch to ${theme.theme() === "light" ? "dark" : "light"} theme`}
-                  onClick={theme.toggle}
-                >
-                  {theme.theme() === "light" ? "Dark theme" : "Light theme"}
-                </Button>
+                <AppearanceControls />
               </div>
             </div>
           </header>
@@ -139,11 +137,12 @@ export default function AppShell(props: ParentProps) {
 }
 
 function NavigationLinks(props: {
-  items: readonly { href: string; label: string; end: boolean }[];
+  items: readonly { href: string; key: string; end: boolean }[];
   onNavigate?: () => void;
 }) {
+  const { t } = useI18n();
   return (
-    <nav aria-label="Primary navigation" class="mt-8 space-y-1">
+    <nav aria-label={t("nav.controlPlane")} class="mt-8 space-y-1">
       <For each={props.items}>
         {(item) => (
           <A
@@ -154,7 +153,7 @@ function NavigationLinks(props: {
             inactiveClass="border-transparent text-sidebar-foreground hover:bg-muted hover:text-foreground"
             onClick={props.onNavigate}
           >
-            {item.label}
+            {t(item.key)}
           </A>
         )}
       </For>
@@ -163,16 +162,17 @@ function NavigationLinks(props: {
 }
 
 function AccountSummary(props: { displayName: string; role: string; onSignOut: () => void }) {
+  const { t } = useI18n();
   return (
     <div class="mt-auto border-t border-sidebar-border pt-4 text-xs leading-5">
       <p class="truncate font-semibold text-foreground">{props.displayName}</p>
-      <p class="text-muted-foreground capitalize">{props.role}</p>
+      <p class="text-muted-foreground">{t(`role.${props.role}`)}</p>
       <button
         class="mt-2 font-semibold text-primary hover:text-primary-hover hover:underline"
         type="button"
         onClick={() => props.onSignOut()}
       >
-        Sign out
+        {t("auth.signOut")}
       </button>
     </div>
   );

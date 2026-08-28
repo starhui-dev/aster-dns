@@ -29,6 +29,12 @@ type BootstrapVerifyInput struct {
 	CeremonyToken  string
 	Credential     json.RawMessage
 }
+type BootstrapPasswordInput struct {
+	BootstrapToken string
+	Username       string
+	DisplayName    string
+	Password       string
+}
 
 type bootstrapPayload struct {
 	UserID             uuid.UUID `json:"user_id"`
@@ -190,6 +196,82 @@ func (s *Service) FinishBootstrap(ctx context.Context, input BootstrapVerifyInpu
 			return eventErr
 		}
 		event.AfterData = map[string]any{"username": user.Username, "role": user.Role}
+		return store.InsertAuditEvent(ctx, event)
+	})
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	return issued, nil
+}
+
+func (s *Service) BootstrapWithPassword(ctx context.Context, input BootstrapPasswordInput, metadata RequestMetadata) (IssuedSession, error) {
+	if !s.allowPublicAuth("bootstrap_password", metadata) {
+		return IssuedSession{}, ErrRateLimited
+	}
+	if !s.config.PasswordLoginEnabled {
+		return IssuedSession{}, ErrPasswordLoginDisabled
+	}
+	if !s.validBootstrapToken(input.BootstrapToken) {
+		return IssuedSession{}, s.bootstrapFailure(ctx, metadata, "invalid_bootstrap_token")
+	}
+	count, err := s.store.CountUsers(ctx)
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	if count != 0 {
+		return IssuedSession{}, ErrBootstrapUnavailable
+	}
+	username, err := validateUsername(normalizeUsername(input.Username))
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	displayName, err := validateDisplayName(input.DisplayName)
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	passwordHash, err := s.passwords.Hash(input.Password)
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	userID, err := newUUID()
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	handle, err := NewUserHandle()
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	now := s.now()
+	user := User{
+		ID: userID, WebAuthnUserHandle: handle, Username: username, DisplayName: displayName,
+		Role: RoleAdmin, PasswordHash: passwordHash, PasswordEnabled: true, CreatedAt: now, UpdatedAt: now,
+	}
+	issued, err := s.newSession(user, AuthMethodPassword, metadata)
+	if err != nil {
+		return IssuedSession{}, err
+	}
+	err = s.store.WithinTx(ctx, func(store Store) error {
+		count, countErr := store.CountUsers(ctx)
+		if countErr != nil {
+			return countErr
+		}
+		if count != 0 {
+			return ErrBootstrapUnavailable
+		}
+		if insertErr := store.InsertUser(ctx, user); insertErr != nil {
+			return insertErr
+		}
+		if insertErr := store.InsertSession(ctx, issued.Session); insertErr != nil {
+			return insertErr
+		}
+		event, eventErr := newAuditEvent(metadata, &user, "auth.bootstrap.completed", "user", user.ID.String(), audit.ResultSucceeded, "")
+		if eventErr != nil {
+			return eventErr
+		}
+		event.AfterData = map[string]any{
+			"username": user.Username, "role": user.Role, "auth_method": AuthMethodPassword,
+			"password_enabled": user.PasswordEnabled,
+		}
 		return store.InsertAuditEvent(ctx, event)
 	})
 	if err != nil {

@@ -54,10 +54,10 @@ During key rotation, write the new key as `APP_MASTER_KEY`, increment `APP_MASTE
 
 2. Inject it as `APP_BOOTSTRAP_TOKEN` only for the initial empty database startup.
 3. Start the migrated application and open the configured `APP_PUBLIC_URL` in a browser.
-4. Complete the first-administrator Passkey registration ceremony. The username, display name, and Passkey name are submitted through the bootstrap page; the server verifies the token and WebAuthn ceremony and commits the first admin atomically.
+4. Choose password or Passkey on the bootstrap page. Password bootstrap submits username, display name, and a new password; Passkey bootstrap submits username, display name, and Passkey name. The server verifies the token and commits the first admin, initial authentication method, session, and audit event atomically.
 5. Remove `APP_BOOTSTRAP_TOKEN` from the secret manager, shell, Compose environment, and deployment manifest. Restart the application.
 
-The bootstrap endpoint is unavailable once a user exists. A missing bootstrap token on an empty database intentionally prevents startup, rather than creating a weak default administrator. There is no default administrator password. Password fallback is disabled unless `APP_PASSWORD_LOGIN_ENABLED=true` is deliberately configured.
+The bootstrap endpoint is unavailable once a user exists. A missing bootstrap token on an empty database intentionally prevents startup, rather than creating a weak fallback or default administrator password. Password login is enabled by default and can be disabled with `APP_PASSWORD_LOGIN_ENABLED=false`.
 
 ## 5. Deployment and migration
 

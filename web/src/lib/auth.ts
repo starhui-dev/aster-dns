@@ -109,6 +109,18 @@ export async function bootstrapAdmin(input: {
   });
 }
 
+export function bootstrapAdminWithPassword(input: {
+  bootstrap_token: string;
+  username: string;
+  display_name: string;
+  password: string;
+}): Promise<LoginResponse> {
+  return apiRequest<LoginResponse>("/auth/bootstrap/password", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function enrollPasskey(input: {
   enrollment_token: string;
   passkey_name: string;

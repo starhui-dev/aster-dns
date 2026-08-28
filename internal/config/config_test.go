@@ -22,8 +22,8 @@ func TestLoadDevelopmentDefaults(t *testing.T) {
 	if cfg.PublicURL.String() != "http://localhost:8080" {
 		t.Fatalf("public URL = %q", cfg.PublicURL)
 	}
-	if cfg.Auth.PasswordLoginEnabled {
-		t.Fatal("password fallback is enabled by default")
+	if !cfg.Auth.PasswordLoginEnabled {
+		t.Fatal("password login should be enabled by default")
 	}
 	if cfg.Auth.SessionIdleTTL >= cfg.Auth.SessionAbsoluteTTL {
 		t.Fatal("session absolute TTL must exceed idle TTL")

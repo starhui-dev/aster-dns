@@ -1,5 +1,6 @@
 import { Match, Switch, type ParentProps } from "solid-js";
 
+import { useI18n } from "./i18n";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/ui/Button";
 import { Alert } from "../components/ui/Layout";
@@ -9,6 +10,7 @@ import { useAuth } from "./AuthContext";
 
 export default function AuthGate(props: ParentProps) {
   const auth = useAuth();
+  const { t } = useI18n();
   const errorState = () => {
     const state = auth.state();
     return state.kind === "error" ? state : undefined;
@@ -22,28 +24,30 @@ export default function AuthGate(props: ParentProps) {
     <Switch>
       <Match when={auth.state().kind === "loading"}>
         <AuthLayout
-          eyebrow="Security"
-          title="Loading authentication"
-          description="Establishing the server-side session and checking bootstrap state."
+          eyebrow={t("auth.loading.title")}
+          title={t("auth.loading.title")}
+          description={t("auth.loading.description")}
         >
-          <Alert>Loading authentication…</Alert>
+          <Alert>{t("auth.loading.message")}</Alert>
         </AuthLayout>
       </Match>
       <Match when={errorState()}>
         {(state) => (
           <AuthLayout
-            eyebrow="Security"
-            title="Authentication unavailable"
-            description="The console could not establish authentication state with the server."
+            eyebrow={t("auth.unavailable.title")}
+            title={t("auth.unavailable.title")}
+            description={t("auth.unavailable.description")}
           >
-            <Alert variant="danger" title="Connection failed">
+            <Alert variant="danger" title={t("auth.connectionFailed")}>
               <p>{state().message}</p>
               {state().requestId !== null && (
-                <p class="mt-2 font-mono text-xs">Request ID: {state().requestId}</p>
+                <p class="mt-2 font-mono text-xs">
+                  {t("auth.requestId")}: {state().requestId}
+                </p>
               )}
             </Alert>
             <Button class="mt-5" variant="primary" onClick={() => void auth.refresh()}>
-              Retry
+              {t("auth.retry")}
             </Button>
           </AuthLayout>
         )}

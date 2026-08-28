@@ -103,6 +103,27 @@ paths:
       responses:
         '201': { $ref: '#/components/responses/Login' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/bootstrap/password:
+    post:
+      tags: [Authentication]
+      summary: Create the first administrator with a password
+      operationId: bootstrapPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [bootstrap_token, username, display_name, password]
+              properties:
+                bootstrap_token: { type: string, writeOnly: true }
+                username: { type: string }
+                display_name: { type: string }
+                password: { type: string, format: password, writeOnly: true }
+      responses:
+        '201': { $ref: '#/components/responses/Login' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/auth/passkeys/login/options:
     post:
       tags: [Authentication]

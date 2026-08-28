@@ -22,7 +22,26 @@ type apiAuthStore struct {
 	auth.Store
 	authenticated auth.AuthenticatedSession
 	users         []auth.User
+	sessions      []auth.Session
 	audits        []audit.Event
+}
+
+func (s *apiAuthStore) WithinTx(ctx context.Context, operation func(auth.Store) error) error {
+	return operation(s)
+}
+
+func (s *apiAuthStore) CountUsers(context.Context) (int, error) {
+	return len(s.users), nil
+}
+
+func (s *apiAuthStore) InsertUser(_ context.Context, user auth.User) error {
+	s.users = append(s.users, user)
+	return nil
+}
+
+func (s *apiAuthStore) InsertSession(_ context.Context, session auth.Session) error {
+	s.sessions = append(s.sessions, session)
+	return nil
 }
 
 func (s *apiAuthStore) GetSessionByTokenHash(context.Context, []byte) (auth.AuthenticatedSession, error) {
@@ -136,6 +155,60 @@ func TestAuthAPILogAuditAndResponseDoNotLeakCanarySecrets(t *testing.T) {
 		if strings.Contains(value, canary) {
 			t.Fatalf("%s leaked canary: %s", surface, value)
 		}
+	}
+}
+
+func TestAuthAPIPasswordBootstrapCreatesSession(t *testing.T) {
+	store := &apiAuthStore{}
+	publicURL, _ := url.Parse("https://dns.example.test")
+	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x62}, secretcrypto.MasterKeySize))
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+	bootstrapToken, bootstrapHash, err := auth.NewOpaqueToken()
+	if err != nil {
+		t.Fatalf("new bootstrap token: %v", err)
+	}
+	service, err := auth.NewService(store, envelope, auth.Config{
+		PublicURL:              publicURL,
+		BootstrapTokenHash:     bootstrapHash,
+		PasswordLoginEnabled:   true,
+		SessionIdleTTL:         30 * time.Minute,
+		SessionAbsoluteTTL:     24 * time.Hour,
+		SessionRefreshInterval: time.Minute,
+		ChallengeTTL:           5 * time.Minute,
+		EnrollmentTTL:          24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("new auth service: %v", err)
+	}
+	router, _ := newAuthTestRouter(service)
+	body, _ := json.Marshal(map[string]string{
+		"bootstrap_token": bootstrapToken,
+		"username":        "admin",
+		"display_name":    "Administrator",
+		"password":        "correct horse battery staple",
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/bootstrap/password", bytes.NewReader(body))
+	request.Host = "dns.example.test"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", service.Origin())
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.users) != 1 || !store.users[0].PasswordEnabled || len(store.sessions) != 1 {
+		t.Fatalf("bootstrap state: users=%+v sessions=%d", store.users, len(store.sessions))
+	}
+	if store.sessions[0].AuthMethod != auth.AuthMethodPassword {
+		t.Fatalf("session auth method = %q", store.sessions[0].AuthMethod)
+	}
+	if strings.Contains(response.Body.String(), bootstrapToken) || strings.Contains(response.Body.String(), "correct horse battery staple") {
+		t.Fatalf("bootstrap response leaked secret: %s", response.Body.String())
+	}
+	if cookies := response.Header().Values("Set-Cookie"); len(cookies) < 2 {
+		t.Fatalf("bootstrap cookies = %v", cookies)
 	}
 }
 
