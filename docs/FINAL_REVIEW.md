@@ -1,13 +1,13 @@
 # 发布前全仓库审查
 
-审查日期：2026-08-27
+审查日期：2026-08-28
 
 ## 结论
 
 本轮按架构、认证与授权、凭据加密、四家 Provider、API/缓存/并发、前端、数据库/审计、CI/容器共 11 个区域并行收集证据，再由主审合并和修复。
 
 - P0：0 项。
-- P1：12 组，已修复并加入回归覆盖。
+- P1：13 组，已修复并加入回归覆盖。
 - P2：8 组，已修复。
 - P3：仅发现不影响发布的样式或测试组织问题，未作为安全问题扩大处理。
 - 未发现已保存 Provider secret 通过 GET API、前端持久化、日志或 audit 返回的路径。
@@ -15,7 +15,7 @@
 - 未发现 cookie-authenticated mutation 绕过现有 CSRF 校验的路径。
 - 未发现 Provider 原始错误正文直接返回浏览器的路径。
 
-结论限于本地代码、fixture/transport mock、隔离 PostgreSQL 和容器运行验证。由于没有专用真实 Provider 凭据与测试 Zone，本轮没有执行真实云厂商 mutation。
+结论限于本地代码、fixture/transport mock、隔离 PostgreSQL、容器运行验证，以及本轮已完成的 Alibaba Cloud、Tencent Cloud DNSPod adapter 真实 read/mutation、Huawei Cloud KooCLI 真实 DNS CRUD 和 Cloudflare scoped API Token adapter 真实 read/mutation。Huawei Go adapter 的真实只读 integration 已于 2026-08-26 在专用测试 Zone 通过；本轮未使用 KooCLI 加密 profile 重复 Go adapter 测试，Huawei Go adapter 的真实 mutation 仍未验证。各 Provider 的真实外部证据仍仅覆盖专用测试 Zone 与已执行的 TXT CRUD，不扩大为全部记录类型或生产环境验证。
 
 ## 已修复发现
 
@@ -35,6 +35,7 @@
 | P1-10 | 绝对记录名因 `absolute` 分支直接通过，即使不属于目标 Zone。 | `CanonicalizeRecordName` 仅接受 apex 或目标 Zone 子域；其他 absolute name 返回 validation error。domain tests 覆盖跨 Zone 输入。 |
 | P1-11 | Records UI 只读取第一页 200 条记录，会静默隐藏后续 RRSet；Dashboard 也把当前页长度显示成 Zone 总数。 | Records 按 API cursor 拉取全部页并保持 freshness；Dashboard 使用响应 `total`。相关前端测试与 typecheck/build 通过。 |
 | P1-12 | `/accounts/:accountId` 路由忽略参数，管理员从 Dashboard 进入时可能编辑错误账号；`/users` 仅依赖导航隐藏，没有页面级角色门。 | 详情路由显式传入 account ID，定位对应卡片且仅 admin 打开编辑器；Users 页面增加 admin route guard。`App.test.tsx` 和真实 Chromium smoke 验证 Huawei 详情路由打开 Huawei 编辑器。 |
+| P1-13 | Cloudflare 真实 API 返回 TXT 的 quoted character-string，且 mutation 后 `result_info.total_count` 可短暂落后于实际结果，导致 create 最终校验失败并留下已创建记录。 | TXT read path 使用通用 DNS character-string 规范化；存在 `total_pages` 时以其进行分页遍历并将 `total_count` 视为 advisory；新增 TXT 与 stale pagination 回归测试，专用 Zone 真实 create/update/delete 复验通过。 |
 
 ### P2
 
@@ -57,7 +58,7 @@
 - Provider core/Huawei：修复跨 Zone opaque identity、final-state、pagination、absolute name 问题。
 - Alibaba：修复 multi-entry final verification 与 TXT mapping。
 - Tencent：修复 multi-entry final verification、默认 NS 保护、delete verification 与 timeout taxonomy。
-- Cloudflare：修复 CAA/SRV typed data、DNS escape 和 rate-limit backoff。
+- Cloudflare：修复 CAA/SRV typed data、DNS character-string/TXT normalization、rate-limit backoff 和 mutation 后分页元数据的短暂不一致处理。
 - API/error/cache/concurrency：修复 delete receipt、upstream auth status、zone tombstone/cache invalidation、ZoneSync successful-sync cache invalidation、account mutation serialization。
 - Frontend：修复分页、route guard/detail route、secret state 和高影响确认；未发现 secret 持久化。
 - DB/migrations/audit：新增 version 5 migration；clean/incremental/idempotent 和 deleted-reference 测试通过。
@@ -88,9 +89,20 @@
    - 访问 `/accounts/01900000-0000-7000-8000-000000000102`。
    - 页面实际显示 `Edit Huawei production`，Account name 为 `Huawei production`；dialog、表单 label 和按钮可由 accessibility tree 识别。
 
+## 2026-08-28 修复后复验
+
+- `make backend-format-check backend-lint backend-test`：通过；gofmt、go vet、全部 Go unit/service/API tests 通过。
+- `go test -count=1 ./internal/provider/...`：四家 adapter fixture/conformance 通过。
+- Cloudflare 专用 Zone `kanami.skin`：`TestCloudflareIntegrationReadOnly` 通过（3.72s）；`TestCloudflareIntegrationMutation` 通过（4.76s），随机 TXT create/update/delete cleanup 完成。
+- 安全测试与 selected race：通过；`go test -count=1 ./internal/auth ./internal/api ./internal/audit ./internal/crypto ./internal/httpx` 以及 `go test -race ./internal/provider/... ./internal/service ./internal/api ./internal/auth ./internal/audit ./internal/httpx` 均通过。
+- 前端 format/lint/typecheck/tests/build：通过；4 个 Vitest 文件、13 个 tests，Vite 转换 67 modules。
+- `make backend-build` 与 `docker build --tag aster-dns:release-candidate --build-arg VERSION=release-candidate --build-arg COMMIT=local .`：通过；镜像 `nonroot:nonroot`。
+- 全新 PostgreSQL 18 migration：通过；production image `migrate up` 报告 migrations current。隔离 runtime 中 `/healthz`、`/readyz`、`/` 分别返回 200，响应为 `{"status":"ok"}`、`{"status":"ready"}`、681-byte SPA；SIGTERM 记录 `server shutdown started` 与 `server shutdown complete`。
+- production image export 仅包含 `/app/server`、`/app/web` 与 distroless 基础文件；未发现 `.env`、secret directory、test fixture 或 build-cache 路径。Cloudflare 专用 Zone 最终 `aster-dns-*` 记录数为 0。
+
 ## 仍存限制与发布条件
 
-1. 四家 Provider 的 adapter 单元/contract 测试均使用 fake HTTP/SDK transport。本轮没有专用真实账号，因此不能声称真实 mutation 已验证。发布前仍需按显式环境开关，在专用测试 Zone 验证 A/AAAA/CNAME/TXT/MX CRUD；不得对生产 Zone 运行。
+1. 四家 Provider 的 adapter 单元/contract 测试均使用 fake HTTP/SDK transport；Huawei Go adapter 真实只读 integration 已有 2026-08-26 专用测试 Zone 证据，本轮另通过官方 KooCLI 完成真实 DNS CRUD，但因 KooCLI profile 加密保存，未在本轮重复运行 Huawei Go adapter；Alibaba Cloud、Tencent Cloud DNSPod 和 Cloudflare adapter 均完成专用测试 Zone 的真实 read 及随机 TXT RRSet create/update/delete cleanup。不得把 Huawei CLI 证据扩大为 Go adapter mutation 证据，也不得把单类型 mutation 证据扩大为全部记录类型或生产 Zone 验证。
 2. Aliyun、Tencent 等没有官方 per-mutation ETag 的路径采用 re-fetch-and-compare，并在单进程内按 Provider account 串行 mutation。这能阻止本实例并发覆盖，但不能消除厂商控制台或另一个应用实例在“检查后、写入前”的 TOCTOU 窗口。当前部署必须保持一个 application replica；多副本前需要数据库 advisory lock 或等价跨进程锁。
 3. Provider mutation 超时表示最终状态未知，不表示 Provider 一定没有执行。UI/调用方必须按返回的 request ID 重新拉取 Provider 状态，不得自动重试 create。
 4. WebAuthn RP ID/origin 由 production `APP_PUBLIC_URL` 约束且配置测试通过；本轮 Chromium smoke 使用 mocked authenticated API，没有执行真实硬件/平台 authenticator ceremony。

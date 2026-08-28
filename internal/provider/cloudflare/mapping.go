@@ -236,7 +236,11 @@ func parseRecordResponse(recordType core.RecordType, source dns.RecordResponse) 
 
 func parseRecordContent(recordType core.RecordType, content string, priority float64) (core.RecordEntry, error) {
 	if recordType == core.RecordTypeTXT {
-		return core.RecordEntry{Value: content}, nil
+		value, err := parseDNSCharacterString(content)
+		if err != nil {
+			return core.RecordEntry{}, fmt.Errorf("Cloudflare TXT value: %w", err)
+		}
+		return core.RecordEntry{Value: value}, nil
 	}
 	content = strings.TrimSpace(content)
 	switch recordType {

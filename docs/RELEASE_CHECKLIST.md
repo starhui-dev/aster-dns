@@ -37,11 +37,11 @@ This checklist records only checks run for the current release candidate. A pass
 
 ## Provider validation status
 
-- [ ] Huawei read-only integration: run only with dedicated credentials and `HUAWEI_DNS_TEST_ZONE_ID`.
-- [ ] Alibaba read-only integration: run only with dedicated credentials and `ALIYUN_DNS_TEST_ZONE_ID`.
-- [ ] Tencent DNSPod read-only integration: run only with dedicated credentials and `TENCENT_DNS_TEST_ZONE_ID`.
-- [ ] Cloudflare read-only integration: run only with dedicated credentials and `CLOUDFLARE_DNS_TEST_ZONE_ID`.
-- [ ] Mutation integration: run only with `DNS_INTEGRATION_MUTATE=1` and an explicitly dedicated test Zone. Never infer this result from fixtures.
+- [x] Huawei Go adapter read-only integration: passed on 2026-08-26 against the dedicated `aster-dns.test.` Zone; the current revalidation did not repeat it because the KooCLI profile is encrypted. Huawei Go adapter mutation remains separately unverified.
+- [x] Alibaba read-only integration: dedicated `aster-dns.tt` validation completed; exact command and evidence are in `docs/TEST_MATRIX.md`.
+- [x] Tencent DNSPod read-only integration: dedicated `xinghui926.cn` validation completed; exact command and evidence are in `docs/TEST_MATRIX.md`.
+- [x] Cloudflare read-only integration: dedicated `kanami.skin` validation completed with `CLOUDFLARE_DNS_TEST_ZONE_ID` and a scoped API Token; exact command and evidence are in `docs/TEST_MATRIX.md`.
+- [x] Mutation integration: Alibaba, Tencent DNSPod, and Cloudflare completed TXT RRSet create/update/delete against explicitly dedicated test Zones with `DNS_INTEGRATION_MUTATE=1`; Huawei Go adapter mutation remains unverified. Never infer this result from fixtures.
 
 ## Backup and restore
 

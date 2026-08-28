@@ -372,7 +372,9 @@ func cloudflarePageHasMore(document string, pageNumber, totalLoaded, pageCount, 
 		if info.Page > 0 && info.Page != pageNumber {
 			return false, errors.New("Cloudflare pagination returned a non-advancing page number")
 		}
-		if info.TotalCount > 0 && totalLoaded > info.TotalCount {
+		// Cloudflare can briefly return a stale total_count immediately after a mutation.
+		// When total_pages is present, use it for traversal and treat total_count as advisory.
+		if info.TotalPages == 0 && info.TotalCount > 0 && totalLoaded > info.TotalCount {
 			return false, errors.New("Cloudflare pagination exceeded its total count")
 		}
 		if info.TotalPages > 0 {
@@ -382,9 +384,6 @@ func cloudflarePageHasMore(document string, pageNumber, totalLoaded, pageCount, 
 			hasMore := pageNumber < info.TotalPages
 			if hasMore && pageCount == 0 {
 				return false, errors.New("Cloudflare pagination returned an empty non-final page")
-			}
-			if !hasMore && info.TotalCount > 0 && totalLoaded < info.TotalCount {
-				return false, errors.New("Cloudflare pagination ended before its total count")
 			}
 			return hasMore, nil
 		}

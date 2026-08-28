@@ -628,6 +628,40 @@ func TestRateLimitHeadersAndErrorMapping(t *testing.T) {
 		t.Fatalf("rate limit mapping = %#v", providerError)
 	}
 }
+func TestTXTMappingNormalizesCloudflareCharacterString(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "quoted", input: `"aster-dns integration create"`, want: "aster-dns integration create"},
+		{name: "segmented", input: `"segment-one" "segment-two"`, want: "segment-onesegment-two"},
+		{name: "unquoted boundary spaces", input: " leading and trailing ", want: " leading and trailing "},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entry, err := parseRecordContent(core.RecordTypeTXT, test.input, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if entry.Value != test.want {
+				t.Fatalf("TXT value = %q, want %q", entry.Value, test.want)
+			}
+		})
+	}
+}
+func TestCloudflarePaginationUsesTotalPagesWhenTotalCountIsStale(t *testing.T) {
+	t.Parallel()
+	document := `{"result_info":{"page":1,"total_count":4,"total_pages":1}}`
+	hasMore, err := cloudflarePageHasMore(document, 1, 5, 5, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasMore {
+		t.Fatal("stale total_count incorrectly requested another page")
+	}
+}
 func TestStructuredCAAAndSRVDataRoundTrip(t *testing.T) {
 	t.Parallel()
 	caa, err := parseRecordResponse(core.RecordTypeCAA, dns.RecordResponse{Data: dns.CAARecordData{Flags: 128, Tag: "issue", Value: "ca.example"}})
