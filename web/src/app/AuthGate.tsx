@@ -1,4 +1,5 @@
 import { Match, Switch, type ParentProps } from "solid-js";
+import { RefreshCw } from "lucide-solid";
 
 import { useI18n } from "./i18n";
 import { AuthLayout } from "../components/AuthLayout";
@@ -51,7 +52,12 @@ export default function AuthGate(props: ParentProps) {
                 </p>
               )}
             </Alert>
-            <Button class="mt-5" variant="primary" onClick={() => void auth.refresh()}>
+            <Button
+              class="mt-5"
+              variant="primary"
+              icon={RefreshCw}
+              onClick={() => void auth.refresh()}
+            >
               {t("auth.retry")}
             </Button>
           </AuthLayout>

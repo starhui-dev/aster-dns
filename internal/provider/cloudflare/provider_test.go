@@ -776,6 +776,13 @@ func TestContextCancellationAndMutationNoRetry(t *testing.T) {
 	})
 }
 
+func TestFactoryMetadataIncludesLocalizedNames(t *testing.T) {
+	metadata := NewFactory().Metadata()
+	if metadata.DisplayName != "Cloudflare DNS" || metadata.DisplayNames["zh-CN"] != "Cloudflare DNS" || metadata.DisplayNames["ja"] != "Cloudflare DNS" {
+		t.Fatalf("factory metadata = %#v", metadata)
+	}
+}
+
 func TestCloudflareConformance(t *testing.T) {
 	fixture := newCloudflareFixture(t)
 	factory := &Factory{baseURL: fixture.server.URL, httpClient: fixture.server.Client(), timeout: 2 * time.Second}

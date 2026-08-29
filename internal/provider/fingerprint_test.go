@@ -12,7 +12,11 @@ func TestCanonicalRecordSetSerializationGolden(t *testing.T) {
 		Entries:         []RecordEntry{{ID: "entry-2", Value: "192.0.2.10"}, {ID: "entry-1", Value: "192.0.2.1"}},
 		ProviderVersion: "rev-7",
 	}
-	serialized, err := CanonicalRecordSetSerialization(input)
+	normalized, err := normalizeRecordSet("", input, false)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	serialized, err := serializeNormalizedRecordSet(normalized)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}

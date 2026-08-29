@@ -99,9 +99,10 @@ type Capabilities struct {
 }
 
 type ProviderMetadata struct {
-	Type             ProviderType `json:"type"`
-	DisplayName      string       `json:"display_name"`
-	DocumentationURL string       `json:"documentation_url,omitempty"`
+	Type             ProviderType      `json:"type"`
+	DisplayName      string            `json:"display_name"`
+	DisplayNames     map[string]string `json:"display_names,omitempty"`
+	DocumentationURL string            `json:"documentation_url,omitempty"`
 }
 
 type ProviderDefinition struct {

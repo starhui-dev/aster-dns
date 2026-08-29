@@ -400,8 +400,9 @@ func stringField(payload map[string]any, key string) string {
 
 func TestFactoryMetadataAndCapabilities(t *testing.T) {
 	factory := NewFactory()
-	if factory.Type() != Type || factory.Metadata().DisplayName != "Tencent Cloud DNSPod" {
-		t.Fatalf("factory metadata = %#v", factory.Metadata())
+	metadata := factory.Metadata()
+	if factory.Type() != Type || metadata.DisplayName != "Tencent Cloud DNSPod" || metadata.DisplayNames["zh-CN"] != "腾讯云 DNSPod" || metadata.DisplayNames["ja"] != "Tencent Cloud DNSPod" {
+		t.Fatalf("factory metadata = %#v", metadata)
 	}
 	if err := factory.CredentialDescriptor().Validate(); err != nil {
 		t.Fatalf("credential descriptor: %v", err)

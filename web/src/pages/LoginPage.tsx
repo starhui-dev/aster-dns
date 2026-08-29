@@ -1,3 +1,4 @@
+import { KeyRound, LogIn, RotateCcw, ShieldCheck } from "lucide-solid";
 import { browserSupportsWebAuthn } from "@simplewebauthn/browser";
 import { Show, createSignal } from "solid-js";
 
@@ -5,7 +6,7 @@ import { useAuth } from "../app/AuthContext";
 import { useI18n } from "../app/i18n";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/ui/Button";
-import { Alert, Field, Panel } from "../components/ui/Layout";
+import { Alert, Field } from "../components/ui/Layout";
 import { ApiError, apiErrorMessage } from "../lib/api";
 import {
   completeTOTPLogin,
@@ -74,87 +75,88 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
       eyebrow={t("auth.login.eyebrow")}
       title={t("auth.login.title")}
       description={t("auth.login.description")}
-      wide
     >
       <Show when={totpToken() === null} fallback={<TOTPForm />}>
-        <Button
-          class="w-full"
-          variant="primary"
-          disabled={busy() || !browserSupportsWebAuthn()}
-          onClick={() => void run(loginWithPasskey)}
-        >
-          {busy() ? t("auth.creating") : t("auth.continuePasskey")}
-        </Button>
-        {!browserSupportsWebAuthn() && (
-          <Alert class="mt-3" variant="warning">
-            {t("auth.webAuthnUnsupported")}
-          </Alert>
-        )}
+        <div class="space-y-5">
+          <Button
+            class="auth-login-primary-button w-full"
+            variant="primary"
+            icon={KeyRound}
+            disabled={busy() || !browserSupportsWebAuthn()}
+            onClick={() => void run(loginWithPasskey)}
+          >
+            {busy() ? t("auth.creating") : t("auth.continuePasskey")}
+          </Button>
+          {!browserSupportsWebAuthn() && (
+            <Alert variant="warning">{t("auth.webAuthnUnsupported")}</Alert>
+          )}
 
-        <Show when={props.status.password_login_enabled}>
-          <div class="my-6 flex items-center gap-3 text-xs font-semibold text-muted-foreground">
-            <span class="h-px flex-1 bg-border" />
-            {t("auth.passwordFallback")}
-            <span class="h-px flex-1 bg-border" />
-          </div>
-          <form class="space-y-4" onSubmit={submitPassword}>
-            <Field label={t("auth.username")} for="login-username">
-              <input
-                id="login-username"
-                class="text-input"
-                autocomplete="username webauthn"
-                required
-                value={username()}
-                onInput={(event) => setUsername(event.currentTarget.value)}
-              />
-            </Field>
-            <Field label={t("auth.password")} for="login-password">
-              <input
-                id="login-password"
-                class="text-input"
-                type="password"
-                autocomplete="current-password"
-                required
-                value={password()}
-                onInput={(event) => setPassword(event.currentTarget.value)}
-              />
-            </Field>
-            <Button class="w-full" type="submit" disabled={busy()}>
-              {t("auth.passwordLogin")}
-            </Button>
-          </form>
-        </Show>
+          <Show when={props.status.password_login_enabled}>
+            <div class="auth-login-divider" role="separator">
+              <span>{t("auth.passwordFallback")}</span>
+            </div>
+            <form class="space-y-4" onSubmit={submitPassword}>
+              <Field label={t("auth.username")} for="login-username">
+                <input
+                  id="login-username"
+                  class="text-input auth-login-input"
+                  autocomplete="username webauthn"
+                  required
+                  value={username()}
+                  onInput={(event) => setUsername(event.currentTarget.value)}
+                />
+              </Field>
+              <Field label={t("auth.password")} for="login-password">
+                <input
+                  id="login-password"
+                  class="text-input auth-login-input"
+                  type="password"
+                  autocomplete="current-password"
+                  required
+                  value={password()}
+                  onInput={(event) => setPassword(event.currentTarget.value)}
+                />
+              </Field>
+              <Button
+                class="auth-login-password-button w-full"
+                type="submit"
+                icon={LogIn}
+                disabled={busy()}
+              >
+                {t("auth.passwordLogin")}
+              </Button>
+            </form>
+          </Show>
 
-        <details class="mt-6 rounded-lg border border-border bg-surface-subtle p-4">
-          <summary class="cursor-pointer text-sm font-semibold text-foreground">
-            {t("auth.enrollment")}
-          </summary>
-          <form class="mt-4 space-y-4" onSubmit={submitEnrollment}>
-            <Field label={t("auth.enrollmentToken")} for="enrollment-token">
-              <input
-                id="enrollment-token"
-                class="text-input"
-                type="password"
-                autocomplete="off"
-                required
-                value={enrollmentToken()}
-                onInput={(event) => setEnrollmentToken(event.currentTarget.value)}
-              />
-            </Field>
-            <Field label={t("auth.passkeyName")} for="enrollment-passkey-name">
-              <input
-                id="enrollment-passkey-name"
-                class="text-input"
-                required
-                value={passkeyName()}
-                onInput={(event) => setPasskeyName(event.currentTarget.value)}
-              />
-            </Field>
-            <Button class="w-full" type="submit" disabled={busy()}>
-              {t("auth.registerPasskey")}
-            </Button>
-          </form>
-        </details>
+          <details class="auth-login-enrollment">
+            <summary>{t("auth.enrollment")}</summary>
+            <form class="mt-4 space-y-4" onSubmit={submitEnrollment}>
+              <Field label={t("auth.enrollmentToken")} for="enrollment-token">
+                <input
+                  id="enrollment-token"
+                  class="text-input auth-login-input"
+                  type="password"
+                  autocomplete="off"
+                  required
+                  value={enrollmentToken()}
+                  onInput={(event) => setEnrollmentToken(event.currentTarget.value)}
+                />
+              </Field>
+              <Field label={t("auth.passkeyName")} for="enrollment-passkey-name">
+                <input
+                  id="enrollment-passkey-name"
+                  class="text-input auth-login-input"
+                  required
+                  value={passkeyName()}
+                  onInput={(event) => setPasskeyName(event.currentTarget.value)}
+                />
+              </Field>
+              <Button class="w-full" type="submit" icon={KeyRound} disabled={busy()}>
+                {t("auth.registerPasskey")}
+              </Button>
+            </form>
+          </details>
+        </div>
       </Show>
 
       {error() !== null && (
@@ -167,12 +169,21 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
 
   function TOTPForm() {
     return (
-      <Panel title={t("auth.totp.title")} description={t("auth.totp.description")}>
+      <div class="auth-login-totp space-y-5">
+        <div class="auth-login-step">
+          <span class="auth-login-step-number" aria-hidden="true">
+            2
+          </span>
+          <div>
+            <h2 class="text-base font-semibold text-foreground">{t("auth.totp.title")}</h2>
+            <p class="mt-1 text-sm leading-6 text-muted-foreground">{t("auth.totp.description")}</p>
+          </div>
+        </div>
         <form class="space-y-4" onSubmit={submitTOTP}>
           <Field label={t("auth.totp.code")} for="totp-code">
             <input
               id="totp-code"
-              class="text-input"
+              class="text-input auth-login-input text-center text-lg tracking-[0.35em]"
               inputmode="numeric"
               autocomplete="one-time-code"
               pattern="[0-9]{6}"
@@ -183,10 +194,11 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
             />
           </Field>
           <div class="grid gap-2 sm:grid-cols-2">
-            <Button type="submit" variant="primary" disabled={busy()}>
+            <Button type="submit" variant="primary" icon={ShieldCheck} disabled={busy()}>
               {t("auth.totp.verify")}
             </Button>
             <Button
+              icon={RotateCcw}
               onClick={() => {
                 setTOTPToken(null);
                 setTOTPCode("");
@@ -196,7 +208,7 @@ export default function LoginPage(props: { status: BootstrapStatus }) {
             </Button>
           </div>
         </form>
-      </Panel>
+      </div>
     );
   }
 }

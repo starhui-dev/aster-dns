@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch, createMemo } from "solid-js";
 
 import { Alert, Field } from "./ui/Layout";
+import { SelectField } from "./ui/Select";
 import type {
   DescriptorField,
   ExtensionContainer,
@@ -172,20 +173,21 @@ function DescriptorInput(props: {
               </label>
             </Match>
             <Match when={props.field.type === "enum"}>
-              <select
+              <SelectField
                 id={props.id}
-                class="text-input"
-                aria-describedby={describedBy()}
+                value={typeof props.value === "string" ? props.value : ""}
+                options={[
+                  { value: "", label: "Select…" },
+                  ...(props.field.options ?? []).map((option) => ({
+                    value: option.value,
+                    label: option.label,
+                  })),
+                ]}
+                describedBy={describedBy()}
                 required={props.field.required}
                 disabled={props.disabled}
-                value={typeof props.value === "string" ? props.value : ""}
-                onChange={(event) => props.onChange(event.currentTarget.value || undefined)}
-              >
-                <option value="">Select…</option>
-                <For each={props.field.options ?? []}>
-                  {(option) => <option value={option.value}>{option.label}</option>}
-                </For>
-              </select>
+                onChange={(value) => props.onChange(value || undefined)}
+              />
             </Match>
             <Match when={props.field.type === "string_list"}>
               <textarea

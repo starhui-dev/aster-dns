@@ -46,8 +46,13 @@ func (*Factory) Type() core.ProviderType { return Type }
 
 func (*Factory) Metadata() core.ProviderMetadata {
 	return core.ProviderMetadata{
-		Type:             Type,
-		DisplayName:      "Tencent Cloud DNSPod",
+		Type:        Type,
+		DisplayName: "Tencent Cloud DNSPod",
+		DisplayNames: map[string]string{
+			"zh-CN": "腾讯云 DNSPod",
+			"en":    "Tencent Cloud DNSPod",
+			"ja":    "Tencent Cloud DNSPod",
+		},
 		DocumentationURL: "https://cloud.tencent.com/document/product/1427",
 	}
 }

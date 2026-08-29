@@ -93,7 +93,9 @@ func (s *memoryStore) ListUsers(context.Context) ([]User, error) {
 
 func (s *memoryStore) InsertUser(_ context.Context, user User) error {
 	for _, existing := range s.users {
-		if strings.EqualFold(existing.Username, user.Username) || bytes.Equal(existing.WebAuthnUserHandle, user.WebAuthnUserHandle) {
+		if strings.EqualFold(existing.Username, user.Username) ||
+			bytes.Equal(existing.WebAuthnUserHandle, user.WebAuthnUserHandle) ||
+			(user.Email != "" && existing.Email != "" && strings.EqualFold(existing.Email, user.Email)) {
 			return ErrConflict
 		}
 	}
@@ -112,8 +114,18 @@ func (s *memoryStore) UpdateUser(_ context.Context, id uuid.UUID, expectedUpdate
 	if !user.UpdatedAt.Equal(expectedUpdatedAt) {
 		return User{}, ErrConflict
 	}
+	if changes.Email != nil && *changes.Email != user.Email && *changes.Email != "" {
+		for existingID, existing := range s.users {
+			if existingID != id && existing.Email != "" && strings.EqualFold(existing.Email, *changes.Email) {
+				return User{}, ErrConflict
+			}
+		}
+	}
 	if changes.DisplayName != nil {
 		user.DisplayName = *changes.DisplayName
+	}
+	if changes.Email != nil {
+		user.Email = *changes.Email
 	}
 	if changes.Role != nil {
 		user.Role = *changes.Role

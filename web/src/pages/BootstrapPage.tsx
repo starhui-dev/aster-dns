@@ -1,3 +1,4 @@
+import { KeyRound, LockKeyhole } from "lucide-solid";
 import { Show, createEffect, createSignal } from "solid-js";
 
 import { useAuth } from "../app/AuthContext";
@@ -210,7 +211,13 @@ export default function BootstrapPage(props: { status: BootstrapStatus }) {
           </Show>
 
           {error() !== null && <Alert variant="danger">{error()}</Alert>}
-          <Button class="w-full" type="submit" variant="primary" disabled={submitting()}>
+          <Button
+            class="w-full"
+            type="submit"
+            variant="primary"
+            icon={method() === "passkey" ? KeyRound : LockKeyhole}
+            disabled={submitting()}
+          >
             {submitting()
               ? method() === "passkey"
                 ? t("auth.waitingPasskey")

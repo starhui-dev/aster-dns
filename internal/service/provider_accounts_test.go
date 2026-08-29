@@ -499,7 +499,7 @@ func newProviderServices(t *testing.T, repository ProviderRepository, factory pr
 	if err != nil {
 		t.Fatalf("new registry: %v", err)
 	}
-	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x42}, secretcrypto.MasterKeySize))
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x42}, secretcrypto.MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}

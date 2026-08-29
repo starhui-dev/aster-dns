@@ -1,4 +1,25 @@
 const API_BASE = "/api/v1";
+export interface ApiOverview {
+  name: string;
+  api_version: string;
+  version: string;
+  commit: string;
+  status: string;
+}
+export interface UpdateCheckResult {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  release_url: string;
+}
+
+export function checkForUpdates(): Promise<UpdateCheckResult> {
+  return apiRequest<UpdateCheckResult>("/updates");
+}
+
+export function getApiOverview(): Promise<ApiOverview> {
+  return apiRequest<ApiOverview>("");
+}
 
 interface ErrorEnvelope {
   error?: {

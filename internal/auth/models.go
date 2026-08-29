@@ -30,6 +30,7 @@ type User struct {
 	ID                 uuid.UUID
 	WebAuthnUserHandle []byte
 	Username           string
+	Email              string
 	DisplayName        string
 	Role               Role
 	PasswordHash       string
@@ -148,6 +149,7 @@ type TOTPCredential struct {
 
 type UserChanges struct {
 	DisplayName     *string
+	Email           *string
 	Role            *Role
 	PasswordHash    string
 	SetPasswordHash bool

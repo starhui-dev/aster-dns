@@ -68,6 +68,7 @@ POST   /users/{id}/enrollment-token
 ```
 
 仅 admin。
+用户资料支持可选 `email` 字段；创建与更新接口校验邮箱格式，响应只返回已配置的非空地址。
 
 ## 4. Provider Types
 
@@ -78,7 +79,8 @@ GET /provider-types
 返回：
 
 - type；
-- display_name；
+- display_name（英文 canonical 名称）；
+- display_names（按 `zh-CN`、`en`、`ja` 提供的服务商显示名称）；
 - credential fields descriptor；
 - account options descriptor；
 - general capabilities；

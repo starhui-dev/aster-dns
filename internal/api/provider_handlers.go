@@ -23,6 +23,7 @@ type providerHandler struct {
 type providerTypeResponse struct {
 	Type             provider.ProviderType      `json:"type"`
 	DisplayName      string                     `json:"display_name"`
+	DisplayNames     map[string]string          `json:"display_names"`
 	DocumentationURL string                     `json:"documentation_url,omitempty"`
 	CredentialFields []provider.FieldDescriptor `json:"credential_fields"`
 	AccountOptions   []provider.FieldDescriptor `json:"account_options"`
@@ -71,8 +72,12 @@ func (h providerHandler) listTypes(w http.ResponseWriter, _ *http.Request) {
 	definitions := h.accounts.ProviderDefinitions()
 	response := make([]providerTypeResponse, len(definitions))
 	for index, definition := range definitions {
+		displayNames := definition.Metadata.DisplayNames
+		if len(displayNames) == 0 {
+			displayNames = map[string]string{"en": definition.Metadata.DisplayName}
+		}
 		response[index] = providerTypeResponse{
-			Type: definition.Metadata.Type, DisplayName: definition.Metadata.DisplayName,
+			Type: definition.Metadata.Type, DisplayName: definition.Metadata.DisplayName, DisplayNames: displayNames,
 			DocumentationURL: definition.Metadata.DocumentationURL,
 			CredentialFields: definition.Credentials.Fields, AccountOptions: definition.AccountOptions.Fields,
 			Capabilities: definition.Capabilities,

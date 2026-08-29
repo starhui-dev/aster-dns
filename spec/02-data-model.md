@@ -14,6 +14,7 @@
 - `webauthn_user_handle bytea unique`：32–64 bytes stable random user handle
 - `username text unique not null`
 - `display_name text`
+- `email text not null default ''`：可选联系地址，空字符串表示未配置；不保存头像原始数据
 - `role text not null`
 - `password_hash text null`
 - `password_enabled bool not null default false`

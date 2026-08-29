@@ -1,3 +1,15 @@
+import { Dialog as KobalteDialog } from "@kobalte/core/dialog";
+import {
+  KeyRound,
+  Pencil,
+  Plus,
+  Power,
+  RefreshCw,
+  Save,
+  ShieldCheck,
+  Trash2,
+  X,
+} from "lucide-solid";
 import {
   For,
   Show,
@@ -11,8 +23,15 @@ import {
 
 import { useAuth } from "../app/AuthContext";
 import { useI18n } from "../app/i18n";
+import {
+  ProviderIcon,
+  ProviderIdentity,
+  providerDisplayName,
+} from "../components/ProviderIdentity";
 import { DescriptorFields, type FieldValues } from "../components/ProviderFields";
 import { Button } from "../components/ui/Button";
+import { ModalDialog } from "../components/ui/Dialog";
+import { SelectField } from "../components/ui/Select";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError, apiErrorMessage } from "../lib/api";
 import {
@@ -47,7 +66,6 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
   const [editor, setEditor] = createSignal<EditorState | null>(null);
 
   let openedAccountID: string | undefined;
-  const [dialog, setDialog] = createSignal<HTMLDialogElement>();
   const isAdmin = createMemo(() => {
     const state = auth.state();
     return state.kind === "authenticated" && state.session.user.role === "admin";
@@ -74,13 +92,6 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
     const controller = new AbortController();
     void load(controller.signal);
     onCleanup(() => controller.abort());
-  });
-
-  createEffect(() => {
-    const element = dialog();
-    if (element === undefined) return;
-    if (editor() !== null && !element.open) element.showModal();
-    if (editor() === null && element.open) element.close();
   });
 
   createEffect(() => {
@@ -126,7 +137,7 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
         description={t("provider.description")}
         actions={
           <Show when={isAdmin()}>
-            <Button variant="primary" onClick={() => setEditor({ mode: "create" })}>
+            <Button variant="primary" icon={Plus} onClick={() => setEditor({ mode: "create" })}>
               {t("provider.add")}
             </Button>
           </Show>
@@ -229,11 +240,12 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
         </div>
       </Show>
 
-      <dialog
-        ref={(element) => setDialog(element)}
-        class="m-auto max-h-[92dvh] w-[min(48rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-border bg-surface p-0 text-foreground shadow-2xl backdrop:bg-foreground/35"
-        aria-labelledby="provider-account-editor-title"
-        onClose={() => setEditor(null)}
+      <ModalDialog
+        open={editor() !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditor(null);
+        }}
+        class="!max-h-[92dvh] !w-[min(48rem,calc(100vw-2rem))]"
       >
         <Show when={editor()}>
           {(state) => (
@@ -248,7 +260,7 @@ export default function ProviderAccountsPage(props: { accountId?: string } = {})
             />
           )}
         </Show>
-      </dialog>
+      </ModalDialog>
     </div>
   );
 }
@@ -279,9 +291,12 @@ function AccountCard(props: {
     <Panel class="h-full">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            {props.provider?.display_name ?? props.account.provider_type}
-          </p>
+          <ProviderIdentity
+            class="inline-flex min-w-0 items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+            iconClass="h-5 w-5"
+            provider={props.provider}
+            providerType={props.account.provider_type}
+          />
           <h2 class="mt-1 text-lg font-semibold text-foreground">{props.account.name}</h2>
           <Show when={props.account.description}>
             <p class="mt-1 text-sm text-muted-foreground">{props.account.description}</p>
@@ -322,26 +337,43 @@ function AccountCard(props: {
       </Show>
       <Show when={props.admin}>
         <div class="mt-5 flex flex-wrap gap-2 border-t border-border pt-4">
-          <Button size="sm" disabled={props.busy} onClick={props.edit}>
+          <Button size="sm" icon={Pencil} disabled={props.busy} onClick={props.edit}>
             {t("provider.edit")}
           </Button>
-          <Button size="sm" disabled={props.busy} onClick={props.replaceCredentials}>
+          <Button
+            size="sm"
+            icon={KeyRound}
+            disabled={props.busy}
+            onClick={props.replaceCredentials}
+          >
             {t("provider.replaceCredentials")}
           </Button>
           <Button
+            icon={ShieldCheck}
             size="sm"
             disabled={props.busy || !props.account.credential_configured}
             onClick={props.validate}
           >
             {t("provider.validate")}
           </Button>
-          <Button size="sm" disabled={props.busy || !props.account.enabled} onClick={props.sync}>
+          <Button
+            size="sm"
+            icon={RefreshCw}
+            disabled={props.busy || !props.account.enabled}
+            onClick={props.sync}
+          >
             {t("provider.syncZones")}
           </Button>
-          <Button size="sm" disabled={props.busy} onClick={props.toggle}>
+          <Button size="sm" icon={Power} disabled={props.busy} onClick={props.toggle}>
             {props.account.enabled ? t("provider.disable") : t("provider.enable")}
           </Button>
-          <Button size="sm" variant="danger" disabled={props.busy} onClick={props.remove}>
+          <Button
+            size="sm"
+            icon={Trash2}
+            variant="danger"
+            disabled={props.busy}
+            onClick={props.remove}
+          >
             {t("provider.delete")}
           </Button>
         </div>
@@ -359,7 +391,7 @@ function ProviderAccountEditor(props: {
   failed: (error: unknown) => void;
   setBusy: (busy: boolean) => void;
 }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const initial = untrack(() => {
     const providerType = props.state.account?.provider_type ?? props.providers[0]?.type ?? "";
     const definition = props.providers.find((provider) => provider.type === providerType);
@@ -441,14 +473,12 @@ function ProviderAccountEditor(props: {
     <form onSubmit={submit}>
       <header class="flex items-start justify-between gap-4 border-b border-border p-5 sm:p-6">
         <div>
-          <p class="text-xs font-semibold text-primary">{t("provider.configuration")}</p>
-          <h2 id="provider-account-editor-title" class="mt-1 text-xl font-semibold">
-            {title()}
-          </h2>
+          <KobalteDialog.Title class="mt-1 text-xl font-semibold">{title()}</KobalteDialog.Title>
         </div>
         <Button
           size="sm"
           variant="ghost"
+          icon={X}
           aria-label={t("provider.closeEditor")}
           disabled={props.busy}
           onClick={closeEditor}
@@ -458,23 +488,22 @@ function ProviderAccountEditor(props: {
       </header>
       <div class="space-y-5 p-5 sm:p-6">
         <Show when={props.state.mode === "create"}>
-          <Field label={t("provider.field.provider")} for="provider-type">
-            <select
-              id="provider-type"
-              class="text-input"
-              required
-              value={providerType()}
-              onChange={(event) => {
-                setProviderType(event.currentTarget.value);
-                setOptions({});
-                setCredentials({});
-              }}
-            >
-              <For each={props.providers}>
-                {(provider) => <option value={provider.type}>{provider.display_name}</option>}
-              </For>
-            </select>
-          </Field>
+          <SelectField
+            id="provider-type"
+            label={t("provider.field.provider")}
+            value={providerType()}
+            options={props.providers.map((provider) => ({
+              value: provider.type,
+              label: providerDisplayName(provider, provider.type, language()),
+              icon: <ProviderIcon providerType={provider.type} class="h-5 w-5" />,
+            }))}
+            required
+            onChange={(value) => {
+              setProviderType(value);
+              setOptions({});
+              setCredentials({});
+            }}
+          />
         </Show>
 
         <Show when={props.state.mode !== "credentials"}>
@@ -539,10 +568,10 @@ function ProviderAccountEditor(props: {
         </Show>
       </div>
       <footer class="flex flex-wrap justify-end gap-2 border-t border-border p-5 sm:p-6">
-        <Button disabled={props.busy} onClick={closeEditor}>
+        <Button icon={X} disabled={props.busy} onClick={closeEditor}>
           {t("provider.cancel")}
         </Button>
-        <Button type="submit" variant="primary" disabled={props.busy}>
+        <Button type="submit" variant="primary" icon={Save} disabled={props.busy}>
           {props.state.mode === "credentials"
             ? t("provider.replaceCredentials")
             : t("provider.saveAccount")}

@@ -15,6 +15,7 @@ export interface AuthUser {
   id: string;
   username: string;
   display_name: string;
+  email?: string;
   role: Role;
   password_enabled: boolean;
   totp_required: boolean;
@@ -75,6 +76,7 @@ export interface SessionInfo {
 export interface CreateUserInput {
   username: string;
   display_name: string;
+  email?: string;
   role: Role;
   initial_password?: string;
 }
@@ -243,10 +245,15 @@ export function createUser(input: CreateUserInput): Promise<UserEnrollmentResult
     body: JSON.stringify(input),
   });
 }
-
 export function updateUser(
   id: string,
-  input: { display_name?: string; role?: Role; password?: string; password_enabled?: boolean },
+  input: {
+    display_name?: string;
+    email?: string;
+    role?: Role;
+    password?: string;
+    password_enabled?: boolean;
+  },
 ): Promise<{ user: AuthUser }> {
   return apiRequest<{ user: AuthUser }>(`/users/${encodeURIComponent(id)}`, {
     method: "PATCH",

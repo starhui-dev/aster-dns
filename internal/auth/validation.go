@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/mail"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -25,6 +26,21 @@ func validateDisplayName(displayName string) (string, error) {
 		return "", ErrInvalidInput
 	}
 	return displayName, nil
+}
+
+func validateEmail(email string) (string, error) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return "", nil
+	}
+	if len(email) > 320 || !utf8.ValidString(email) {
+		return "", ErrInvalidInput
+	}
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Address != email {
+		return "", ErrInvalidInput
+	}
+	return email, nil
 }
 
 func validatePasskeyName(name string) (string, error) {

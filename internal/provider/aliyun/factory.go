@@ -41,8 +41,13 @@ func (*Factory) Type() core.ProviderType { return Type }
 
 func (*Factory) Metadata() core.ProviderMetadata {
 	return core.ProviderMetadata{
-		Type:             Type,
-		DisplayName:      "Alibaba Cloud DNS",
+		Type:        Type,
+		DisplayName: "Alibaba Cloud DNS",
+		DisplayNames: map[string]string{
+			"zh-CN": "阿里云 DNS",
+			"en":    "Alibaba Cloud DNS",
+			"ja":    "Alibaba Cloud DNS",
+		},
 		DocumentationURL: "https://www.alibabacloud.com/help/en/dns/",
 	}
 }

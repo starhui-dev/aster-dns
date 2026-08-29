@@ -203,7 +203,7 @@ func TestProviderCredentialMutationRemainsAdminOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x32}, secretcrypto.MasterKeySize))
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x32}, secretcrypto.MasterKeySize)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func newAPIDNSFixture(t *testing.T, fakeProvider *fake.Provider) apiDNSFixture {
 	t.Helper()
 	accountID := uuid.New()
 	zoneID := uuid.New()
-	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x72}, secretcrypto.MasterKeySize))
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x72}, secretcrypto.MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}

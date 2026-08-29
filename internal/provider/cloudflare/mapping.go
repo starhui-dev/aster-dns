@@ -538,22 +538,6 @@ func recordSetIntersectsIDs(recordSet core.RecordSet, ids []string) bool {
 	return false
 }
 
-func recordSetHasExactIDs(recordSet core.RecordSet, ids []string) bool {
-	if len(recordSet.Entries) != len(ids) {
-		return false
-	}
-	available := make(map[string]struct{}, len(recordSet.Entries))
-	for _, entry := range recordSet.Entries {
-		available[entry.ID] = struct{}{}
-	}
-	for _, id := range ids {
-		if _, exists := available[id]; !exists {
-			return false
-		}
-	}
-	return true
-}
-
 func recordSetHasExactEntries(recordSet core.RecordSet, expected []core.RecordEntry) bool {
 	if len(recordSet.Entries) != len(expected) {
 		return false

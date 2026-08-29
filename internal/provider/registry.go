@@ -36,6 +36,11 @@ func (r *Registry) Register(factory Factory) error {
 	if !providerTypePattern.MatchString(string(providerType)) || metadata.Type != providerType || strings.TrimSpace(metadata.DisplayName) == "" {
 		return errors.New("provider factory metadata is invalid")
 	}
+	for language, displayName := range metadata.DisplayNames {
+		if strings.TrimSpace(language) == "" || strings.TrimSpace(displayName) == "" {
+			return errors.New("provider factory localized metadata is invalid")
+		}
+	}
 	if metadata.DocumentationURL != "" {
 		documentationURL, err := url.Parse(metadata.DocumentationURL)
 		if err != nil || documentationURL.Scheme != "https" || documentationURL.Host == "" || documentationURL.User != nil || documentationURL.RawQuery != "" || documentationURL.Fragment != "" {

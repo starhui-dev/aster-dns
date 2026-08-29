@@ -51,6 +51,25 @@ paths:
                   version: { type: string }
                   commit: { type: string }
                   status: { const: available }
+  /api/v1/updates:
+    get:
+      tags: [System]
+      summary: Check the latest published release
+      operationId: checkForUpdates
+      responses:
+        '200':
+          description: Latest release information
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [current_version, latest_version, update_available, release_url]
+                properties:
+                  current_version: { type: string }
+                  latest_version: { type: string }
+                  update_available: { type: boolean }
+                  release_url: { type: string, format: uri }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/auth/bootstrap:
     get:
       tags: [Authentication]
@@ -508,6 +527,7 @@ paths:
               additionalProperties: false
               properties:
                 display_name: { type: string }
+                email: { type: string, format: email }
                 role: { $ref: '#/components/schemas/Role' }
                 password: { type: string, writeOnly: true }
                 password_enabled: { type: boolean }
@@ -1121,6 +1141,7 @@ components:
         id: { type: string, format: uuid }
         username: { type: string }
         display_name: { type: string }
+        email: { type: string, format: email }
         role: { $ref: '#/components/schemas/Role' }
         password_enabled: { type: boolean }
         totp_required: { type: boolean }
@@ -1134,6 +1155,7 @@ components:
       properties:
         username: { type: string }
         display_name: { type: string }
+        email: { type: string, format: email }
         role: { $ref: '#/components/schemas/Role' }
         initial_password: { type: string, minLength: 12, maxLength: 1024, writeOnly: true }
     SessionResponse:
@@ -1249,10 +1271,15 @@ components:
           items: { $ref: '#/components/schemas/ExtensionFieldDescriptor' }
     ProviderType:
       type: object
-      required: [type, display_name, credential_fields, account_options, capabilities]
+      required: [type, display_name, display_names, credential_fields, account_options, capabilities]
       properties:
         type: { type: string, enum: [huawei, aliyun, tencent, cloudflare] }
         display_name: { type: string }
+        display_names:
+          type: object
+          minProperties: 1
+          additionalProperties: { type: string }
+          description: Localized display names keyed by BCP 47 language tag.
         documentation_url: { type: string, format: uri }
         credential_fields:
           type: array

@@ -7,7 +7,7 @@ import (
 )
 
 func TestEnvelopeRejectsCiphertextTampering(t *testing.T) {
-	envelope, err := NewEnvelope(bytes.Repeat([]byte{0x42}, MasterKeySize))
+	envelope, err := NewKeyringEnvelope(KeyVersion, map[int][]byte{KeyVersion: bytes.Repeat([]byte{0x42}, MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}
@@ -22,7 +22,7 @@ func TestEnvelopeRejectsCiphertextTampering(t *testing.T) {
 }
 
 func TestEnvelopeBindsAAD(t *testing.T) {
-	envelope, err := NewEnvelope(bytes.Repeat([]byte{0x24}, MasterKeySize))
+	envelope, err := NewKeyringEnvelope(KeyVersion, map[int][]byte{KeyVersion: bytes.Repeat([]byte{0x24}, MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}

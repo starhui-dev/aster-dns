@@ -1,8 +1,10 @@
+import { KeyRound, Save, UserPlus, UserRoundCheck, UserRoundX, X } from "lucide-solid";
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import { useI18n } from "../app/i18n";
 import { useAuth } from "../app/AuthContext";
 import { Button } from "../components/ui/Button";
+import { SelectField } from "../components/ui/Select";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError, apiErrorMessage } from "../lib/api";
 import {
@@ -21,6 +23,7 @@ export default function UsersPage() {
   const [users, setUsers] = createSignal<AuthUser[]>([]);
   const [username, setUsername] = createSignal("");
   const [displayName, setDisplayName] = createSignal("");
+  const [email, setEmail] = createSignal("");
   const [role, setRole] = createSignal<Role>("viewer");
   const [initialPassword, setInitialPassword] = createSignal("");
   const [enrollment, setEnrollment] = createSignal<{
@@ -67,6 +70,7 @@ export default function UsersPage() {
     const input = {
       username: username(),
       display_name: displayName(),
+      ...(email().trim() === "" ? {} : { email: email().trim() }),
       role: role(),
       ...(initialPassword() === "" ? {} : { initial_password: initialPassword() }),
     };
@@ -79,6 +83,7 @@ export default function UsersPage() {
       });
       setUsername("");
       setDisplayName("");
+      setEmail("");
       setInitialPassword("");
       await load();
     });
@@ -108,7 +113,7 @@ export default function UsersPage() {
             <p class="mt-2 text-xs">
               {t("users.expires", { date: formatDate(value().expiresAt) })}
             </p>
-            <Button class="mt-3" size="sm" onClick={() => setEnrollment(null)}>
+            <Button class="mt-3" size="sm" icon={X} onClick={() => setEnrollment(null)}>
               {t("users.dismiss")}
             </Button>
           </Alert>
@@ -134,18 +139,27 @@ export default function UsersPage() {
               onInput={(event) => setDisplayName(event.currentTarget.value)}
             />
           </Field>
-          <Field label={t("users.role")} for="create-role">
-            <select
-              id="create-role"
+          <Field label={t("users.email")} for="create-email">
+            <input
+              id="create-email"
               class="text-input"
-              value={role()}
-              onChange={(event) => setRole(event.currentTarget.value as Role)}
-            >
-              <option value="viewer">{t("role.viewer")}</option>
-              <option value="operator">{t("role.operator")}</option>
-              <option value="admin">{t("role.admin")}</option>
-            </select>
+              type="email"
+              autocomplete="email"
+              value={email()}
+              onInput={(event) => setEmail(event.currentTarget.value)}
+            />
           </Field>
+          <SelectField
+            id="create-role"
+            label={t("users.role")}
+            value={role()}
+            options={[
+              { value: "viewer", label: t("role.viewer") },
+              { value: "operator", label: t("role.operator") },
+              { value: "admin", label: t("role.admin") },
+            ]}
+            onChange={(value) => setRole(value as Role)}
+          />
           <Show when={currentSession()?.password_login_enabled}>
             <Field label={t("users.initialPassword")} for="create-password">
               <input
@@ -161,7 +175,7 @@ export default function UsersPage() {
             </Field>
           </Show>
           <div class="md:col-span-2">
-            <Button type="submit" variant="primary" disabled={busy()}>
+            <Button type="submit" variant="primary" icon={UserPlus} disabled={busy()}>
               {t("users.createButton")}
             </Button>
           </div>
@@ -203,7 +217,9 @@ function UserRow(props: {
 }) {
   const { t } = useI18n();
   const [selectedRole, setSelectedRole] = createSignal<Role>();
+  const [selectedEmail, setSelectedEmail] = createSignal<string>();
   const role = () => selectedRole() ?? props.user.role;
+  const email = () => selectedEmail() ?? props.user.email ?? "";
   const isCurrent = () => props.user.id === props.currentUserID;
 
   const saveRole = () => {
@@ -214,6 +230,18 @@ function UserRow(props: {
     void run(async () => {
       await updateUser(id, { role: nextRole });
       await reload();
+    });
+  };
+
+  const saveEmail = () => {
+    const id = props.user.id;
+    const nextEmail = email().trim();
+    const reload = props.reload;
+    const run = props.run;
+    void run(async () => {
+      await updateUser(id, { email: nextEmail });
+      await reload();
+      setSelectedEmail(undefined);
     });
   };
 
@@ -254,32 +282,54 @@ function UserRow(props: {
             </Show>
           </div>
           <p class="mt-1 truncate text-sm text-muted-foreground">{props.user.username}</p>
+          <Show when={props.user.email}>
+            <p class="mt-1 truncate text-sm text-muted-foreground">{props.user.email}</p>
+          </Show>
         </div>
         <div class="flex flex-wrap items-end gap-2">
-          <Field label={t("users.role")} for={`role-${props.user.id}`}>
-            <select
-              id={`role-${props.user.id}`}
-              class="text-input min-w-32"
-              value={role()}
-              disabled={props.busy || isCurrent()}
-              onChange={(event) => setSelectedRole(event.currentTarget.value as Role)}
-            >
-              <option value="viewer">{t("role.viewer")}</option>
-              <option value="operator">{t("role.operator")}</option>
-              <option value="admin">{t("role.admin")}</option>
-            </select>
+          <Field label={t("users.email")} for={`email-${props.user.id}`} class="min-w-56">
+            <input
+              id={`email-${props.user.id}`}
+              class="text-input"
+              type="email"
+              autocomplete="email"
+              value={email()}
+              onInput={(event) => setSelectedEmail(event.currentTarget.value)}
+            />
           </Field>
           <Button
+            icon={Save}
+            disabled={props.busy || email().trim() === (props.user.email ?? "")}
+            onClick={saveEmail}
+          >
+            {t("users.saveEmail")}
+          </Button>
+          <SelectField
+            id={`role-${props.user.id}`}
+            label={t("users.role")}
+            value={role()}
+            options={[
+              { value: "viewer", label: t("role.viewer") },
+              { value: "operator", label: t("role.operator") },
+              { value: "admin", label: t("role.admin") },
+            ]}
+            disabled={props.busy || isCurrent()}
+            class="min-w-32"
+            onChange={(value) => setSelectedRole(value as Role)}
+          />
+          <Button
+            icon={Save}
             disabled={props.busy || isCurrent() || role() === props.user.role}
             onClick={saveRole}
           >
             {t("users.saveRole")}
           </Button>
-          <Button disabled={props.busy} onClick={createEnrollment}>
+          <Button icon={KeyRound} disabled={props.busy} onClick={createEnrollment}>
             {t("users.newEnrollment")}
           </Button>
           <Button
             variant={props.user.disabled_at === undefined ? "danger" : "secondary"}
+            icon={props.user.disabled_at === undefined ? UserRoundX : UserRoundCheck}
             disabled={props.busy || isCurrent()}
             onClick={toggleDisabled}
           >

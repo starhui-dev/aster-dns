@@ -34,8 +34,13 @@ func (*Factory) Type() core.ProviderType { return Type }
 
 func (*Factory) Metadata() core.ProviderMetadata {
 	return core.ProviderMetadata{
-		Type:             Type,
-		DisplayName:      "Cloudflare DNS",
+		Type:        Type,
+		DisplayName: "Cloudflare DNS",
+		DisplayNames: map[string]string{
+			"zh-CN": "Cloudflare DNS",
+			"en":    "Cloudflare DNS",
+			"ja":    "Cloudflare DNS",
+		},
 		DocumentationURL: "https://developers.cloudflare.com/dns/",
 	}
 }

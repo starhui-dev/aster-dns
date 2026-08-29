@@ -1,3 +1,4 @@
+import { KeyRound, LockKeyhole, LogOut, ShieldCheck, ShieldOff, Trash2 } from "lucide-solid";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import { useI18n } from "../app/i18n";
@@ -136,7 +137,7 @@ export default function SettingsPage() {
               onInput={(event) => setPasskeyName(event.currentTarget.value)}
             />
           </Field>
-          <Button type="submit" variant="primary" disabled={busy()}>
+          <Button type="submit" variant="primary" icon={KeyRound} disabled={busy()}>
             {t("settings.registerPasskey")}
           </Button>
         </form>
@@ -161,6 +162,7 @@ export default function SettingsPage() {
                     </p>
                   </div>
                   <Button
+                    icon={Trash2}
                     variant="danger"
                     disabled={busy()}
                     onClick={() => {
@@ -203,7 +205,7 @@ export default function SettingsPage() {
                 onInput={(event) => setNewPassword(event.currentTarget.value)}
               />
             </Field>
-            <Button type="submit" disabled={busy()}>
+            <Button type="submit" icon={LockKeyhole} disabled={busy()}>
               {session()?.user.password_enabled
                 ? t("settings.replacePassword")
                 : t("settings.enablePassword")}
@@ -211,6 +213,7 @@ export default function SettingsPage() {
           </form>
           <Show when={session()?.user.password_enabled}>
             <Button
+              icon={ShieldOff}
               class="mt-4"
               variant="danger"
               disabled={busy()}
@@ -234,6 +237,7 @@ export default function SettingsPage() {
           when={!session()?.user.totp_required}
           fallback={
             <Button
+              icon={ShieldOff}
               variant="danger"
               disabled={busy()}
               onClick={() => {
@@ -254,6 +258,7 @@ export default function SettingsPage() {
             when={provisioningURI() !== null}
             fallback={
               <Button
+                icon={ShieldCheck}
                 disabled={busy()}
                 onClick={() =>
                   void run(async () => {
@@ -288,7 +293,7 @@ export default function SettingsPage() {
                     onInput={(event) => setTOTPCode(event.currentTarget.value)}
                   />
                 </Field>
-                <Button type="submit" variant="primary" disabled={busy()}>
+                <Button type="submit" variant="primary" icon={ShieldCheck} disabled={busy()}>
                   {t("settings.confirmTOTP")}
                 </Button>
               </form>
@@ -300,6 +305,7 @@ export default function SettingsPage() {
       <Panel title={t("settings.sessions")} description={t("settings.sessionsDescription")}>
         <div class="mb-4 flex justify-end">
           <Button
+            icon={LogOut}
             disabled={busy()}
             onClick={() => {
               if (!window.confirm(t("settings.confirmRevokeOther"))) return;
@@ -332,6 +338,7 @@ export default function SettingsPage() {
                 </div>
                 <Show when={!item.current}>
                   <Button
+                    icon={LogOut}
                     variant="danger"
                     disabled={busy()}
                     onClick={() => {

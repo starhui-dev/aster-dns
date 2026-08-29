@@ -1,7 +1,8 @@
-import { For } from "solid-js";
+import { Languages, Palette } from "lucide-solid";
 
 import { availableLanguages, useI18n, type Language } from "../app/i18n";
 import { useTheme, type ThemeMode } from "../app/theme";
+import { SelectField } from "./ui/Select";
 
 export function AppearanceControls(props: { idPrefix?: string } = {}) {
   const { language, setLanguage, t } = useI18n();
@@ -12,34 +13,47 @@ export function AppearanceControls(props: { idPrefix?: string } = {}) {
 
   return (
     <div class="flex items-center gap-2">
-      <label class="sr-only" for={languageID}>
-        {t("language")}
-      </label>
-      <select
+      <SelectField
         id={languageID}
-        class="rounded-md border border-input bg-surface px-2 py-1.5 text-xs text-foreground shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-focus/20"
-        aria-label={t("language")}
+        label={t("language")}
+        labelClass="sr-only"
         value={language()}
-        onChange={(event) => setLanguage(event.currentTarget.value as Language)}
-      >
-        <For each={availableLanguages()}>
-          {(item) => <option value={item}>{t(`language.${languageKey(item)}`)}</option>}
-        </For>
-      </select>
-      <label class="sr-only" for={themeID}>
-        {t("theme")}
-      </label>
-      <select
+        options={availableLanguages().map((item) => ({
+          value: item,
+          label: t(`language.${languageKey(item)}`),
+        }))}
+        onChange={(value) => setLanguage(value as Language)}
+        icon={
+          <Languages
+            class="shrink-0 text-muted-foreground"
+            size={14}
+            strokeWidth={1.8}
+            aria-hidden="true"
+          />
+        }
+        triggerClass="min-h-8 w-auto max-w-32 py-1.5 pl-2.5 pr-2 text-xs"
+      />
+      <SelectField
         id={themeID}
-        class="rounded-md border border-input bg-surface px-2 py-1.5 text-xs text-foreground shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-focus/20"
-        aria-label={t("theme")}
+        label={t("theme")}
+        labelClass="sr-only"
         value={theme.mode()}
-        onChange={(event) => theme.setMode(event.currentTarget.value as ThemeMode)}
-      >
-        <option value="system">{t("theme.system")}</option>
-        <option value="light">{t("theme.light")}</option>
-        <option value="dark">{t("theme.dark")}</option>
-      </select>
+        options={[
+          { value: "system", label: t("theme.system") },
+          { value: "light", label: t("theme.light") },
+          { value: "dark", label: t("theme.dark") },
+        ]}
+        onChange={(value) => theme.setMode(value as ThemeMode)}
+        icon={
+          <Palette
+            class="shrink-0 text-muted-foreground"
+            size={14}
+            strokeWidth={1.8}
+            aria-hidden="true"
+          />
+        }
+        triggerClass="min-h-8 w-auto max-w-40 py-1.5 pl-2.5 pr-2 text-xs"
+      />
     </div>
   );
 }

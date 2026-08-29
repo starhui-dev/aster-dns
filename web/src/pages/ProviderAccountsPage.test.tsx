@@ -7,6 +7,7 @@ import ProviderAccountsPage from "./ProviderAccountsPage";
 
 describe("ProviderAccountsPage", () => {
   afterEach(() => {
+    window.localStorage.removeItem("aster-dns-language");
     vi.unstubAllGlobals();
   });
 
@@ -25,8 +26,9 @@ describe("ProviderAccountsPage", () => {
     expect(screen.getByText("Configured · revision 3")).toBeInTheDocument();
     expect(screen.queryByText("fixture-secret-key")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add provider account" }));
-
+    const addButton = screen.getByRole("button", { name: "Add provider account" });
+    addButton.focus();
+    fireEvent.click(addButton);
     expect(await screen.findByLabelText("Access key (AK)")).toHaveValue("");
     expect(screen.getByLabelText("Secret key (SK)")).toHaveAttribute("type", "password");
     expect(screen.getByLabelText("DNS region")).toBeInTheDocument();
@@ -39,8 +41,29 @@ describe("ProviderAccountsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close provider editor" }));
     await waitFor(() => expect(screen.queryByLabelText("Access key (AK)")).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(addButton);
     fireEvent.click(screen.getByRole("button", { name: "Add provider account" }));
     expect(await screen.findByLabelText("Access key (AK)")).toHaveValue("");
+    expect(
+      document.querySelector('#provider-type img[data-provider-icon="huawei"]'),
+    ).toBeInTheDocument();
+  });
+  it("renders the localized provider name and Lobe icon", async () => {
+    window.localStorage.setItem("aster-dns-language", "zh-CN");
+    vi.stubGlobal("fetch", vi.fn(providerAccountsFetch));
+
+    render(() => (
+      <I18nProvider>
+        <AuthProvider>
+          <ProviderAccountsPage />
+        </AuthProvider>
+      </I18nProvider>
+    ));
+
+    expect(await screen.findByText("华为云 DNS")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "添加服务商账号" }));
+    expect(document.querySelector("#provider-type")).toHaveTextContent("华为云 DNS");
+    expect(document.querySelector('img[data-provider-icon="huawei"]')).toBeInTheDocument();
   });
 });
 
@@ -74,7 +97,6 @@ async function providerAccountsFetch(input: RequestInfo | URL): Promise<Response
           name: "Production DNS",
           description: "Primary account",
           enabled: true,
-          options: { region: "ap-southeast-1" },
           credential_configured: true,
           credential_revision: 3,
           validation_status: "valid",
@@ -93,6 +115,7 @@ async function providerAccountsFetch(input: RequestInfo | URL): Promise<Response
 const huaweiDefinition = {
   type: "huawei",
   display_name: "Huawei Cloud DNS",
+  display_names: { "zh-CN": "华为云 DNS", en: "Huawei Cloud DNS", ja: "Huawei Cloud DNS" },
   documentation_url: "https://support.huaweicloud.com/intl/en-us/dns/index.html",
   credential_fields: [
     { key: "access_key", label: "Access key (AK)", type: "string", secret: true, required: true },

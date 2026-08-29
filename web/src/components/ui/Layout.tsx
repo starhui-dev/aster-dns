@@ -1,13 +1,16 @@
 import { Show, type JSX, type ParentProps } from "solid-js";
+import { Dynamic } from "solid-js/web";
+
+import { CircleAlert, CircleCheck, CircleX, Info, type LucideIcon } from "lucide-solid";
 
 export function PageHeader(props: {
-  eyebrow?: string | undefined;
+  eyebrow?: JSX.Element | undefined;
   title: string;
   description?: string | undefined;
   actions?: JSX.Element | undefined;
 }) {
   return (
-    <header class="flex flex-col gap-4 border-b border-border pb-5 sm:flex-row sm:items-end sm:justify-between">
+    <header class="flex flex-col gap-4 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
       <div class="min-w-0">
         <Show when={props.eyebrow}>
           <p class="text-xs font-semibold text-primary">{props.eyebrow}</p>
@@ -75,6 +78,12 @@ export function Alert(
   }>,
 ) {
   const variant = () => props.variant ?? "info";
+  const icon: Record<AlertVariant, LucideIcon> = {
+    info: Info,
+    success: CircleCheck,
+    warning: CircleAlert,
+    danger: CircleX,
+  };
 
   return (
     <div
@@ -83,10 +92,21 @@ export function Alert(
         .join(" ")}
       role={props.role ?? (variant() === "danger" ? "alert" : "status")}
     >
-      <Show when={props.title}>
-        <p class="font-semibold">{props.title}</p>
-      </Show>
-      <div class={props.title ? "mt-1" : undefined}>{props.children}</div>
+      <div class="flex items-start gap-2">
+        <Dynamic
+          component={icon[variant()]}
+          class="mt-0.5 shrink-0"
+          size={17}
+          strokeWidth={1.9}
+          aria-hidden="true"
+        />
+        <div class="min-w-0 flex-1">
+          <Show when={props.title}>
+            <p class="font-semibold">{props.title}</p>
+          </Show>
+          <div class={props.title ? "mt-1" : undefined}>{props.children}</div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -11,7 +11,7 @@ import (
 )
 
 func TestTOTPSecretCiphertextTamperFails(t *testing.T) {
-	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x51}, secretcrypto.MasterKeySize))
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x51}, secretcrypto.MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}

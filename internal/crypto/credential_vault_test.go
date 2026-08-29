@@ -56,7 +56,7 @@ func TestCredentialVaultRoundTripAndAuthentication(t *testing.T) {
 func TestCredentialVaultStrictValidation(t *testing.T) {
 	t.Parallel()
 	for _, keySize := range []int{0, MasterKeySize - 1, MasterKeySize + 1} {
-		if _, err := NewEnvelope(make([]byte, keySize)); err == nil {
+		if _, err := NewKeyringEnvelope(KeyVersion, map[int][]byte{KeyVersion: make([]byte, keySize)}); err == nil {
 			t.Errorf("master key size %d passed", keySize)
 		}
 	}
@@ -71,7 +71,7 @@ func TestCredentialVaultStrictValidation(t *testing.T) {
 
 func newTestCredentialVault(t *testing.T, key []byte) *CredentialVault {
 	t.Helper()
-	envelope, err := NewEnvelope(key)
+	envelope, err := NewKeyringEnvelope(KeyVersion, map[int][]byte{KeyVersion: key})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}

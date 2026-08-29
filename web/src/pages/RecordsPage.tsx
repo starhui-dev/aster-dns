@@ -1,10 +1,24 @@
+import { Dialog as KobalteDialog } from "@kobalte/core/dialog";
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+  Clock3,
+  Filter,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Trash2,
+  X,
+} from "lucide-solid";
 import { A, useParams } from "@solidjs/router";
 import {
   For,
   Match,
   Show,
   Switch,
-  createEffect,
   createMemo,
   createSignal,
   onCleanup,
@@ -13,6 +27,7 @@ import {
 } from "solid-js";
 
 import { useI18n } from "../app/i18n";
+import { ProviderIdentity } from "../components/ProviderIdentity";
 import { useAuth } from "../app/AuthContext";
 import {
   ExtensionFields,
@@ -22,6 +37,8 @@ import {
   type FieldValues,
 } from "../components/ProviderFields";
 import { Button } from "../components/ui/Button";
+import { ModalDialog } from "../components/ui/Dialog";
+import { SelectField } from "../components/ui/Select";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError, apiErrorMessage, redactClientValue } from "../lib/api";
 import {
@@ -72,10 +89,8 @@ export default function RecordsPage() {
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
   const [selected, setSelected] = createSignal<Set<string>>(new Set());
   const [editor, setEditor] = createSignal<EditorState>();
-  const [editorDialog, setEditorDialog] = createSignal<HTMLDialogElement>();
   const [conflict, setConflict] = createSignal<ConflictState>();
   const [batchMode, setBatchMode] = createSignal<"delete" | "ttl_update">();
-  const [batchDialog, setBatchDialog] = createSignal<HTMLDialogElement>();
   const [batchTTL, setBatchTTL] = createSignal(300);
   const [batchConfirmation, setBatchConfirmation] = createSignal("");
   const [batchResult, setBatchResult] = createSignal<BatchResult>();
@@ -150,19 +165,6 @@ export default function RecordsPage() {
     const controller = new AbortController();
     void load(false, controller.signal);
     onCleanup(() => controller.abort());
-  });
-
-  createEffect(() => {
-    const dialog = editorDialog();
-    if (dialog === undefined) return;
-    if (editor() !== undefined && !dialog.open) dialog.showModal();
-    if (editor() === undefined && dialog.open) dialog.close();
-  });
-  createEffect(() => {
-    const dialog = batchDialog();
-    if (dialog === undefined) return;
-    if (batchMode() !== undefined && !dialog.open) dialog.showModal();
-    if (batchMode() === undefined && dialog.open) dialog.close();
   });
 
   const submitFilters = (event: SubmitEvent) => {
@@ -295,10 +297,7 @@ export default function RecordsPage() {
       } else {
         setError(errorState(caught, t));
       }
-      const dialog = untrack(editorDialog);
-      queueMicrotask(() => {
-        if (dialog?.open) dialog.querySelector<HTMLElement>("#record-name")?.focus();
-      });
+      queueMicrotask(() => document.getElementById("record-name")?.focus());
     } finally {
       setBusy(false);
     }
@@ -313,9 +312,16 @@ export default function RecordsPage() {
     <div class="space-y-6">
       <PageHeader
         eyebrow={
-          zone()
-            ? `${zone()?.provider_account_name} · ${zone()?.provider_type}`
-            : t("records.eyebrow")
+          zone() ? (
+            <ProviderIdentity
+              class="inline-flex min-w-0 items-center gap-1.5 text-xs font-semibold text-primary"
+              iconClass="h-5 w-5"
+              provider={providerDefinition()}
+              providerType={zone()?.provider_type ?? ""}
+            />
+          ) : (
+            t("records.eyebrow")
+          )
         }
         title={zone()?.name ?? t("records.title")}
         description={
@@ -325,16 +331,25 @@ export default function RecordsPage() {
         }
         actions={
           <>
-            <A class="text-sm font-semibold text-primary hover:underline" href="/zones">
+            <A
+              class="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline"
+              href="/zones"
+            >
+              <ArrowLeft size={15} strokeWidth={1.8} aria-hidden="true" />
               {t("records.allZones")}
             </A>
             <Show when={canMutate()}>
-              <Button disabled={loading() || busy()} onClick={() => void load(true)}>
+              <Button
+                icon={RefreshCw}
+                disabled={loading() || busy()}
+                onClick={() => void load(true)}
+              >
                 {t("records.forceRefresh")}
               </Button>
             </Show>
             <Show when={canMutate()}>
               <Button
+                icon={Plus}
                 variant="primary"
                 disabled={loading() || busy() || stale()}
                 onClick={() => setEditor({ mode: "create" })}
@@ -402,6 +417,7 @@ export default function RecordsPage() {
             </div>
             <div class="mt-4 flex flex-wrap gap-2">
               <Button
+                icon={RefreshCw}
                 onClick={() => {
                   setConflict(undefined);
                   void load(true);
@@ -409,7 +425,12 @@ export default function RecordsPage() {
               >
                 {t("records.reload")}
               </Button>
-              <Button variant="primary" disabled={busy()} onClick={reapplyConflict}>
+              <Button
+                variant="primary"
+                icon={RotateCcw}
+                disabled={busy()}
+                onClick={reapplyConflict}
+              >
                 {t("records.reapply")}
               </Button>
             </div>
@@ -434,20 +455,21 @@ export default function RecordsPage() {
               onInput={(event) => setQuery(event.currentTarget.value)}
             />
           </Field>
-          <Field label={t("records.type")} for="record-type-filter">
-            <select
-              id="record-type-filter"
-              class="text-input min-w-36"
-              value={typeFilter()}
-              onChange={(event) => setTypeFilter(event.currentTarget.value)}
-            >
-              <option value="">{t("records.allTypes")}</option>
-              <For each={providerDefinition()?.capabilities.supported_record_types ?? []}>
-                {(type) => <option value={type}>{type}</option>}
-              </For>
-            </select>
-          </Field>
-          <Button type="submit" variant="primary" disabled={loading()}>
+          <SelectField
+            id="record-type-filter"
+            label={t("records.type")}
+            value={typeFilter()}
+            options={[
+              { value: "", label: t("records.allTypes") },
+              ...(providerDefinition()?.capabilities.supported_record_types ?? []).map((type) => ({
+                value: type,
+                label: type,
+              })),
+            ]}
+            class="min-w-36"
+            onChange={setTypeFilter}
+          />
+          <Button type="submit" variant="primary" icon={Filter} disabled={loading()}>
             {t("records.apply")}
           </Button>
         </form>
@@ -461,12 +483,14 @@ export default function RecordsPage() {
             </p>
             <div class="flex gap-2">
               <Button
+                icon={Clock3}
                 disabled={loading() || busy() || stale() || selectedRecords().length > 100}
                 onClick={() => setBatchMode("ttl_update")}
               >
                 {t("records.updateTTL")}
               </Button>
               <Button
+                icon={Trash2}
                 variant="danger"
                 disabled={loading() || busy() || stale() || selectedRecords().length > 100}
                 onClick={() => setBatchMode("delete")}
@@ -552,7 +576,7 @@ export default function RecordsPage() {
                             }
                           >
                             <button
-                              class="mt-1 text-xs font-semibold text-primary hover:underline"
+                              class="mt-1 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
                               type="button"
                               aria-expanded={expanded().has(record.id)}
                               aria-controls={`record-entries-${record.id}`}
@@ -565,6 +589,14 @@ export default function RecordsPage() {
                                 })
                               }
                             >
+                              <Show
+                                when={expanded().has(record.id)}
+                                fallback={
+                                  <ChevronDown size={14} strokeWidth={1.8} aria-hidden="true" />
+                                }
+                              >
+                                <ChevronUp size={14} strokeWidth={1.8} aria-hidden="true" />
+                              </Show>
                               {expanded().has(record.id)
                                 ? t("records.collapseEntries")
                                 : t("records.expandEntries", { count: record.entries.length })}
@@ -591,6 +623,7 @@ export default function RecordsPage() {
                           >
                             <div class="flex justify-end gap-2">
                               <Button
+                                icon={Pencil}
                                 size="sm"
                                 disabled={loading() || busy() || stale()}
                                 onClick={() => setEditor({ mode: "edit", record })}
@@ -598,6 +631,7 @@ export default function RecordsPage() {
                                 {t("records.edit")}
                               </Button>
                               <Button
+                                icon={Trash2}
                                 size="sm"
                                 variant="danger"
                                 disabled={loading() || busy() || stale()}
@@ -646,11 +680,11 @@ export default function RecordsPage() {
         </Show>
       </Panel>
 
-      <dialog
-        ref={(element) => setEditorDialog(element)}
-        class="m-auto max-h-[94dvh] w-[min(56rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-border bg-surface p-0 text-foreground shadow-2xl backdrop:bg-foreground/35"
-        aria-labelledby="record-editor-title"
-        onClose={() => setEditor(undefined)}
+      <ModalDialog
+        open={editor() !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setEditor(undefined);
+        }}
       >
         <Show when={editor() && providerDefinition()}>
           <RecordEditor
@@ -661,28 +695,27 @@ export default function RecordsPage() {
             save={saveRecord}
           />
         </Show>
-      </dialog>
-
-      <dialog
-        ref={(element) => setBatchDialog(element)}
-        class="m-auto w-[min(34rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface p-0 text-foreground shadow-2xl backdrop:bg-foreground/35"
-        aria-labelledby="batch-operation-title"
-        aria-describedby="batch-operation-description"
-        onClose={() => setBatchMode(undefined)}
+      </ModalDialog>
+      <ModalDialog
+        open={batchMode() !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setBatchMode(undefined);
+        }}
+        class="!w-[min(34rem,calc(100vw-2rem))]"
       >
         <form onSubmit={submitBatch}>
           <header class="border-b border-border p-5">
-            <h2 id="batch-operation-title" class="text-lg font-semibold">
+            <KobalteDialog.Title class="text-lg font-semibold">
               {batchMode() === "delete"
                 ? t("records.batchDeleteTitle")
                 : t("records.batchTTLTitle")}
-            </h2>
-            <p id="batch-operation-description" class="mt-1 text-sm text-muted-foreground">
+            </KobalteDialog.Title>
+            <KobalteDialog.Description class="mt-1 text-sm text-muted-foreground">
               {t("records.batchDescription", {
                 count: selectedRecords().length,
                 name: zone()?.name ?? "",
               })}
-            </p>
+            </KobalteDialog.Description>
           </header>
           <div class="space-y-4 p-5">
             <Show when={batchMode() === "ttl_update"}>
@@ -717,10 +750,11 @@ export default function RecordsPage() {
             </Show>
           </div>
           <footer class="flex justify-end gap-2 border-t border-border p-5">
-            <Button disabled={busy()} onClick={() => setBatchMode(undefined)}>
+            <Button icon={X} disabled={busy()} onClick={() => setBatchMode(undefined)}>
               {t("records.cancel")}
             </Button>
             <Button
+              icon={batchMode() === "delete" ? Trash2 : Save}
               type="submit"
               variant={batchMode() === "delete" ? "danger" : "primary"}
               disabled={
@@ -731,7 +765,7 @@ export default function RecordsPage() {
             </Button>
           </footer>
         </form>
-      </dialog>
+      </ModalDialog>
     </div>
   );
 }
@@ -815,13 +849,14 @@ function RecordEditor(props: {
       <header class="flex items-start justify-between gap-4 border-b border-border p-5 sm:p-6">
         <div>
           <p class="text-xs font-semibold text-primary">{t("records.semanticEditor")}</p>
-          <h2 id="record-editor-title" class="mt-1 text-xl font-semibold">
+          <KobalteDialog.Title class="mt-1 text-xl font-semibold">
             {props.state.mode === "create" ? t("records.createSet") : t("records.editSet")}
-          </h2>
+          </KobalteDialog.Title>
         </div>
         <Button
           size="sm"
           variant="ghost"
+          icon={X}
           aria-label={t("records.closeEditor")}
           onClick={props.close}
         >
@@ -839,18 +874,16 @@ function RecordEditor(props: {
               onInput={(event) => setName(event.currentTarget.value)}
             />
           </Field>
-          <Field label={t("records.type")} for="record-type">
-            <select
-              id="record-type"
-              class="text-input"
-              value={recordType()}
-              onChange={(event) => changeType(event.currentTarget.value)}
-            >
-              <For each={props.capabilities.supported_record_types}>
-                {(type) => <option value={type}>{type}</option>}
-              </For>
-            </select>
-          </Field>
+          <SelectField
+            id="record-type"
+            label={t("records.type")}
+            value={recordType()}
+            options={props.capabilities.supported_record_types.map((type) => ({
+              value: type,
+              label: type,
+            }))}
+            onChange={changeType}
+          />
           <Field label={t("records.ttl")} for="record-ttl">
             <input
               id="record-ttl"
@@ -870,6 +903,7 @@ function RecordEditor(props: {
             <h3 class="text-sm font-semibold">{t("records.entries")}</h3>
             <Button
               size="sm"
+              icon={Plus}
               onClick={() => {
                 setEntries((current) => [...current, {}]);
                 setEntryExtensions((current) => [...current, {}]);
@@ -888,6 +922,7 @@ function RecordEditor(props: {
                     </p>
                     <Button
                       size="sm"
+                      icon={X}
                       variant="ghost"
                       disabled={entries().length === 1}
                       onClick={() => {
@@ -938,10 +973,10 @@ function RecordEditor(props: {
         />
       </div>
       <footer class="flex justify-end gap-2 border-t border-border p-5 sm:p-6">
-        <Button disabled={props.busy} onClick={props.close}>
+        <Button icon={X} disabled={props.busy} onClick={props.close}>
           {t("records.cancel")}
         </Button>
-        <Button type="submit" variant="primary" disabled={props.busy}>
+        <Button type="submit" variant="primary" icon={Save} disabled={props.busy}>
           {t("records.saveSet")}
         </Button>
       </footer>
@@ -1123,7 +1158,7 @@ function BatchResultPanel(props: { result: BatchResult; dismiss: () => void }) {
           )}
         </For>
       </div>
-      <Button class="mt-4" onClick={props.dismiss}>
+      <Button class="mt-4" icon={X} onClick={props.dismiss}>
         {t("records.dismiss")}
       </Button>
     </Panel>

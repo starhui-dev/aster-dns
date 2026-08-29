@@ -1,4 +1,5 @@
 import { Route, Router, useParams } from "@solidjs/router";
+import { RefreshCw } from "lucide-solid";
 import { ErrorBoundary, Show } from "solid-js";
 
 import { I18nProvider, useI18n } from "./i18n";
@@ -24,16 +25,18 @@ export default function App() {
         <ErrorBoundary fallback={(error, reset) => <AppError error={error} reset={reset} />}>
           <AuthProvider>
             <AuthGate>
-              <Router root={AppShell}>
-                <Route path="/" component={DashboardPage} />
-                <Route path="/zones" component={ZonesPage} />
-                <Route path="/zones/:zoneId/records" component={RecordsPage} />
-                <Route path="/accounts" component={ProviderAccountsPage} />
-                <Route path="/accounts/:accountId" component={ProviderAccountDetailPage} />
-                <Route path="/audit" component={AuditPage} />
-                <Route path="/settings" component={SettingsPage} />
-                <Route path="/users" component={AdminUsersPage} />
-                <Route path="*404" component={NotFoundPage} />
+              <Router>
+                <Route path="/" component={AppShell}>
+                  <Route path="/" component={DashboardPage} />
+                  <Route path="/zones" component={ZonesPage} />
+                  <Route path="/zones/:zoneId/records" component={RecordsPage} />
+                  <Route path="/accounts" component={ProviderAccountsPage} />
+                  <Route path="/accounts/:accountId" component={ProviderAccountDetailPage} />
+                  <Route path="/audit" component={AuditPage} />
+                  <Route path="/settings" component={SettingsPage} />
+                  <Route path="/users" component={AdminUsersPage} />
+                  <Route path="*404" component={NotFoundPage} />
+                </Route>
               </Router>
             </AuthGate>
           </AuthProvider>
@@ -85,7 +88,7 @@ function NotFoundPage() {
   );
 }
 
-function AppError(props: { error: unknown; reset: () => void }) {
+export function AppError(props: { error: unknown; reset: () => void }) {
   const { t } = useI18n();
   return (
     <AuthLayout
@@ -96,7 +99,7 @@ function AppError(props: { error: unknown; reset: () => void }) {
       <Alert variant="danger">
         {props.error instanceof Error ? props.error.message : t("app.error.message")}
       </Alert>
-      <Button class="mt-5" variant="primary" onClick={() => props.reset()}>
+      <Button class="mt-5" variant="primary" icon={RefreshCw} onClick={() => props.reset()}>
         {t("app.tryAgain")}
       </Button>
     </AuthLayout>

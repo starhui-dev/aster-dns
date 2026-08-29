@@ -90,10 +90,6 @@ func (s *Service) Origin() string {
 	return s.config.PublicURL.Scheme + "://" + s.config.PublicURL.Host
 }
 
-func (s *Service) RPID() string {
-	return s.config.PublicURL.Hostname()
-}
-
 func (s *Service) PasswordLoginEnabled() bool {
 	return s.config.PasswordLoginEnabled
 }

@@ -48,6 +48,7 @@ func (h userHandler) create(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Username        string    `json:"username"`
 		DisplayName     string    `json:"display_name"`
+		Email           string    `json:"email"`
 		Role            auth.Role `json:"role"`
 		InitialPassword string    `json:"initial_password"`
 	}
@@ -74,6 +75,7 @@ func (h userHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	var request struct {
 		DisplayName     *string    `json:"display_name"`
+		Email           *string    `json:"email"`
 		Role            *auth.Role `json:"role"`
 		Password        *string    `json:"password"`
 		PasswordEnabled *bool      `json:"password_enabled"`

@@ -1,11 +1,14 @@
-import { splitProps, type ComponentProps } from "solid-js";
+import { Show, splitProps, type ComponentProps } from "solid-js";
+import { Dynamic } from "solid-js/web";
 
+import type { LucideIcon } from "lucide-solid";
 export type ButtonVariant = "primary" | "secondary" | "danger" | "ghost";
 export type ButtonSize = "sm" | "md";
 
 type ButtonProps = ComponentProps<"button"> & {
   variant?: ButtonVariant;
   size?: ButtonSize;
+  icon?: LucideIcon;
 };
 
 const variantClasses: Record<ButtonVariant, string> = {
@@ -25,7 +28,7 @@ const sizeClasses: Record<ButtonSize, string> = {
 };
 
 export function Button(props: ButtonProps) {
-  const [local, rest] = splitProps(props, ["children", "class", "variant", "size", "type"]);
+  const [local, rest] = splitProps(props, ["children", "class", "variant", "size", "type", "icon"]);
 
   return (
     <button
@@ -40,6 +43,9 @@ export function Button(props: ButtonProps) {
         .filter(Boolean)
         .join(" ")}
     >
+      <Show when={local.icon}>
+        {(Icon) => <Dynamic component={Icon()} size={16} strokeWidth={1.8} aria-hidden="true" />}
+      </Show>
       {local.children}
     </button>
   );

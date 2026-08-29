@@ -1,7 +1,9 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { ChevronRight, Eye, Filter, RefreshCw, RotateCcw } from "lucide-solid";
 import { useI18n } from "../app/i18n";
 
 import { Button } from "../components/ui/Button";
+import { SelectField } from "../components/ui/Select";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError, apiErrorMessage, redactClientValue } from "../lib/api";
 import { getAuditEvent, listAuditEvents, type AuditEvent } from "../lib/dns";
@@ -72,7 +74,11 @@ export default function AuditPage() {
         eyebrow={t("audit.eyebrow")}
         title={t("audit.title")}
         description={t("audit.description", { total: total() })}
-        actions={<Button onClick={() => void load()}>{t("audit.reload")}</Button>}
+        actions={
+          <Button icon={RefreshCw} onClick={() => void load()}>
+            {t("audit.reload")}
+          </Button>
+        }
       />
 
       <Show when={error()}>
@@ -107,18 +113,17 @@ export default function AuditPage() {
               onInput={(event) => setAction(event.currentTarget.value)}
             />
           </Field>
-          <Field label={t("audit.result")} for="audit-result">
-            <select
-              id="audit-result"
-              class="text-input"
-              value={result()}
-              onChange={(event) => setResult(event.currentTarget.value)}
-            >
-              <option value="">{t("audit.allResults")}</option>
-              <option value="succeeded">{t("audit.succeeded")}</option>
-              <option value="failed">{t("audit.failed")}</option>
-            </select>
-          </Field>
+          <SelectField
+            id="audit-result"
+            label={t("audit.result")}
+            value={result()}
+            options={[
+              { value: "", label: t("audit.allResults") },
+              { value: "succeeded", label: t("audit.succeeded") },
+              { value: "failed", label: t("audit.failed") },
+            ]}
+            onChange={setResult}
+          />
           <Field label={t("audit.from")} for="audit-from">
             <input
               id="audit-from"
@@ -138,10 +143,11 @@ export default function AuditPage() {
             />
           </Field>
           <div class="flex items-end gap-2">
-            <Button type="submit" variant="primary" disabled={loading()}>
+            <Button type="submit" variant="primary" icon={Filter} disabled={loading()}>
               {t("audit.apply")}
             </Button>
             <Button
+              icon={RotateCcw}
               disabled={loading()}
               onClick={() => {
                 setActor("");
@@ -193,14 +199,14 @@ export default function AuditPage() {
                         <td class="whitespace-nowrap px-3 py-4 text-xs">
                           {formatDate(event.occurred_at)}
                         </td>
-                        <td class="px-3 py-4">{event.actor_username || t("audit.system")}</td>
                         <td class="px-3 py-4 font-medium">
                           <button
                             type="button"
-                            class="text-left text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                            class="inline-flex items-center gap-1.5 text-left text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
                             aria-pressed={selected()?.id === event.id}
                             onClick={() => openDetail(event)}
                           >
+                            <Eye size={14} strokeWidth={1.8} aria-hidden="true" />
                             {event.action}
                           </button>
                         </td>
@@ -225,6 +231,7 @@ export default function AuditPage() {
           </Show>
           <div class="mt-4 flex justify-end">
             <Button
+              icon={ChevronRight}
               disabled={loading() || nextCursor() === ""}
               onClick={() => {
                 const next = nextCursor();

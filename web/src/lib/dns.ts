@@ -59,6 +59,7 @@ export interface ProviderCapabilities {
 export interface ProviderTypeDefinition {
   type: string;
   display_name: string;
+  display_names?: Record<string, string> | undefined;
   documentation_url?: string | undefined;
   credential_fields: DescriptorField[];
   account_options: DescriptorField[];

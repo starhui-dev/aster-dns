@@ -23,10 +23,6 @@ type Envelope struct {
 	aeads         map[int]cipher.AEAD
 }
 
-func NewEnvelope(masterKey []byte) (*Envelope, error) {
-	return NewKeyringEnvelope(KeyVersion, map[int][]byte{KeyVersion: masterKey})
-}
-
 func NewKeyringEnvelope(activeVersion int, masterKeys map[int][]byte) (*Envelope, error) {
 	if activeVersion <= 0 || len(masterKeys) == 0 {
 		return nil, errors.New("master keyring requires a positive active version")

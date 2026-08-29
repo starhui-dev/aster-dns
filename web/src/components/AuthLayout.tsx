@@ -4,42 +4,79 @@ import { useI18n } from "../app/i18n";
 import { AppearanceControls } from "./AppearanceControls";
 import { Brand } from "./Brand";
 
-export function AuthLayout(
-  props: ParentProps<{ eyebrow: string; title: string; description: string; wide?: boolean }>,
-) {
+type AuthLayoutProps = ParentProps<{
+  eyebrow: string;
+  title: string;
+  description: string;
+  wide?: boolean | undefined;
+}>;
+
+export function AuthLayout(props: AuthLayoutProps) {
   const { t } = useI18n();
 
   return (
-    <main class="grid min-h-screen bg-background text-foreground lg:grid-cols-[minmax(20rem,1fr)_minmax(30rem,42rem)]">
-      <section class="relative hidden overflow-hidden border-r border-sidebar-border bg-sidebar p-10 lg:flex lg:flex-col">
-        <div class="flex items-center justify-between gap-4">
-          <Brand />
-          <AppearanceControls idPrefix="auth-desktop" />
-        </div>
-        <div class="my-auto max-w-lg py-16">
-          <p class="text-xs font-semibold text-primary">{t("brand.eyebrow")}</p>
-          <h2 class="mt-3 text-3xl font-semibold leading-tight tracking-tight">
-            {t("brand.headline")}
-          </h2>
-          <p class="mt-4 text-sm leading-7 text-muted-foreground">{t("brand.description")}</p>
-        </div>
-        <p class="text-xs text-muted-foreground">Aster DNS · {t("brand.product")}</p>
-      </section>
+    <main
+      class={`auth-login-shell min-h-screen bg-background text-foreground ${props.wide ? "auth-login-shell-wide" : ""}`}
+    >
+      <div class="auth-login-art" aria-hidden="true">
+        <span class="auth-login-orbit auth-login-orbit-one" />
+        <span class="auth-login-orbit auth-login-orbit-two" />
+        <span class="auth-login-glow auth-login-glow-one" />
+        <span class="auth-login-glow auth-login-glow-two" />
+      </div>
 
-      <section class="flex min-h-screen items-center justify-center p-5 sm:p-8 lg:p-12">
-        <div class={props.wide ? "w-full max-w-xl" : "w-full max-w-md"}>
-          <div class="mb-8 flex items-center justify-between gap-4 lg:hidden">
-            <Brand />
-            <AppearanceControls idPrefix="auth-mobile" />
+      <header class="auth-login-header">
+        <Brand />
+        <div class="flex items-center gap-3">
+          <span class="auth-login-header-note hidden text-xs font-semibold text-muted-foreground sm:inline">
+            {t("auth.login.title")}
+          </span>
+          <AppearanceControls idPrefix="auth-login" />
+        </div>
+      </header>
+
+      <div class="auth-login-content">
+        <section class="auth-login-hero" aria-labelledby="auth-login-hero-title">
+          <p class="auth-login-kicker">{t("brand.eyebrow")}</p>
+          <h2 id="auth-login-hero-title">{t("auth.login.heroTitle")}</h2>
+          <p class="auth-login-hero-description">{t("auth.login.heroDescription")}</p>
+
+          <div class="auth-login-stats" aria-label={t("auth.login.title")}>
+            <div class="auth-login-stat">
+              <strong>4</strong>
+              <span>{t("auth.login.stats.providers")}</span>
+            </div>
+            <div class="auth-login-stat">
+              <strong>1</strong>
+              <span>{t("auth.login.stats.controlPlane")}</span>
+            </div>
+            <div class="auth-login-stat">
+              <strong>0</strong>
+              <span>{t("auth.login.stats.browserSecrets")}</span>
+            </div>
           </div>
+        </section>
+
+        <section class="auth-login-card" aria-labelledby="auth-login-title">
           <div class="mb-6">
-            <p class="text-xs font-semibold text-primary">{props.eyebrow}</p>
-            <h1 class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{props.title}</h1>
+            <p class="auth-login-card-eyebrow">{props.eyebrow}</p>
+            <h1
+              id="auth-login-title"
+              class="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl"
+            >
+              {props.title}
+            </h1>
             <p class="mt-2 text-sm leading-6 text-muted-foreground">{props.description}</p>
           </div>
           {props.children}
-        </div>
-      </section>
+        </section>
+      </div>
+
+      <footer class="auth-login-footer">
+        <span>Aster DNS</span>
+        <span aria-hidden="true">·</span>
+        <span>{t("brand.product")}</span>
+      </footer>
     </main>
   );
 }

@@ -28,6 +28,7 @@ type Options struct {
 	ProviderAccounts  *providerservice.ProviderAccountService
 	ZoneSync          *providerservice.ZoneSyncService
 	DNS               *providerservice.DNSService
+	Updates           UpdateChecker
 	HTTPS             bool
 	TrustedProxyCIDRs []*net.IPNet
 }
@@ -55,6 +56,7 @@ func NewRouter(options Options) http.Handler {
 	router.Get("/healthz", healthHandler)
 	router.Get("/readyz", readyHandler(options.ReadyCheck, options.ReadyTimeout))
 	router.Get("/api/v1", apiOverviewHandler(options.Build))
+	router.Get("/api/v1/updates", updateHandler(options.Build, options.Updates))
 	router.Get("/api/v1/", apiOverviewHandler(options.Build))
 	if options.Auth != nil {
 		registerAuthRoutes(router, options.Auth)

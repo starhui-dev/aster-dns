@@ -1,10 +1,13 @@
 import { A } from "@solidjs/router";
+import { ArrowRight, ChevronRight, Filter, RefreshCw, RotateCcw } from "lucide-solid";
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import { useAuth } from "../app/AuthContext";
 import { useI18n } from "../app/i18n";
 
+import { ProviderIdentity, providerDisplayName } from "../components/ProviderIdentity";
 import { Button } from "../components/ui/Button";
+import { SelectField } from "../components/ui/Select";
 import { Alert, Badge, Field, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError, apiErrorMessage } from "../lib/api";
 import {
@@ -18,7 +21,7 @@ import {
 } from "../lib/dns";
 
 export default function ZonesPage() {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const auth = useAuth();
   const canMutate = () => {
     const state = auth.state();
@@ -113,7 +116,11 @@ export default function ZonesPage() {
         eyebrow={t("zones.eyebrow")}
         title={t("zones.title")}
         description={t("zones.description", { total: total() })}
-        actions={<Button onClick={() => void loadZones()}>{t("zones.reload")}</Button>}
+        actions={
+          <Button icon={RefreshCw} onClick={() => void loadZones()}>
+            {t("zones.reload")}
+          </Button>
+        }
       />
 
       <Show when={error()}>
@@ -141,32 +148,29 @@ export default function ZonesPage() {
               onInput={(event) => setQuery(event.currentTarget.value)}
             />
           </Field>
-          <Field label={t("zones.provider")} for="zone-provider-filter">
-            <select
-              id="zone-provider-filter"
-              class="text-input"
-              value={providerType()}
-              onChange={(event) => setProviderType(event.currentTarget.value)}
-            >
-              <option value="">{t("zones.allProviders")}</option>
-              <For each={providers()}>
-                {(provider) => <option value={provider.type}>{provider.display_name}</option>}
-              </For>
-            </select>
-          </Field>
-          <Field label={t("zones.account")} for="zone-account-filter">
-            <select
-              id="zone-account-filter"
-              class="text-input"
-              value={accountID()}
-              onChange={(event) => setAccountID(event.currentTarget.value)}
-            >
-              <option value="">{t("zones.allAccounts")}</option>
-              <For each={accounts()}>
-                {(account) => <option value={account.id}>{account.name}</option>}
-              </For>
-            </select>
-          </Field>
+          <SelectField
+            id="zone-provider-filter"
+            label={t("zones.provider")}
+            value={providerType()}
+            options={[
+              { value: "", label: t("zones.allProviders") },
+              ...providers().map((provider) => ({
+                value: provider.type,
+                label: providerDisplayName(provider, provider.type, language()),
+              })),
+            ]}
+            onChange={setProviderType}
+          />
+          <SelectField
+            id="zone-account-filter"
+            label={t("zones.account")}
+            value={accountID()}
+            options={[
+              { value: "", label: t("zones.allAccounts") },
+              ...accounts().map((account) => ({ value: account.id, label: account.name })),
+            ]}
+            onChange={setAccountID}
+          />
           <Field label={t("zones.status")} for="zone-status-filter">
             <input
               id="zone-status-filter"
@@ -177,10 +181,11 @@ export default function ZonesPage() {
             />
           </Field>
           <div class="flex items-end gap-2">
-            <Button type="submit" variant="primary" disabled={loading()}>
+            <Button type="submit" variant="primary" icon={Filter} disabled={loading()}>
               {t("zones.applyFilters")}
             </Button>
             <Button
+              icon={RotateCcw}
               disabled={loading()}
               onClick={() => {
                 setQuery("");
@@ -245,9 +250,14 @@ export default function ZonesPage() {
                       </td>
                       <td class="px-3 py-4">
                         <p class="font-medium">{zone.provider_account_name}</p>
-                        <p class="text-xs text-muted-foreground">
-                          {providerLabel(providers(), zone.provider_type)}
-                        </p>
+                        <ProviderIdentity
+                          class="inline-flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+                          iconClass="h-4 w-4"
+                          provider={providers().find(
+                            (provider) => provider.type === zone.provider_type,
+                          )}
+                          providerType={zone.provider_type}
+                        />
                       </td>
                       <td class="px-3 py-4">
                         <div class="flex flex-wrap gap-2">
@@ -276,6 +286,7 @@ export default function ZonesPage() {
                           <Show when={canMutate()}>
                             <Button
                               size="sm"
+                              icon={RefreshCw}
                               disabled={busyZone() === zone.id || !zone.account_enabled}
                               onClick={() => refresh(zone)}
                             >
@@ -283,10 +294,11 @@ export default function ZonesPage() {
                             </Button>
                           </Show>
                           <A
-                            class="inline-flex min-h-8 items-center rounded-md border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover"
+                            class="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary-hover"
                             href={`/zones/${zone.id}/records`}
                           >
                             {t("zones.records")}
+                            <ArrowRight size={14} strokeWidth={1.8} aria-hidden="true" />
                           </A>
                         </div>
                       </td>
@@ -301,6 +313,7 @@ export default function ZonesPage() {
 
       <div class="flex justify-end">
         <Button
+          icon={ChevronRight}
           disabled={loading() || nextCursor() === ""}
           onClick={() => {
             const next = nextCursor();
@@ -322,10 +335,6 @@ function localizedStatus(
   const key = `${prefix}.${value}`;
   const translated = t(key);
   return translated === key ? value : translated;
-}
-
-function providerLabel(providers: ProviderTypeDefinition[], type: string): string {
-  return providers.find((provider) => provider.type === type)?.display_name ?? type;
 }
 
 function formatDate(value: string): string {

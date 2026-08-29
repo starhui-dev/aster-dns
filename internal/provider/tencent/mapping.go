@@ -541,19 +541,6 @@ func decodeRecordSetID(id string) ([]string, error) {
 	return ids, nil
 }
 
-func recordSetContainsIDs(recordSet core.RecordSet, ids []string) bool {
-	available := make(map[string]struct{}, len(recordSet.Entries))
-	for _, entry := range recordSet.Entries {
-		available[entry.ID] = struct{}{}
-	}
-	for _, id := range ids {
-		if _, exists := available[id]; !exists {
-			return false
-		}
-	}
-	return true
-}
-
 func recordSetIntersectsIDs(recordSet core.RecordSet, ids []string) bool {
 	wanted := make(map[string]struct{}, len(ids))
 	for _, id := range ids {

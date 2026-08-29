@@ -431,8 +431,9 @@ func firstHeader(values []string) string {
 
 func TestFactoryMetadataAndCapabilities(t *testing.T) {
 	factory := NewFactory()
-	if factory.Type() != Type || factory.Metadata().DisplayName != "Alibaba Cloud DNS" {
-		t.Fatalf("factory metadata = %#v", factory.Metadata())
+	metadata := factory.Metadata()
+	if factory.Type() != Type || metadata.DisplayName != "Alibaba Cloud DNS" || metadata.DisplayNames["zh-CN"] != "阿里云 DNS" || metadata.DisplayNames["ja"] != "Alibaba Cloud DNS" {
+		t.Fatalf("factory metadata = %#v", metadata)
 	}
 	if err := factory.CredentialDescriptor().Validate(); err != nil {
 		t.Fatalf("credential descriptor: %v", err)

@@ -12,7 +12,11 @@ type registryTestFactory struct {
 
 func (f registryTestFactory) Type() ProviderType { return f.providerType }
 func (f registryTestFactory) Metadata() ProviderMetadata {
-	return ProviderMetadata{Type: f.providerType, DisplayName: "Test Provider", DocumentationURL: "https://example.com/dns"}
+	return ProviderMetadata{
+		Type: f.providerType, DisplayName: "Test Provider",
+		DisplayNames:     map[string]string{"en": "Test Provider"},
+		DocumentationURL: "https://example.com/dns",
+	}
 }
 func (registryTestFactory) CredentialDescriptor() CredentialDescriptor {
 	return CredentialDescriptor{Fields: []FieldDescriptor{{Key: "token", Label: "API token", Type: DescriptorFieldString, Secret: true, Required: true}}}

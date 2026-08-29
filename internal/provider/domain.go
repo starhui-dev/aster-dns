@@ -89,11 +89,6 @@ func NormalizeRecordSet(zoneName string, recordSet RecordSet) (RecordSet, error)
 	return normalizeRecordSet(zoneName, recordSet, true)
 }
 
-func ValidateRecordSet(zoneName string, recordSet RecordSet) error {
-	_, err := normalizeRecordSet(zoneName, recordSet, false)
-	return err
-}
-
 func normalizeRecordSet(zoneName string, recordSet RecordSet, includeFingerprint bool) (RecordSet, error) {
 	var name string
 	var err error

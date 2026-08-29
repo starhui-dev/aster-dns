@@ -168,6 +168,7 @@ func Run(ctx context.Context, cfg config.Config, logger *slog.Logger, build Buil
 		ProviderAccounts:  providerAccountService,
 		ZoneSync:          zoneSyncService,
 		DNS:               dnsService,
+		Updates:           api.NewGitHubUpdateChecker(nil),
 		HTTPS:             cfg.PublicURL.Scheme == "https",
 		TrustedProxyCIDRs: cfg.HTTP.TrustedProxyCIDRs,
 	})

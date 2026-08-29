@@ -1,13 +1,16 @@
 import { render, screen, fireEvent } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import App from "./App";
+import App, { AppError } from "./App";
+import { I18nProvider } from "./i18n";
+import { ThemeProvider } from "./theme";
 
 describe("App", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     window.localStorage.removeItem("aster-dns-language");
     window.localStorage.removeItem("aster-dns-theme");
+    window.localStorage.removeItem("aster-dns-layout");
     window.history.replaceState({}, "", "/");
   });
 
@@ -18,6 +21,14 @@ describe("App", () => {
 
     expect(await screen.findByRole("heading", { name: "DNS control plane" })).toBeInTheDocument();
     expect(screen.getByText("Indexed zones")).toBeInTheDocument();
+    expect(await screen.findByText("Version vtest")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Starhui Technology/ })).toHaveAttribute(
+      "href",
+      "https://starhui.com",
+    );
+    const checkUpdates = screen.getByRole("button", { name: "Check for updates" });
+    fireEvent.click(checkUpdates);
+    expect(await screen.findByText("You're up to date")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Users" })).toBeInTheDocument();
   });
 
@@ -27,8 +38,12 @@ describe("App", () => {
     render(() => <App />);
 
     expect(await screen.findByRole("link", { name: "Dashboard" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Language"), { target: { value: "zh-CN" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open user menu" }));
+    const languageSelector = screen.getByRole("button", { name: /^Language/ });
+    fireEvent.pointerDown(languageSelector, { pointerType: "mouse", button: 0 });
+    fireEvent.click(await screen.findByRole("option", { name: "中文" }));
     expect(await screen.findByRole("link", { name: "仪表盘" })).toBeInTheDocument();
+    expect(screen.getAllByText("星绘开源项目").length).toBeGreaterThan(0);
   });
 
   it("applies an explicit theme selection to the document", async () => {
@@ -37,10 +52,42 @@ describe("App", () => {
     render(() => <App />);
 
     await screen.findByRole("heading", { name: "DNS control plane" });
-    const selector = screen.getByLabelText("Theme");
-    fireEvent.change(selector, { target: { value: "dark" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open user menu" }));
+    const selector = screen.getByRole("button", { name: /^Theme/ });
+    fireEvent.pointerDown(selector, { pointerType: "mouse", button: 0 });
+    fireEvent.click(await screen.findByRole("option", { name: "Dark" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(selector).toHaveValue("dark");
+    expect(selector).toHaveTextContent("Dark");
+  });
+
+  it("opens the profile menu and switches the shell layout", async () => {
+    vi.stubGlobal("fetch", vi.fn(authenticatedFetch));
+
+    render(() => <App />);
+
+    expect(await screen.findByRole("button", { name: "Open user menu" })).toBeInTheDocument();
+    expect(document.querySelector('img[src*="gravatar.com/avatar/"]')).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open user menu" }));
+    expect(screen.getByRole("menu", { name: "Open user menu" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sidebar navigation" }));
+    expect(window.localStorage.getItem("aster-dns-layout")).toBe("sidebar");
+    expect(await screen.findByRole("link", { name: "Dashboard" })).toBeInTheDocument();
+  });
+
+  it("renders application errors with the login layout", () => {
+    render(() => (
+      <ThemeProvider>
+        <I18nProvider>
+          <AppError error={new Error("render failure")} reset={vi.fn()} />
+        </I18nProvider>
+      </ThemeProvider>
+    ));
+
+    expect(screen.getByRole("main")).toHaveClass("auth-login-shell");
+    expect(
+      screen.getByRole("heading", { name: "The console could not render" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("render failure");
   });
 
   it("renders Passkey-first login with optional password fallback", async () => {
@@ -74,8 +121,67 @@ describe("App", () => {
     render(() => <App />);
 
     expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", {
+        name: "Manage every DNS account in one place.",
+        level: 2,
+      }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continue with Passkey" })).toBeInTheDocument();
     expect(screen.getByText("Password fallback")).toBeInTheDocument();
+  });
+
+  it("renders the app shell after a successful password login", async () => {
+    let authenticated = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith("/auth/session")) {
+          if (authenticated) return authenticatedFetch(input);
+          return jsonResponse(
+            {
+              error: {
+                code: "authentication_failed",
+                message: "Authentication failed.",
+                request_id: "req_unauthenticated",
+              },
+            },
+            401,
+          );
+        }
+        if (path.endsWith("/auth/bootstrap")) {
+          return jsonResponse({
+            required: false,
+            configured: false,
+            password_login_enabled: true,
+          });
+        }
+        if (path.endsWith("/auth/login/password")) {
+          authenticated = true;
+          return jsonResponse({
+            authenticated: true,
+            user: {
+              id: "01900000-0000-7000-8000-000000000001",
+              username: "admin",
+              display_name: "Administrator",
+              role: "admin",
+            },
+          });
+        }
+        return authenticatedFetch(input);
+      }),
+    );
+
+    render(() => <App />);
+
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    fireEvent.input(screen.getByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.input(screen.getByLabelText("Password"), { target: { value: "correct-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with password" }));
+
+    expect(await screen.findByRole("heading", { name: "DNS control plane" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
   });
 
   it("renders password-first bootstrap choices when password login is enabled", async () => {
@@ -200,6 +306,15 @@ const huaweiZoneID = "01900000-0000-7000-8000-000000000202";
 
 async function zonesFetch(input: RequestInfo | URL): Promise<Response> {
   const path = String(input);
+  if (path.endsWith("/api/v1")) {
+    return jsonResponse({
+      name: "Aster DNS",
+      api_version: "v1",
+      version: "test",
+      commit: "test",
+      status: "available",
+    });
+  }
   if (path.endsWith("/auth/session")) return authenticatedFetch(input);
   if (path.endsWith("/provider-types")) {
     return jsonResponse({
@@ -307,6 +422,23 @@ function zone(
 
 async function authenticatedFetch(input: RequestInfo | URL): Promise<Response> {
   const path = String(input);
+  if (path.endsWith("/api/v1")) {
+    return jsonResponse({
+      name: "Aster DNS",
+      api_version: "v1",
+      version: "test",
+      commit: "test",
+      status: "available",
+    });
+  }
+  if (path.endsWith("/api/v1/updates")) {
+    return jsonResponse({
+      current_version: "test",
+      latest_version: "v0.1.0",
+      update_available: false,
+      release_url: "https://github.com/starhui-dev/aster-dns/releases/latest",
+    });
+  }
   if (path.endsWith("/auth/session")) {
     return jsonResponse({
       authenticated: true,
@@ -315,6 +447,7 @@ async function authenticatedFetch(input: RequestInfo | URL): Promise<Response> {
         id: "01900000-0000-7000-8000-000000000001",
         username: "admin",
         display_name: "Administrator",
+        email: "admin@example.com",
         role: "admin",
         password_enabled: false,
         totp_required: false,
@@ -322,6 +455,9 @@ async function authenticatedFetch(input: RequestInfo | URL): Promise<Response> {
         updated_at: "2026-08-24T00:00:00Z",
       },
     });
+  }
+  if (path.endsWith("/provider-types")) {
+    return jsonResponse({ provider_types: [] });
   }
   if (path.endsWith("/provider-accounts")) {
     return jsonResponse({ provider_accounts: [] });

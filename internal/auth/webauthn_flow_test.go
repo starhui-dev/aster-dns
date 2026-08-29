@@ -178,7 +178,7 @@ func newTestService(t *testing.T, passwordLoginEnabled bool) (*Service, *memoryS
 	if err != nil {
 		t.Fatalf("parse public URL: %v", err)
 	}
-	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x31}, secretcrypto.MasterKeySize))
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x31}, secretcrypto.MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}

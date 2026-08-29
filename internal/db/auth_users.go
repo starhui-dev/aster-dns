@@ -75,11 +75,11 @@ func (s *AuthStore) ListUsers(ctx context.Context) ([]auth.User, error) {
 
 func (s *AuthStore) InsertUser(ctx context.Context, user auth.User) error {
 	_, err := s.q.Exec(ctx, `
-		INSERT INTO users (
-			id, webauthn_user_handle, username, display_name, role,
-			password_hash, password_enabled, totp_required, disabled_at, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, $8, $9, $10, $11)`,
-		user.ID, user.WebAuthnUserHandle, user.Username, user.DisplayName, user.Role,
+    INSERT INTO users (
+      id, webauthn_user_handle, username, display_name, email, role,
+      password_hash, password_enabled, totp_required, disabled_at, created_at, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, $9, $10, $11, $12)`,
+		user.ID, user.WebAuthnUserHandle, user.Username, user.DisplayName, user.Email, user.Role,
 		user.PasswordHash, user.PasswordEnabled, user.TOTPRequired, user.DisabledAt, user.CreatedAt, user.UpdatedAt,
 	)
 	if err != nil {
@@ -87,7 +87,6 @@ func (s *AuthStore) InsertUser(ctx context.Context, user auth.User) error {
 	}
 	return nil
 }
-
 func (s *AuthStore) UpdateUser(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, changes auth.UserChanges) (auth.User, error) {
 	var role any
 	if changes.Role != nil {
@@ -96,6 +95,10 @@ func (s *AuthStore) UpdateUser(ctx context.Context, id uuid.UUID, expectedUpdate
 	var displayName any
 	if changes.DisplayName != nil {
 		displayName = *changes.DisplayName
+	}
+	var email any
+	if changes.Email != nil {
+		email = *changes.Email
 	}
 	var passwordEnabled any
 	if changes.PasswordEnabled != nil {
@@ -106,17 +109,18 @@ func (s *AuthStore) UpdateUser(ctx context.Context, id uuid.UUID, expectedUpdate
 		totpRequired = *changes.TOTPRequired
 	}
 	row := s.q.QueryRow(ctx, `
-		UPDATE users SET
-			display_name = COALESCE($2::text, display_name),
-			role = COALESCE($3::text, role),
-			password_hash = CASE WHEN $4::boolean THEN NULLIF($5::text, '') ELSE password_hash END,
-			password_enabled = COALESCE($6::boolean, password_enabled),
-			totp_required = COALESCE($7::boolean, totp_required),
-			updated_at = now()
-		WHERE id = $1 AND updated_at = $8
-		RETURNING id, COALESCE(webauthn_user_handle, ''::bytea), username, display_name, role,
-			COALESCE(password_hash, ''), password_enabled, totp_required, disabled_at, created_at, updated_at`,
-		id, displayName, role, changes.SetPasswordHash, changes.PasswordHash, passwordEnabled, totpRequired, expectedUpdatedAt,
+    UPDATE users SET
+      display_name = COALESCE($2::text, display_name),
+      email = COALESCE($3::text, email),
+      role = COALESCE($4::text, role),
+      password_hash = CASE WHEN $5::boolean THEN NULLIF($6::text, '') ELSE password_hash END,
+      password_enabled = COALESCE($7::boolean, password_enabled),
+      totp_required = COALESCE($8::boolean, totp_required),
+      updated_at = now()
+    WHERE id = $1 AND updated_at = $9
+    RETURNING id, COALESCE(webauthn_user_handle, ''::bytea), username, display_name, email, role,
+      COALESCE(password_hash, ''), password_enabled, totp_required, disabled_at, created_at, updated_at`,
+		id, displayName, email, role, changes.SetPasswordHash, changes.PasswordHash, passwordEnabled, totpRequired, expectedUpdatedAt,
 	)
 	user, err := scanUser(row)
 	if errors.Is(err, auth.ErrNotFound) {
@@ -127,10 +131,10 @@ func (s *AuthStore) UpdateUser(ctx context.Context, id uuid.UUID, expectedUpdate
 
 func (s *AuthStore) SetUserDisabled(ctx context.Context, id uuid.UUID, expectedUpdatedAt time.Time, disabledAt *time.Time) (auth.User, error) {
 	row := s.q.QueryRow(ctx, `
-		UPDATE users SET disabled_at = $2, updated_at = now()
-		WHERE id = $1 AND updated_at = $3
-		RETURNING id, COALESCE(webauthn_user_handle, ''::bytea), username, display_name, role,
-			COALESCE(password_hash, ''), password_enabled, totp_required, disabled_at, created_at, updated_at`, id, disabledAt, expectedUpdatedAt)
+    UPDATE users SET disabled_at = $2, updated_at = now()
+    WHERE id = $1 AND updated_at = $3
+    RETURNING id, COALESCE(webauthn_user_handle, ''::bytea), username, display_name, email, role,
+      COALESCE(password_hash, ''), password_enabled, totp_required, disabled_at, created_at, updated_at`, id, disabledAt, expectedUpdatedAt)
 	user, err := scanUser(row)
 	if errors.Is(err, auth.ErrNotFound) {
 		return auth.User{}, auth.ErrConflict
@@ -241,9 +245,9 @@ func (s *AuthStore) loadUserPasskeys(ctx context.Context, user auth.User) (auth.
 }
 
 const userSelect = `
-	SELECT u.id, COALESCE(u.webauthn_user_handle, ''::bytea), u.username, u.display_name, u.role,
-		COALESCE(u.password_hash, ''), u.password_enabled, u.totp_required, u.disabled_at, u.created_at, u.updated_at
-	FROM users u`
+  SELECT u.id, COALESCE(u.webauthn_user_handle, ''::bytea), u.username, u.display_name, u.email, u.role,
+    COALESCE(u.password_hash, ''), u.password_enabled, u.totp_required, u.disabled_at, u.created_at, u.updated_at
+  FROM users u`
 
 const passkeySelect = `
 	SELECT id, user_id, name, credential_data, created_at, last_used_at
@@ -256,7 +260,7 @@ type rowScanner interface {
 func scanUser(row rowScanner) (auth.User, error) {
 	var user auth.User
 	if err := row.Scan(
-		&user.ID, &user.WebAuthnUserHandle, &user.Username, &user.DisplayName, &user.Role,
+		&user.ID, &user.WebAuthnUserHandle, &user.Username, &user.DisplayName, &user.Email, &user.Role,
 		&user.PasswordHash, &user.PasswordEnabled, &user.TOTPRequired, &user.DisabledAt, &user.CreatedAt, &user.UpdatedAt,
 	); err != nil {
 		return auth.User{}, mapAuthStoreError("read user", err)

@@ -44,8 +44,13 @@ func (*Factory) Type() core.ProviderType { return Type }
 
 func (*Factory) Metadata() core.ProviderMetadata {
 	return core.ProviderMetadata{
-		Type:             Type,
-		DisplayName:      "Huawei Cloud DNS",
+		Type:        Type,
+		DisplayName: "Huawei Cloud DNS",
+		DisplayNames: map[string]string{
+			"zh-CN": "华为云 DNS",
+			"en":    "Huawei Cloud DNS",
+			"ja":    "Huawei Cloud DNS",
+		},
 		DocumentationURL: "https://support.huaweicloud.com/intl/en-us/dns/index.html",
 	}
 }

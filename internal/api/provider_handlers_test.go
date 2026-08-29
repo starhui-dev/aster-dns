@@ -81,6 +81,46 @@ func (r *apiProviderRepository) ListProviderAccounts(context.Context) ([]provide
 	return r.accounts, nil
 }
 
+func TestProviderTypesExposeLocalizedDisplayNames(t *testing.T) {
+	repository := &apiProviderRepository{}
+	registry, err := provider.NewRegistry(fake.NewFactory())
+	if err != nil {
+		t.Fatalf("new registry: %v", err)
+	}
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x72}, secretcrypto.MasterKeySize)})
+	if err != nil {
+		t.Fatalf("new envelope: %v", err)
+	}
+	vault, err := secretcrypto.NewCredentialVault(envelope)
+	if err != nil {
+		t.Fatalf("new vault: %v", err)
+	}
+	clients, err := providerservice.NewProviderClientManager(repository, registry, vault)
+	if err != nil {
+		t.Fatalf("new clients: %v", err)
+	}
+	accounts, err := providerservice.NewProviderAccountService(repository, registry, vault, clients)
+	if err != nil {
+		t.Fatalf("new account service: %v", err)
+	}
+	authStore := &apiAuthStore{}
+	authService, rawToken, _ := newAPIAuthService(t, authStore, false, auth.RoleViewer)
+	router := NewRouter(Options{
+		Logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), ReadyCheck: func(context.Context) error { return nil },
+		ReadyTimeout: time.Second, Auth: authService, ProviderAccounts: accounts,
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/provider-types", nil)
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_session", Value: rawToken})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"display_names":{"en":"Fake DNS"}`) {
+		t.Fatalf("localized provider names missing: %s", response.Body.String())
+	}
+}
+
 func TestProviderAccountRoutesEnforceRBACAndExposeNoCredentialRead(t *testing.T) {
 	accountID := uuid.Must(uuid.NewV7())
 	repository := &apiProviderRepository{accounts: []providerservice.ProviderAccount{{
@@ -91,7 +131,7 @@ func TestProviderAccountRoutesEnforceRBACAndExposeNoCredentialRead(t *testing.T)
 	if err != nil {
 		t.Fatalf("new registry: %v", err)
 	}
-	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x71}, secretcrypto.MasterKeySize))
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x71}, secretcrypto.MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}

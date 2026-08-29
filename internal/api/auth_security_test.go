@@ -161,7 +161,7 @@ func TestAuthAPILogAuditAndResponseDoNotLeakCanarySecrets(t *testing.T) {
 func TestAuthAPIPasswordBootstrapCreatesSession(t *testing.T) {
 	store := &apiAuthStore{}
 	publicURL, _ := url.Parse("https://dns.example.test")
-	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x62}, secretcrypto.MasterKeySize))
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x62}, secretcrypto.MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestUserListDoesNotExposeAuthenticationMaterial(t *testing.T) {
 func newAPIAuthService(t *testing.T, store *apiAuthStore, passwordEnabled bool, role auth.Role) (*auth.Service, string, string) {
 	t.Helper()
 	publicURL, _ := url.Parse("https://dns.example.test")
-	envelope, err := secretcrypto.NewEnvelope(bytes.Repeat([]byte{0x61}, secretcrypto.MasterKeySize))
+	envelope, err := secretcrypto.NewKeyringEnvelope(secretcrypto.KeyVersion, map[int][]byte{secretcrypto.KeyVersion: bytes.Repeat([]byte{0x61}, secretcrypto.MasterKeySize)})
 	if err != nil {
 		t.Fatalf("new envelope: %v", err)
 	}

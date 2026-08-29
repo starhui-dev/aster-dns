@@ -397,8 +397,9 @@ func queryLimit(value string, fallback int) int {
 
 func TestFactoryMetadataAndCapabilities(t *testing.T) {
 	factory := NewFactory()
-	if factory.Type() != Type || factory.Metadata().DisplayName != "Huawei Cloud DNS" {
-		t.Fatalf("factory metadata = %#v", factory.Metadata())
+	metadata := factory.Metadata()
+	if factory.Type() != Type || metadata.DisplayName != "Huawei Cloud DNS" || metadata.DisplayNames["zh-CN"] != "华为云 DNS" || metadata.DisplayNames["ja"] != "Huawei Cloud DNS" {
+		t.Fatalf("factory metadata = %#v", metadata)
 	}
 	if err := factory.CredentialDescriptor().Validate(); err != nil {
 		t.Fatalf("credential descriptor: %v", err)

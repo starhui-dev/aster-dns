@@ -1,22 +1,27 @@
 import { A } from "@solidjs/router";
+import { ArrowRight, RefreshCw } from "lucide-solid";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import { useI18n } from "../app/i18n";
+import { ProviderIdentity } from "../components/ProviderIdentity";
 import { Button } from "../components/ui/Button";
 import { Alert, Badge, PageHeader, Panel } from "../components/ui/Layout";
 import { ApiError, apiErrorMessage } from "../lib/api";
 import {
   listAuditEvents,
   listProviderAccounts,
+  listProviderTypes,
   listZones,
   type AuditEvent,
   type ProviderAccount,
+  type ProviderTypeDefinition,
   type Zone,
 } from "../lib/dns";
 
 export default function DashboardPage() {
   const { t } = useI18n();
   const [accounts, setAccounts] = createSignal<ProviderAccount[]>([]);
+  const [providers, setProviders] = createSignal<ProviderTypeDefinition[]>([]);
   const [zones, setZones] = createSignal<Zone[]>([]);
   const [events, setEvents] = createSignal<AuditEvent[]>([]);
   const [loading, setLoading] = createSignal(true);
@@ -54,11 +59,13 @@ export default function DashboardPage() {
   const load = async (signal?: AbortSignal) => {
     setLoading(true);
     try {
-      const [providerResult, zoneResult, auditResult] = await Promise.all([
+      const [catalog, providerResult, zoneResult, auditResult] = await Promise.all([
+        listProviderTypes(signal),
         listProviderAccounts(signal),
         listZones({ limit: 200 }, signal),
         listAuditEvents({ limit: 20 }, signal),
       ]);
+      setProviders(catalog.provider_types);
       setAccounts(providerResult.provider_accounts);
       setZones(zoneResult.zones);
       setZoneTotal(zoneResult.total);
@@ -84,7 +91,7 @@ export default function DashboardPage() {
         title={t("dashboard.title")}
         description={t("dashboard.description")}
         actions={
-          <Button disabled={loading()} onClick={() => void load()}>
+          <Button icon={RefreshCw} disabled={loading()} onClick={() => void load()}>
             {t("dashboard.refresh")}
           </Button>
         }
@@ -162,7 +169,15 @@ export default function DashboardPage() {
                       <div>
                         <div class="flex flex-wrap items-center gap-2">
                           <p class="font-medium">{account.name}</p>
-                          <Badge tone="primary">{account.provider_type}</Badge>
+                          <Badge tone="primary">
+                            <ProviderIdentity
+                              provider={providers().find(
+                                (provider) => provider.type === account.provider_type,
+                              )}
+                              providerType={account.provider_type}
+                              iconClass="h-4 w-4"
+                            />
+                          </Badge>
                           <Badge tone={healthy() ? "success" : "danger"}>
                             {healthy() ? t("dashboard.healthy") : t("dashboard.needsAttention")}
                           </Badge>
@@ -187,10 +202,11 @@ export default function DashboardPage() {
                         </Show>
                       </div>
                       <A
-                        class="text-sm font-semibold text-primary hover:underline"
+                        class="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline"
                         href={`/accounts/${account.id}`}
                       >
                         {t("dashboard.manage")}
+                        <ArrowRight size={15} strokeWidth={1.8} aria-hidden="true" />
                       </A>
                     </div>
                   </article>
@@ -232,10 +248,11 @@ export default function DashboardPage() {
             </For>
           </div>
           <A
-            class="mt-4 inline-block text-sm font-semibold text-primary hover:underline"
+            class="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline"
             href="/audit"
           >
             {t("dashboard.viewAudit")}
+            <ArrowRight size={15} strokeWidth={1.8} aria-hidden="true" />
           </A>
         </Panel>
       </div>
@@ -253,7 +270,15 @@ export default function DashboardPage() {
               >
                 <div class="flex items-center justify-between gap-3">
                   <p class="truncate font-medium">{zone.name}</p>
-                  <Badge>{zone.provider_type}</Badge>
+                  <Badge>
+                    <ProviderIdentity
+                      provider={providers().find(
+                        (provider) => provider.type === zone.provider_type,
+                      )}
+                      providerType={zone.provider_type}
+                      iconClass="h-4 w-4"
+                    />
+                  </Badge>
                 </div>
                 <p class="mt-2 truncate text-xs text-muted-foreground">
                   {zone.provider_account_name}

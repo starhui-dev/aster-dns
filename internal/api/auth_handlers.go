@@ -36,6 +36,7 @@ type userResponse struct {
 	ID              string     `json:"id"`
 	Username        string     `json:"username"`
 	DisplayName     string     `json:"display_name"`
+	Email           string     `json:"email,omitempty"`
 	Role            auth.Role  `json:"role"`
 	PasswordEnabled bool       `json:"password_enabled"`
 	TOTPRequired    bool       `json:"totp_required"`
@@ -472,7 +473,7 @@ func (h authHandler) writeIssuedSession(w http.ResponseWriter, status int, issue
 
 func userDTO(user auth.User) userResponse {
 	return userResponse{
-		ID: user.ID.String(), Username: user.Username, DisplayName: user.DisplayName, Role: user.Role,
+		ID: user.ID.String(), Username: user.Username, DisplayName: user.DisplayName, Email: user.Email, Role: user.Role,
 		PasswordEnabled: user.PasswordEnabled, TOTPRequired: user.TOTPRequired, DisabledAt: user.DisabledAt,
 		CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt,
 	}

@@ -33,14 +33,6 @@ type fingerprintEntry struct {
 	Extensions RecordEntryExtensions `json:"extensions"`
 }
 
-func CanonicalRecordSetSerialization(recordSet RecordSet) ([]byte, error) {
-	normalized, err := normalizeRecordSet("", recordSet, false)
-	if err != nil {
-		return nil, err
-	}
-	return serializeNormalizedRecordSet(normalized)
-}
-
 func FingerprintRecordSet(recordSet RecordSet) (string, error) {
 	normalized, err := normalizeRecordSet("", recordSet, false)
 	if err != nil {
