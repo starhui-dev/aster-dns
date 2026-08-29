@@ -32,6 +32,7 @@ POST   /auth/bootstrap/passkey/options
 POST   /auth/bootstrap/passkey/verify
 POST   /auth/bootstrap/password
 GET    /auth/session
+PATCH  /auth/profile
 POST   /auth/login/password
 POST   /auth/login/totp
 POST   /auth/logout

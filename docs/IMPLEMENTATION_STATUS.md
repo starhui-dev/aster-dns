@@ -146,7 +146,7 @@ Huawei Cloud DNS, Alibaba Cloud DNS, Tencent Cloud DNSPod, and Cloudflare DNS ar
 - Zones searches and filters the cross-account database index, shows Provider/account/status/freshness, supports force refresh, and links to authoritative records.
 - Records provides filtering, RRSet entry expansion, capability-rendered Provider metadata, record-type-aware create/edit fields, fingerprint conflict comparison/reapply, full-summary single delete confirmation, typed large-batch confirmation, and per-item partial batch results.
 - Provider-specific fields are centralized in `ProviderFields.tsx` and driven only by descriptors/capabilities; page components do not branch on Provider names.
-- Audit supports actor/action/result/time filters, pagination, and safe detail inspection. Existing Settings and Users pages manage Passkeys, password fallback, TOTP, sessions, roles, disabled users, and one-time enrollment tokens.
+- Audit supports actor/action/result/time filters, pagination, and safe detail inspection. Settings lets every authenticated user update their own display name/email and manages Passkeys, password fallback, TOTP, and sessions. Users manages admin-only roles, disabled users, and one-time enrollment tokens.
 
 ## Authentication / authorization implemented
 
@@ -231,7 +231,7 @@ Events contain safe actor/resource/result/request metadata only. Passwords, hash
 ### Frontend
 
 - Authentication gate handles bootstrap, Passkey-first login, optional password login, TOTP second step, and authenticated application rendering.
-- Settings manages multiple Passkeys, password fallback, TOTP, and active sessions. Users provides admin-only creation, role changes, enable/disable actions, and one-time enrollment-token display.
+- Settings lets the current user update their own display name/email and manages multiple Passkeys, password fallback, TOTP, and active sessions. Users provides admin-only creation, role changes, enable/disable actions, and one-time enrollment-token display.
 - The API client centrally attaches the CSRF cookie value to mutations and preserves stable safe request-id errors. It does not persist Provider secrets in localStorage or sessionStorage.
 - Provider, Zone, Record, conflict, batch-result, and Audit screens use the same `/api/v1` contracts described in the unified product section. Users and credential controls are hidden when the current role lacks permission, while the API remains authoritative.
 

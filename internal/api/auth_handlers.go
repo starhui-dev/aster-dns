@@ -93,6 +93,7 @@ func registerAuthRoutes(router chi.Router, service *auth.Service) {
 				mutations.Use(service.OriginProtection)
 				mutations.Use(service.CSRFProtection)
 				mutations.Post("/logout", handler.logout)
+				mutations.Patch("/profile", handler.updateProfile)
 				mutations.Post("/logout-all", handler.logoutAll)
 				mutations.Post("/sessions/revoke-others", handler.revokeOtherSessions)
 				mutations.Delete("/sessions/{id}", handler.revokeSession)
@@ -268,6 +269,26 @@ func (h authHandler) currentSession(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, sessionResponse{
 		Authenticated: true, User: userDTO(current.User), PasswordLoginEnabled: h.service.PasswordLoginEnabled(),
 	})
+}
+
+func (h authHandler) updateProfile(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		DisplayName *string `json:"display_name"`
+		Email       *string `json:"email"`
+	}
+	if !decodeAuthJSON(w, r, &request) {
+		return
+	}
+	current, _ := auth.SessionFromContext(r.Context())
+	updated, err := h.service.UpdateProfile(r.Context(), current, auth.UpdateProfileInput{
+		DisplayName: request.DisplayName,
+		Email:       request.Email,
+	}, auth.MetadataFromRequest(r))
+	if err != nil {
+		writeAuthError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"user": userDTO(updated)})
 }
 
 func (h authHandler) logout(w http.ResponseWriter, r *http.Request) {

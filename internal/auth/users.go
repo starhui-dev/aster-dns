@@ -31,8 +31,22 @@ type UpdateUserInput struct {
 	PasswordEnabled *bool
 }
 
+type UpdateProfileInput struct {
+	DisplayName *string
+	Email       *string
+}
+
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	return s.store.ListUsers(ctx)
+}
+func (s *Service) UpdateProfile(ctx context.Context, current AuthenticatedSession, input UpdateProfileInput, metadata RequestMetadata) (User, error) {
+	if input.DisplayName == nil && input.Email == nil {
+		return User{}, ErrInvalidInput
+	}
+	return s.UpdateUser(ctx, current, current.User.ID, UpdateUserInput{
+		DisplayName: input.DisplayName,
+		Email:       input.Email,
+	}, metadata)
 }
 
 func (s *Service) CreateUser(ctx context.Context, current AuthenticatedSession, input CreateUserInput, metadata RequestMetadata) (CreateUserResult, error) {

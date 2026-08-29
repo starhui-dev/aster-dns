@@ -1,4 +1,4 @@
-import { KeyRound, LockKeyhole, LogOut, ShieldCheck, ShieldOff, Trash2 } from "lucide-solid";
+import { KeyRound, LockKeyhole, LogOut, Save, ShieldCheck, ShieldOff, Trash2 } from "lucide-solid";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 
 import { useI18n } from "../app/i18n";
@@ -18,6 +18,7 @@ import {
   revokeSession,
   setPassword,
   setupTOTP,
+  updateProfile,
   type Passkey,
   type SessionInfo,
 } from "../lib/auth";
@@ -25,6 +26,10 @@ import {
 export default function SettingsPage() {
   const { t } = useI18n();
   const auth = useAuth();
+  const initialState = auth.state();
+  const initialUser = initialState.kind === "authenticated" ? initialState.session.user : undefined;
+  const [displayName, setDisplayName] = createSignal(initialUser?.display_name ?? "");
+  const [email, setEmail] = createSignal(initialUser?.email ?? "");
   const [passkeys, setPasskeys] = createSignal<Passkey[]>([]);
   const [sessions, setSessions] = createSignal<SessionInfo[]>([]);
   const [loading, setLoading] = createSignal(true);
@@ -39,6 +44,13 @@ export default function SettingsPage() {
   const session = createMemo(() => {
     const state = auth.state();
     return state.kind === "authenticated" ? state.session : undefined;
+  });
+  const profileChanged = createMemo(() => {
+    const user = session()?.user;
+    return (
+      user !== undefined &&
+      (displayName().trim() !== user.display_name || email().trim() !== (user.email ?? ""))
+    );
   });
 
   const load = async (signal?: AbortSignal) => {
@@ -76,6 +88,21 @@ export default function SettingsPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const submitProfile = (event: SubmitEvent) => {
+    event.preventDefault();
+    const nextDisplayName = displayName();
+    const nextEmail = email();
+    void run(async () => {
+      const response = await updateProfile({
+        display_name: nextDisplayName,
+        email: nextEmail,
+      });
+      setDisplayName(response.user.display_name);
+      setEmail(response.user.email ?? "");
+      await auth.refresh();
+    }, t("settings.profileUpdated"));
   };
   const submitPasskey = (event: SubmitEvent) => {
     event.preventDefault();
@@ -125,6 +152,47 @@ export default function SettingsPage() {
       <Show when={notice() !== null}>
         <Alert variant="success">{notice()}</Alert>
       </Show>
+
+      <Panel title={t("settings.profile")} description={t("settings.profileDescription")}>
+        <form class="grid gap-4 lg:grid-cols-2" onSubmit={submitProfile}>
+          <Field label={t("settings.username")} for="profile-username">
+            <input
+              id="profile-username"
+              class="text-input bg-muted"
+              value={session()?.user.username ?? ""}
+              readOnly
+            />
+          </Field>
+          <Field label={t("settings.displayName")} for="profile-display-name">
+            <input
+              id="profile-display-name"
+              class="text-input"
+              value={displayName()}
+              onInput={(event) => setDisplayName(event.currentTarget.value)}
+            />
+          </Field>
+          <Field label={t("settings.email")} for="profile-email">
+            <input
+              id="profile-email"
+              class="text-input"
+              type="email"
+              value={email()}
+              onInput={(event) => setEmail(event.currentTarget.value)}
+            />
+          </Field>
+          <div class="flex items-end lg:justify-end">
+            <Button
+              class="w-full lg:w-auto"
+              type="submit"
+              variant="primary"
+              icon={Save}
+              disabled={busy() || !profileChanged()}
+            >
+              {t("settings.saveProfile")}
+            </Button>
+          </div>
+        </form>
+      </Panel>
 
       <Panel title={t("settings.passkeys")} description={t("settings.passkeysDescription")}>
         <form class="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={submitPasskey}>

@@ -201,7 +201,7 @@ make container-build IMAGE=aster-dns:release-candidate
 - `GET /healthz`：プロセスの生存状態。
 - `GET /readyz`：PostgreSQL/schema/encryption の readiness。
 - `GET /api/v1`：API/build メタデータ。
-- `/api/v1/auth/*`：bootstrap、Passkey/password/TOTP ログイン、現在の session、Passkey 管理、設定、ログアウト、session の失効。
+- `/api/v1/auth/*`：bootstrap、Passkey/password/TOTP ログイン、現在の session、プロフィール更新、Passkey 管理、設定、ログアウト、session の失効。
 - `/api/v1/users/*`：管理者専用のユーザー作成、ロール/無効状態の変更、enrollment-token の発行。
 - `/api/v1/provider-accounts/*`、`/api/v1/zones/*`：Provider account、Zone、Record の操作。
 - 不明な API ルートは安定した `{ "error": { "code", "message", "request_id" } }` envelope を返します。

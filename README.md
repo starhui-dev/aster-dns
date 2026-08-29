@@ -201,7 +201,7 @@ make container-build IMAGE=aster-dns:release-candidate
 - `GET /healthz`：进程存活状态。
 - `GET /readyz`：PostgreSQL/schema/encryption 就绪状态。
 - `GET /api/v1`：API/build 元数据。
-- `/api/v1/auth/*`：bootstrap、Passkey/password/TOTP 登录、当前 session、Passkey 管理、设置、登出和 session 撤销。
+- `/api/v1/auth/*`：bootstrap、Passkey/password/TOTP 登录、当前 session、个人资料更新、Passkey 管理、设置、登出和 session 撤销。
 - `/api/v1/users/*`：仅管理员可用的用户创建、角色/禁用状态修改和 enrollment-token 签发。
 - `/api/v1/provider-accounts/*`、`/api/v1/zones/*`：Provider account、Zone 和 Record 操作。
 - 未知 API 路由返回稳定的 `{ "error": { "code", "message", "request_id" } }` envelope。

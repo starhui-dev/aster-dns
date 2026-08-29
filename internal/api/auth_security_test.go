@@ -55,6 +55,39 @@ func (s *apiAuthStore) TouchSession(context.Context, uuid.UUID, time.Time, time.
 	return nil
 }
 
+func (s *apiAuthStore) GetUserByID(_ context.Context, id uuid.UUID) (auth.User, error) {
+	for _, user := range s.users {
+		if user.ID == id {
+			return user, nil
+		}
+	}
+	return auth.User{}, auth.ErrNotFound
+}
+
+func (s *apiAuthStore) UpdateUser(_ context.Context, id uuid.UUID, expectedUpdatedAt time.Time, changes auth.UserChanges) (auth.User, error) {
+	for index, user := range s.users {
+		if user.ID != id {
+			continue
+		}
+		if !user.UpdatedAt.Equal(expectedUpdatedAt) {
+			return auth.User{}, auth.ErrConflict
+		}
+		if changes.DisplayName != nil {
+			user.DisplayName = *changes.DisplayName
+		}
+		if changes.Email != nil {
+			user.Email = *changes.Email
+		}
+		user.UpdatedAt = time.Now().UTC()
+		s.users[index] = user
+		if s.authenticated.User.ID == id {
+			s.authenticated.User = user
+		}
+		return user, nil
+	}
+	return auth.User{}, auth.ErrNotFound
+}
+
 func (s *apiAuthStore) ListUsers(context.Context) ([]auth.User, error) {
 	return s.users, nil
 }
@@ -232,6 +265,69 @@ func TestUserListDoesNotExposeAuthenticationMaterial(t *testing.T) {
 		t.Fatalf("user response leaked authentication material: %s", response.Body.String())
 	}
 }
+func TestAuthAPIUpdatesOwnProfileWithoutRolePermission(t *testing.T) {
+	store := &apiAuthStore{}
+	service, rawToken, csrfToken := newAPIAuthService(t, store, false, auth.RoleViewer)
+	router, _ := newAuthTestRouter(service)
+	body, _ := json.Marshal(map[string]string{
+		"display_name": "Viewer Profile",
+		"email":        "viewer@example.com",
+	})
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/auth/profile", bytes.NewReader(body))
+	request.Host = "dns.example.test"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", service.Origin())
+	request.Header.Set("X-CSRF-Token", csrfToken)
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_session", Value: rawToken})
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_csrf", Value: csrfToken})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated := store.authenticated.User
+	if updated.DisplayName != "Viewer Profile" || updated.Email != "viewer@example.com" || updated.Role != auth.RoleViewer {
+		t.Fatalf("updated user = %+v", updated)
+	}
+	if len(store.audits) != 1 || store.audits[0].Action != "auth.user.updated" {
+		t.Fatalf("audits = %+v", store.audits)
+	}
+}
+
+func TestAuthAPIProfileUpdateCannotChangeRole(t *testing.T) {
+	store := &apiAuthStore{}
+	service, rawToken, csrfToken := newAPIAuthService(t, store, false, auth.RoleViewer)
+	router, _ := newAuthTestRouter(service)
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/auth/profile", strings.NewReader(`{"role":"admin"}`))
+	request.Host = "dns.example.test"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", service.Origin())
+	request.Header.Set("X-CSRF-Token", csrfToken)
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_session", Value: rawToken})
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_csrf", Value: csrfToken})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnprocessableEntity || store.authenticated.User.Role != auth.RoleViewer {
+		t.Fatalf("status=%d role=%q body=%s", response.Code, store.authenticated.User.Role, response.Body.String())
+	}
+}
+func TestAuthAPIProfileUpdateValidatesEmail(t *testing.T) {
+	store := &apiAuthStore{}
+	service, rawToken, csrfToken := newAPIAuthService(t, store, false, auth.RoleViewer)
+	router, _ := newAuthTestRouter(service)
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/auth/profile", strings.NewReader(`{"email":"not-an-email"}`))
+	request.Host = "dns.example.test"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", service.Origin())
+	request.Header.Set("X-CSRF-Token", csrfToken)
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_session", Value: rawToken})
+	request.AddCookie(&http.Cookie{Name: "__Host-aster_csrf", Value: csrfToken})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusUnprocessableEntity || store.authenticated.User.Email != "" {
+		t.Fatalf("status=%d email=%q body=%s", response.Code, store.authenticated.User.Email, response.Body.String())
+	}
+}
 
 func newAPIAuthService(t *testing.T, store *apiAuthStore, passwordEnabled bool, role auth.Role) (*auth.Service, string, string) {
 	t.Helper()
@@ -265,6 +361,7 @@ func newAPIAuthService(t *testing.T, store *apiAuthStore, passwordEnabled bool, 
 			IdleExpiresAt: now.Add(30 * time.Minute), AbsoluteExpiresAt: now.Add(24 * time.Hour),
 		},
 	}
+	store.users = []auth.User{user}
 	return service, rawToken, csrfToken
 }
 

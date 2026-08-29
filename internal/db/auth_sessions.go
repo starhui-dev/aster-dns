@@ -30,7 +30,7 @@ func (s *AuthStore) GetSessionByTokenHash(ctx context.Context, tokenHash []byte)
 		SELECT
 			s.id, s.user_id, s.token_hash, s.csrf_token_hash, COALESCE(host(s.ip), ''), s.user_agent,
 			s.auth_method, s.created_at, s.last_seen_at, s.idle_expires_at, s.absolute_expires_at, s.revoked_at,
-			u.id, COALESCE(u.webauthn_user_handle, ''::bytea), u.username, u.display_name, u.role,
+			u.id, COALESCE(u.webauthn_user_handle, ''::bytea), u.username, u.display_name, COALESCE(u.email, ''), u.role,
 			COALESCE(u.password_hash, ''), u.password_enabled, u.totp_required, u.disabled_at, u.created_at, u.updated_at
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
@@ -40,7 +40,7 @@ func (s *AuthStore) GetSessionByTokenHash(ctx context.Context, tokenHash []byte)
 		&authenticated.Session.AuthMethod, &authenticated.Session.CreatedAt, &authenticated.Session.LastSeenAt,
 		&authenticated.Session.IdleExpiresAt, &authenticated.Session.AbsoluteExpiresAt, &authenticated.Session.RevokedAt,
 		&authenticated.User.ID, &authenticated.User.WebAuthnUserHandle, &authenticated.User.Username,
-		&authenticated.User.DisplayName, &authenticated.User.Role, &authenticated.User.PasswordHash,
+		&authenticated.User.DisplayName, &authenticated.User.Email, &authenticated.User.Role, &authenticated.User.PasswordHash,
 		&authenticated.User.PasswordEnabled, &authenticated.User.TOTPRequired, &authenticated.User.DisabledAt,
 		&authenticated.User.CreatedAt, &authenticated.User.UpdatedAt,
 	); err != nil {

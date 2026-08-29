@@ -74,6 +74,58 @@ describe("App", () => {
     expect(await screen.findByRole("link", { name: "Dashboard" })).toBeInTheDocument();
   });
 
+  it("updates the current user's profile from settings", async () => {
+    let user = {
+      id: "01900000-0000-7000-8000-000000000001",
+      username: "admin",
+      display_name: "Administrator",
+      email: "admin@example.com",
+      role: "admin" as const,
+      password_enabled: false,
+      totp_required: false,
+      created_at: "2026-08-24T00:00:00Z",
+      updated_at: "2026-08-24T00:00:00Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith("/auth/session")) {
+        return jsonResponse({ authenticated: true, password_login_enabled: true, user });
+      }
+      if (path.endsWith("/auth/passkeys")) return jsonResponse({ passkeys: [] });
+      if (path.endsWith("/auth/sessions")) return jsonResponse({ sessions: [] });
+      if (path.endsWith("/auth/profile") && init?.method === "PATCH") {
+        const profile = JSON.parse(String(init.body)) as {
+          display_name: string;
+          email: string;
+        };
+        user = { ...user, ...profile, updated_at: "2026-08-29T00:00:00Z" };
+        return jsonResponse({ user });
+      }
+      return authenticatedFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.history.replaceState({}, "", "/settings");
+
+    render(() => <App />);
+
+    expect(await screen.findByRole("heading", { name: "Profile" })).toBeInTheDocument();
+    fireEvent.input(screen.getByLabelText("Display name"), {
+      target: { value: "Aster Administrator" },
+    });
+    fireEvent.input(screen.getByLabelText("Email"), {
+      target: { value: "aster-admin@example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+
+    expect(await screen.findByText("Profile updated.")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/auth\/profile$/),
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    expect(screen.getByLabelText("Display name")).toHaveValue("Aster Administrator");
+    expect(screen.getByLabelText("Email")).toHaveValue("aster-admin@example.com");
+  });
+
   it("renders application errors with the login layout", () => {
     render(() => (
       <ThemeProvider>

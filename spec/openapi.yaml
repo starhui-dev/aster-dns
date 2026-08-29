@@ -255,6 +255,21 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Session' }
         default: { $ref: '#/components/responses/Error' }
+  /api/v1/auth/profile:
+    patch:
+      tags: [Authentication]
+      summary: Update the current user's profile
+      operationId: updateOwnProfile
+      security: [{ sessionCookie: [] }]
+      parameters: [{ $ref: '#/components/parameters/CSRFToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProfile' }
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        default: { $ref: '#/components/responses/Error' }
   /api/v1/auth/logout:
     post:
       tags: [Authentication]
@@ -1158,6 +1173,16 @@ components:
         email: { type: string, format: email }
         role: { $ref: '#/components/schemas/Role' }
         initial_password: { type: string, minLength: 12, maxLength: 1024, writeOnly: true }
+    UpdateProfile:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name: { type: string, maxLength: 256 }
+        email:
+          oneOf:
+            - { type: string, format: email, maxLength: 320 }
+            - { const: '' }
     SessionResponse:
       type: object
       required: [authenticated, user, password_login_enabled]

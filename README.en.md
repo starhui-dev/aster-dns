@@ -201,7 +201,7 @@ The complete release evidence and deployment-specific rows are maintained in [`d
 - `GET /healthz`: process liveness.
 - `GET /readyz`: PostgreSQL/schema/encryption readiness.
 - `GET /api/v1`: API/build metadata.
-- `/api/v1/auth/*`: bootstrap, Passkey/password/TOTP login, current session, Passkey management, settings, logout, and session revocation.
+- `/api/v1/auth/*`: bootstrap, Passkey/password/TOTP login, current session, profile updates, Passkey management, settings, logout, and session revocation.
 - `/api/v1/users/*`: admin-only user creation, role/disabled-state changes, and enrollment-token issuance.
 - `/api/v1/provider-accounts/*`, `/api/v1/zones/*`: Provider account, Zone, and Record operations.
 - unknown API routes return a stable `{ "error": { "code", "message", "request_id" } }` envelope.

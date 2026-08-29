@@ -95,6 +95,16 @@ export function getCurrentSession(signal?: AbortSignal): Promise<AuthSessionResp
   return apiRequest<AuthSessionResponse>("/auth/session", withSignal(signal));
 }
 
+export function updateProfile(input: {
+  display_name: string;
+  email: string;
+}): Promise<{ user: AuthUser }> {
+  return apiRequest<{ user: AuthUser }>("/auth/profile", {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function bootstrapAdmin(input: {
   bootstrap_token: string;
   username: string;
