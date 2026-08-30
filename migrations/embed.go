@@ -2,7 +2,7 @@ package migrations
 
 import "embed"
 
-const LatestVersion uint = 5
+const LatestVersion uint = 6
 
 // Files contains the ordered SQL migrations used by the server migrate command.
 //

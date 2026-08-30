@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,8 +12,30 @@ import (
 func TestEmbeddedMigrationMatchesLatestVersion(t *testing.T) {
 	t.Parallel()
 
-	if migrations.LatestVersion != 5 {
-		t.Fatalf("latest migration version = %d, update this contract test", migrations.LatestVersion)
+	entries, err := migrations.Files.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read embedded migrations: %v", err)
+	}
+	latestVersion := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".up.sql") {
+			continue
+		}
+		prefix, _, found := strings.Cut(name, "_")
+		if !found {
+			t.Fatalf("migration filename %q has no version prefix", name)
+		}
+		version, parseErr := strconv.Atoi(prefix)
+		if parseErr != nil {
+			t.Fatalf("migration filename %q has invalid version: %v", name, parseErr)
+		}
+		if version > latestVersion {
+			latestVersion = version
+		}
+	}
+	if migrations.LatestVersion != uint(latestVersion) {
+		t.Fatalf("latest migration version = %d, highest embedded migration = %d", migrations.LatestVersion, latestVersion)
 	}
 	content, err := migrations.Files.ReadFile("000001_initial_schema.up.sql")
 	if err != nil {
