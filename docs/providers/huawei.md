@@ -33,7 +33,7 @@ DNS 官方 SDK 示例使用 `basic.NewCredentialsBuilder().WithAk(...).WithSk(..
 
 Huawei Cloud DNS endpoint 按 region 选择，官方 SDK DNS region package 保存 region 到 endpoint 的映射，例如 `https://dns.ap-southeast-3.myhuaweicloud.com`。
 
-公网 Zone 是全局资源，但调用仍需选择对应站点指定的 region。国际站当前 DNS 文档明确要求公网 Zone 使用 `ap-southeast-3`；SDK 同时列出中国站和国际站的多个 DNS region。Adapter 因此把 `region` 作为必填 account option，并交给官方 SDK `dns/region.SafeValueOf` 解析，不硬编码一个对所有站点都正确的默认值，也不开放任意自定义 endpoint。
+公网 Zone 是全局资源，但调用仍需选择对应站点指定的 region。国际站当前 DNS 文档明确要求公网 Zone 使用 `ap-southeast-3`；SDK 同时列出中国站和国际站的多个 DNS region。Adapter 因此把 `region` 作为必填 account option，并交给官方 SDK `dns/region.SafeValueOf` 解析，不硬编码一个对所有站点都正确的默认值，也不开放任意自定义 endpoint。Provider 配置页以选择框列出当前固定 SDK 版本支持的全部 DNS region；字段说明、空值提示以及国际站/中国站推荐项标签随中文、英文、日文界面切换。
 
 官方来源：
 

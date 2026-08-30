@@ -72,10 +72,25 @@ func TestCredentialAndAccountOptionDescriptorsValidatePayloads(t *testing.T) {
 	}
 	credentials.Fields = credentials.Fields[:2]
 
-	options := AccountOptionsDescriptor{Fields: []FieldDescriptor{{Key: "region", Label: "Region", Type: DescriptorFieldEnum, Options: []DescriptorOption{{Value: "global", Label: "Global"}}}}}
+	options := AccountOptionsDescriptor{Fields: []FieldDescriptor{{
+		Key: "region", Label: "Region", Labels: map[string]string{"zh-CN": "区域", "ja": "リージョン"},
+		Type: DescriptorFieldEnum, Options: []DescriptorOption{{
+			Value: "global", Label: "Global", Labels: map[string]string{"zh-CN": "全球", "ja": "グローバル"},
+		}},
+	}}}
 	if _, err = ValidateAccountOptionsPayload(json.RawMessage(`{"region":"global"}`), options); err != nil {
 		t.Fatalf("validate options: %v", err)
 	}
+	options.Fields[0].Labels["ja"] = ""
+	if err = options.Validate(); err == nil {
+		t.Fatal("empty localized descriptor label passed")
+	}
+	options.Fields[0].Labels["ja"] = "リージョン"
+	options.Fields[0].Options[0].Labels["zh-CN"] = ""
+	if err = options.Validate(); err == nil {
+		t.Fatal("empty localized enum option label passed")
+	}
+	options.Fields[0].Options[0].Labels["zh-CN"] = "全球"
 	options.Fields[0].Secret = true
 	if err = options.Validate(); err == nil {
 		t.Fatal("secret account option passed")

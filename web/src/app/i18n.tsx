@@ -194,6 +194,7 @@ const translations: Record<Language, Record<string, string>> = {
     "provider.accountDisabled": "Account disabled",
     "provider.field.description": "Description",
     "provider.accountOptions": "Account options",
+    "provider.selectOption": "Select…",
     "provider.credentials": "Credentials",
     "provider.credentialsHint":
       "Values are sent once to the server. Saved secrets are never refilled into this form.",
@@ -669,6 +670,7 @@ const translations: Record<Language, Record<string, string>> = {
     "provider.accountDisabled": "账号已停用",
     "provider.field.description": "描述",
     "provider.accountOptions": "账号选项",
+    "provider.selectOption": "请选择…",
     "provider.credentials": "凭据",
     "provider.credentialsHint": "凭据只会发送到服务端一次，已保存的密钥不会重新填入此表单。",
     "provider.cancel": "取消",
@@ -1135,6 +1137,7 @@ const translations: Record<Language, Record<string, string>> = {
     "provider.accountDisabled": "アカウントは無効です",
     "provider.field.description": "説明",
     "provider.accountOptions": "アカウントオプション",
+    "provider.selectOption": "選択…",
     "provider.credentials": "認証情報",
     "provider.credentialsHint":
       "値は一度だけサーバーへ送信されます。保存済みの Secret はフォームに再表示されません。",

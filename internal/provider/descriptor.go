@@ -38,8 +38,9 @@ const (
 )
 
 type DescriptorOption struct {
-	Value string `json:"value"`
-	Label string `json:"label"`
+	Value  string            `json:"value"`
+	Label  string            `json:"label"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 type DescriptorCondition struct {
@@ -48,16 +49,19 @@ type DescriptorCondition struct {
 }
 
 type FieldDescriptor struct {
-	Key         string              `json:"key"`
-	Label       string              `json:"label"`
-	Type        DescriptorFieldType `json:"type"`
-	Secret      bool                `json:"secret"`
-	Required    bool                `json:"required"`
-	Placeholder string              `json:"placeholder,omitempty"`
-	Description string              `json:"description,omitempty"`
-	Options     []DescriptorOption  `json:"options,omitempty"`
-	Minimum     *int64              `json:"minimum,omitempty"`
-	Maximum     *int64              `json:"maximum,omitempty"`
+	Key          string              `json:"key"`
+	Label        string              `json:"label"`
+	Labels       map[string]string   `json:"labels,omitempty"`
+	Type         DescriptorFieldType `json:"type"`
+	Secret       bool                `json:"secret"`
+	Required     bool                `json:"required"`
+	Placeholder  string              `json:"placeholder,omitempty"`
+	Placeholders map[string]string   `json:"placeholders,omitempty"`
+	Description  string              `json:"description,omitempty"`
+	Descriptions map[string]string   `json:"descriptions,omitempty"`
+	Options      []DescriptorOption  `json:"options,omitempty"`
+	Minimum      *int64              `json:"minimum,omitempty"`
+	Maximum      *int64              `json:"maximum,omitempty"`
 }
 
 type CredentialDescriptor struct {
@@ -140,6 +144,13 @@ func validateFieldDescriptors(fields []FieldDescriptor, forbidSecret bool) error
 			return fmt.Errorf("descriptor field %q is duplicated", field.Key)
 		}
 		seen[field.Key] = struct{}{}
+		for name, values := range map[string]map[string]string{
+			"labels": field.Labels, "placeholders": field.Placeholders, "descriptions": field.Descriptions,
+		} {
+			if err := validateLocalizedDescriptorText(values); err != nil {
+				return fmt.Errorf("descriptor field %q %s: %w", field.Key, name, err)
+			}
+		}
 		if forbidSecret && (field.Secret || sensitiveAccountOptionKey(field.Key)) {
 			return fmt.Errorf("account option %q cannot contain credential material", field.Key)
 		}
@@ -250,6 +261,15 @@ func validateDescriptorConditions(conditions []DescriptorCondition) error {
 	return nil
 }
 
+func validateLocalizedDescriptorText(values map[string]string) error {
+	for language, value := range values {
+		if strings.TrimSpace(language) == "" || strings.TrimSpace(value) == "" {
+			return errors.New("language and value are required")
+		}
+	}
+	return nil
+}
+
 func validateDescriptorValue(fieldType DescriptorFieldType, options []DescriptorOption, minimum, maximum *int64) error {
 	switch fieldType {
 	case DescriptorFieldString, DescriptorFieldStringList, DescriptorFieldBoolean:
@@ -268,6 +288,9 @@ func validateDescriptorValue(fieldType DescriptorFieldType, options []Descriptor
 		for _, option := range options {
 			if option.Value == "" || strings.TrimSpace(option.Label) == "" {
 				return errors.New("enum option value and label are required")
+			}
+			if err := validateLocalizedDescriptorText(option.Labels); err != nil {
+				return fmt.Errorf("enum option %q labels: %w", option.Value, err)
 			}
 			if _, exists := seen[option.Value]; exists {
 				return errors.New("enum option values must be unique")

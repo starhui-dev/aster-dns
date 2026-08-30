@@ -6,6 +6,7 @@ export type ExtensionScope = "zone" | "record_set" | "record_entry";
 export interface DescriptorOption {
   value: string;
   label: string;
+  labels?: Record<string, string> | undefined;
 }
 
 export interface DescriptorCondition {
@@ -16,11 +17,14 @@ export interface DescriptorCondition {
 export interface DescriptorField {
   key: string;
   label: string;
+  labels?: Record<string, string> | undefined;
   type: DescriptorFieldType;
   secret: boolean;
   required: boolean;
   placeholder?: string | undefined;
+  placeholders?: Record<string, string> | undefined;
   description?: string | undefined;
+  descriptions?: Record<string, string> | undefined;
   options?: DescriptorOption[] | undefined;
   minimum?: number | undefined;
   maximum?: number | undefined;

@@ -74,10 +74,46 @@ func (*Factory) CredentialDescriptor() core.CredentialDescriptor {
 
 func (*Factory) AccountOptionsDescriptor() core.AccountOptionsDescriptor {
 	return core.AccountOptionsDescriptor{Fields: []core.FieldDescriptor{{
-		Key: "region", Label: "DNS region", Type: core.DescriptorFieldString, Required: true,
-		Placeholder: "ap-southeast-3",
-		Description: "Huawei Cloud region used for the DNS endpoint. Public zones are global, but the required region depends on the Huawei Cloud site.",
+		Key: "region", Label: "DNS region", Labels: map[string]string{
+			"zh-CN": "DNS 区域", "en": "DNS region", "ja": "DNS リージョン",
+		},
+		Type: core.DescriptorFieldEnum, Required: true,
+		Description: "Select the Huawei Cloud region used for the DNS API endpoint. Public zones are global, but the required region depends on the Huawei Cloud site.",
+		Descriptions: map[string]string{
+			"zh-CN": "选择用于 DNS API 端点的华为云区域。公网 Zone 是全局资源，但必须选择账号所在华为云站点支持的区域。",
+			"en":    "Select the Huawei Cloud region used for the DNS API endpoint. Public zones are global, but the required region depends on the Huawei Cloud site.",
+			"ja":    "DNS API エンドポイントに使用する Huawei Cloud リージョンを選択します。Public Zone はグローバルリソースですが、アカウントの Huawei Cloud サイトが対応するリージョンを選ぶ必要があります。",
+		},
+		Options: huaweiDNSRegionOptions(),
 	}}}
+}
+
+func huaweiDNSRegionOptions() []core.DescriptorOption {
+	regionIDs := []string{
+		"ae-ad-1", "af-north-1", "af-south-1",
+		"ap-southeast-1", "ap-southeast-2", "ap-southeast-3", "ap-southeast-4", "ap-southeast-5",
+		"cn-east-2", "cn-east-3", "cn-east-4", "cn-east-5",
+		"cn-north-1", "cn-north-2", "cn-north-4", "cn-north-9",
+		"cn-south-1", "cn-south-2", "cn-southwest-2",
+		"la-north-2", "la-south-2", "me-east-1", "my-kualalumpur-1", "na-mexico-1",
+		"ru-moscow-1", "sa-brazil-1", "tr-west-1",
+	}
+	options := make([]core.DescriptorOption, 0, len(regionIDs))
+	for _, regionID := range regionIDs {
+		option := core.DescriptorOption{Value: regionID, Label: regionID}
+		switch regionID {
+		case "ap-southeast-3":
+			option.Labels = map[string]string{
+				"zh-CN": "ap-southeast-3 — 国际站", "en": "ap-southeast-3 — International site", "ja": "ap-southeast-3 — 国際サイト",
+			}
+		case "cn-north-4":
+			option.Labels = map[string]string{
+				"zh-CN": "cn-north-4 — 中国站", "en": "cn-north-4 — China site", "ja": "cn-north-4 — 中国サイト",
+			}
+		}
+		options = append(options, option)
+	}
+	return options
 }
 
 func (*Factory) Capabilities() core.Capabilities {

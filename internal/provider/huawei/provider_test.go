@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/huaweicloud/huaweicloud-sdk-go-v3/core/sdkerr"
+	dnsregion "github.com/huaweicloud/huaweicloud-sdk-go-v3/services/dns/v2/region"
 	core "github.com/starhui-dev/aster-dns/internal/provider"
 	"github.com/starhui-dev/aster-dns/internal/provider/contracttest"
 )
@@ -404,8 +405,30 @@ func TestFactoryMetadataAndCapabilities(t *testing.T) {
 	if err := factory.CredentialDescriptor().Validate(); err != nil {
 		t.Fatalf("credential descriptor: %v", err)
 	}
-	if err := factory.AccountOptionsDescriptor().Validate(); err != nil {
+	accountOptions := factory.AccountOptionsDescriptor()
+	if err := accountOptions.Validate(); err != nil {
 		t.Fatalf("account options descriptor: %v", err)
+	}
+	if len(accountOptions.Fields) != 1 {
+		t.Fatalf("Huawei account options = %#v", accountOptions.Fields)
+	}
+	region := accountOptions.Fields[0]
+	if region.Type != core.DescriptorFieldEnum || len(region.Options) != 27 || region.Placeholder != "" || region.Labels["zh-CN"] != "DNS 区域" || region.Descriptions["ja"] == "" {
+		t.Fatalf("Huawei region descriptor = %#v", region)
+	}
+	if region.Options[0].Value != "ae-ad-1" || region.Options[len(region.Options)-1].Value != "tr-west-1" {
+		t.Fatalf("Huawei region options = %#v", region.Options)
+	}
+	if region.Options[5].Value != "ap-southeast-3" || region.Options[5].Labels["zh-CN"] != "ap-southeast-3 — 国际站" {
+		t.Fatalf("Huawei international region option = %#v", region.Options[5])
+	}
+	if region.Options[14].Value != "cn-north-4" || region.Options[14].Labels["zh-CN"] != "cn-north-4 — 中国站" {
+		t.Fatalf("Huawei China region option = %#v", region.Options[14])
+	}
+	for _, option := range region.Options {
+		if _, err := dnsregion.SafeValueOf(option.Value); err != nil {
+			t.Fatalf("Huawei region option %q is not supported by the official SDK: %v", option.Value, err)
+		}
 	}
 	capabilities := factory.Capabilities()
 	if err := capabilities.Validate(); err != nil {

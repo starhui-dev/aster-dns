@@ -1228,6 +1228,7 @@ components:
       properties:
         value: { type: string }
         label: { type: string }
+        labels: { type: object, additionalProperties: { type: string } }
     DescriptorCondition:
       type: object
       required: [field, values]
@@ -1242,11 +1243,14 @@ components:
       properties:
         key: { type: string }
         label: { type: string }
+        labels: { type: object, additionalProperties: { type: string } }
         type: { type: string, enum: [string, integer, boolean, enum, string_list] }
         secret: { type: boolean }
         required: { type: boolean }
         placeholder: { type: string }
+        placeholders: { type: object, additionalProperties: { type: string } }
         description: { type: string }
+        descriptions: { type: object, additionalProperties: { type: string } }
         options:
           type: array
           items: { $ref: '#/components/schemas/DescriptorOption' }

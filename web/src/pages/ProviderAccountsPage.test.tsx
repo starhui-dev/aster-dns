@@ -31,7 +31,8 @@ describe("ProviderAccountsPage", () => {
     fireEvent.click(addButton);
     expect(await screen.findByLabelText("Access key (AK)")).toHaveValue("");
     expect(screen.getByLabelText("Secret key (SK)")).toHaveAttribute("type", "password");
-    expect(screen.getByLabelText("DNS region")).toBeInTheDocument();
+    expect(document.querySelector("#provider-option-region-native")).toHaveValue("");
+    expect(document.querySelector("#provider-option-region")).toHaveTextContent("Select…");
 
     const canary = "frontend-credential-canary-random-long-550195f2";
     fireEvent.input(screen.getByLabelText("Access key (AK)"), { target: { value: canary } });
@@ -48,7 +49,53 @@ describe("ProviderAccountsPage", () => {
       document.querySelector('#provider-type img[data-provider-icon="huawei"]'),
     ).toBeInTheDocument();
   });
-  it("renders the localized provider name and Lobe icon", async () => {
+  it("submits the initial provider selection without requiring a manual reselect", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith("/provider-accounts") && init?.method === "POST") {
+        return jsonResponse({ provider_account: {} });
+      }
+      return providerAccountsFetch(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(() => (
+      <I18nProvider>
+        <AuthProvider>
+          <ProviderAccountsPage />
+        </AuthProvider>
+      </I18nProvider>
+    ));
+
+    await screen.findByRole("heading", { name: "Production DNS" });
+    fireEvent.click(screen.getByRole("button", { name: "Add provider account" }));
+    fireEvent.input(await screen.findByLabelText("Account name"), {
+      target: { value: "Huawei test" },
+    });
+    fireEvent.change(
+      document.querySelector("#provider-option-region-native") as HTMLSelectElement,
+      {
+        target: { value: "ap-southeast-3" },
+      },
+    );
+    fireEvent.input(screen.getByLabelText("Access key (AK)"), {
+      target: { value: "fixture-access-key" },
+    });
+    fireEvent.input(screen.getByLabelText("Secret key (SK)"), {
+      target: { value: "fixture-secret-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save account" }));
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input, init]) =>
+            String(input).endsWith("/provider-accounts") && init?.method === "POST",
+        ),
+      ).toBe(true),
+    );
+  });
+  it("renders localized Chinese Huawei metadata and Lobe icon", async () => {
     window.localStorage.setItem("aster-dns-language", "zh-CN");
     vi.stubGlobal("fetch", vi.fn(providerAccountsFetch));
 
@@ -64,6 +111,44 @@ describe("ProviderAccountsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加服务商账号" }));
     expect(document.querySelector("#provider-type")).toHaveTextContent("华为云 DNS");
     expect(document.querySelector('img[data-provider-icon="huawei"]')).toBeInTheDocument();
+    expect(await screen.findByText("DNS 区域")).toBeInTheDocument();
+    expect(document.querySelector("#provider-option-region")).toHaveTextContent("请选择…");
+    fireEvent.change(
+      document.querySelector("#provider-option-region-native") as HTMLSelectElement,
+      {
+        target: { value: "ap-southeast-3" },
+      },
+    );
+    expect(document.querySelector("#provider-option-region")).toHaveTextContent(
+      "ap-southeast-3 — 国际站",
+    );
+  });
+
+  it("renders Japanese Huawei region metadata", async () => {
+    window.localStorage.setItem("aster-dns-language", "ja");
+    vi.stubGlobal("fetch", vi.fn(providerAccountsFetch));
+
+    render(() => (
+      <I18nProvider>
+        <AuthProvider>
+          <ProviderAccountsPage />
+        </AuthProvider>
+      </I18nProvider>
+    ));
+
+    await screen.findByRole("heading", { name: "Production DNS" });
+    fireEvent.click(screen.getByRole("button", { name: "Provider アカウントを追加" }));
+    expect(await screen.findByText("DNS リージョン")).toBeInTheDocument();
+    expect(document.querySelector("#provider-option-region")).toHaveTextContent("選択…");
+    fireEvent.change(
+      document.querySelector("#provider-option-region-native") as HTMLSelectElement,
+      {
+        target: { value: "cn-north-4" },
+      },
+    );
+    expect(document.querySelector("#provider-option-region")).toHaveTextContent(
+      "cn-north-4 — 中国サイト",
+    );
   });
 });
 
@@ -122,7 +207,34 @@ const huaweiDefinition = {
     { key: "secret_key", label: "Secret key (SK)", type: "string", secret: true, required: true },
   ],
   account_options: [
-    { key: "region", label: "DNS region", type: "string", secret: false, required: true },
+    {
+      key: "region",
+      label: "DNS region",
+      labels: { "zh-CN": "DNS 区域", en: "DNS region", ja: "DNS リージョン" },
+      type: "enum",
+      secret: false,
+      required: true,
+      options: [
+        {
+          value: "ap-southeast-3",
+          label: "ap-southeast-3",
+          labels: {
+            "zh-CN": "ap-southeast-3 — 国际站",
+            en: "ap-southeast-3 — International site",
+            ja: "ap-southeast-3 — 国際サイト",
+          },
+        },
+        {
+          value: "cn-north-4",
+          label: "cn-north-4",
+          labels: {
+            "zh-CN": "cn-north-4 — 中国站",
+            en: "cn-north-4 — China site",
+            ja: "cn-north-4 — 中国サイト",
+          },
+        },
+      ],
+    },
   ],
   capabilities: {
     supported_record_types: ["A", "AAAA", "CNAME", "TXT", "MX"],

@@ -1,5 +1,6 @@
 import { For, Match, Show, Switch, createMemo } from "solid-js";
 
+import { useI18n } from "../app/i18n";
 import { Alert, Field } from "./ui/Layout";
 import { SelectField } from "./ui/Select";
 import type {
@@ -151,13 +152,24 @@ function DescriptorInput(props: {
   disabled?: boolean | undefined;
   onChange: (value: ExtensionValue | undefined) => void;
 }) {
-  const hint = createMemo(() => props.field.description);
+  const { t, language } = useI18n();
+  const label = createMemo(
+    () =>
+      localizedDescriptorText(props.field.label, props.field.labels, language()) ??
+      props.field.label,
+  );
+  const hint = createMemo(() =>
+    localizedDescriptorText(props.field.description, props.field.descriptions, language()),
+  );
+  const placeholder = createMemo(() =>
+    localizedDescriptorText(props.field.placeholder, props.field.placeholders, language()),
+  );
   const describedBy = createMemo(() => (hint() ? `${props.id}-hint` : undefined));
   return (
     <Show
       when={props.field.secret && props.field.type !== "string"}
       fallback={
-        <Field label={props.field.label} for={props.id} hint={hint()}>
+        <Field label={label()} for={props.id} hint={hint()}>
           <Switch>
             <Match when={props.field.type === "boolean"}>
               <label class="flex min-h-10 items-center gap-3 rounded-md border border-input bg-surface px-3 text-sm">
@@ -176,13 +188,13 @@ function DescriptorInput(props: {
               <SelectField
                 id={props.id}
                 value={typeof props.value === "string" ? props.value : ""}
-                options={[
-                  { value: "", label: "Select…" },
-                  ...(props.field.options ?? []).map((option) => ({
-                    value: option.value,
-                    label: option.label,
-                  })),
-                ]}
+                placeholder={t("provider.selectOption")}
+                options={(props.field.options ?? []).map((option) => ({
+                  value: option.value,
+                  label:
+                    localizedDescriptorText(option.label, option.labels, language()) ??
+                    option.label,
+                }))}
                 describedBy={describedBy()}
                 required={props.field.required}
                 disabled={props.disabled}
@@ -238,7 +250,7 @@ function DescriptorInput(props: {
                 disabled={props.disabled}
                 autocomplete={props.field.secret ? "new-password" : undefined}
                 value={typeof props.value === "string" ? props.value : ""}
-                placeholder={props.field.placeholder}
+                placeholder={placeholder()}
                 onInput={(event) => props.onChange(event.currentTarget.value || undefined)}
               />
             </Match>
@@ -247,10 +259,18 @@ function DescriptorInput(props: {
       }
     >
       <Alert variant="danger" role="alert">
-        Unsupported secret field schema for {props.field.label}. Contact an administrator.
+        Unsupported secret field schema for {label()}. Contact an administrator.
       </Alert>
     </Show>
   );
+}
+
+function localizedDescriptorText(
+  fallback: string | undefined,
+  localized: Record<string, string> | undefined,
+  language: string,
+): string | undefined {
+  return localized?.[language] ?? localized?.en ?? fallback;
 }
 
 function descriptorApplies(field: ExtensionFieldDescriptor, recordType: string): boolean {

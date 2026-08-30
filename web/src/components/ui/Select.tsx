@@ -13,6 +13,7 @@ export function SelectField(props: {
   id: string;
   label?: string | undefined;
   value: string;
+  placeholder?: string | undefined;
   options: SelectOption[];
   onChange: (value: string) => void;
   hint?: string | undefined;
@@ -55,7 +56,7 @@ export function SelectField(props: {
       multiple={false}
       value={selectedOption() ?? null}
       onChange={(value) => props.onChange(value?.value ?? "")}
-      required={props.required ?? false}
+      required={false}
       disabled={props.disabled ?? false}
       name={props.name ?? ""}
       itemComponent={itemComponent}
@@ -69,11 +70,13 @@ export function SelectField(props: {
       </Show>
       <KobalteSelect.HiddenSelect
         id={`${props.id}-native`}
+        required={props.required ?? false}
         onChange={(event) => props.onChange(event.currentTarget.value)}
       />
       <KobalteSelect.Trigger
         id={props.id}
         aria-describedby={props.describedBy}
+        aria-required={props.required ?? false}
         class={[
           "flex min-h-10 w-full items-center justify-between gap-2 rounded-md border border-input bg-surface px-3 py-2 text-left text-sm text-foreground shadow-sm outline-none transition-colors hover:border-primary focus:border-primary focus:ring-2 focus:ring-focus/20 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground data-[expanded]:border-primary",
           props.triggerClass,
@@ -83,9 +86,14 @@ export function SelectField(props: {
       >
         <Show when={props.icon}>{props.icon}</Show>
         <Show when={selectedOption()?.icon}>{selectedOption()?.icon}</Show>
-        <KobalteSelect.Value<SelectOption>>
-          {(state) => state.selectedOption()?.label ?? ""}
-        </KobalteSelect.Value>
+        <Show
+          when={props.value !== "" && selectedOption()}
+          fallback={<span>{props.placeholder ?? ""}</span>}
+        >
+          <KobalteSelect.Value<SelectOption>>
+            {(state) => state.selectedOption()?.label ?? ""}
+          </KobalteSelect.Value>
+        </Show>
         <KobalteSelect.Icon>
           <ChevronDown size={16} strokeWidth={1.8} aria-hidden="true" />
         </KobalteSelect.Icon>
